@@ -57,11 +57,12 @@ right-click menus, pop-ups or developer-menu toggles.
   the next normal launch and report its current availability. Keep chat identity,
   transcript bytes, title/model/effort/permissions and bystander state checks.
 
-Production native coverage is **archive and migration-source cleanup**. General
+Production native coverage is **archive and migration-source cleanup**, plus the
+**native send** that delivers a `peer_only` message into a chat (see the runbook). General
 destination import/settings restoration, unarchive, new-chat/start/stop/resume
 have not all been converted. Use their existing guarded workflows; do not claim
 an entire migration is native or substitute a one-off POC for production tooling.
-Message delivery is a separate feature and is not the objective of this work.
+Other message delivery (the peer pipe, the composer) is a separate feature.
 
 The scripts under `scripts/claude-native-poc/` and proof-result documents are
 diagnostics/history, not instructions to repeat the old menu activation process.

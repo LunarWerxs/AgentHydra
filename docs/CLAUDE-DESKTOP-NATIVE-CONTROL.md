@@ -10,7 +10,8 @@ values the code looks for. What replaced the pins is structural, in
 [Managed launch](#managed-launch-and-ashley-production-proof).
 
 Scope: moving, archiving and migrating **Code** chats between desktop instances.
-Message delivery is outside this work.
+Message delivery has one native action of its own, the native send
+([Sending a message into a chat](#sending-a-message-into-a-chat-native-send)).
 
 ## Operating instructions for agents
 
