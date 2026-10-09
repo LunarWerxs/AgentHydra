@@ -17,7 +17,8 @@ const profile = 'C:/Users/me/.claude-instances/example'
 const oldId = '11111111-2222-4333-8444-555555555555'
 const newId = '66666666-7777-4888-8999-aaaaaaaaaaaa'
 const oldFolder = 'C:/Users/me/Projects/Alpha'
-const missingFolder = 'C:/Users/me/Projects/Missing'
+// absolute on every platform (a C:/ path is not absolute on Linux, so validateCwd would refuse it as 400)
+const missingFolder = resolve(import.meta.dir, 'no-such-folder-for-desktop-move')
 const NOW = Date.parse('2026-10-09T12:00:00Z')
 const newFolder = import.meta.dir // an existing folder, so the real validateCwd accepts it
 
