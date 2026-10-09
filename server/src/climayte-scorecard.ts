@@ -356,10 +356,14 @@ function haikuTrial(kind: CliMayteKind, rows: ScoreRow[], best: number): number 
   if (best < HAIKU_RUNGS) return null
   for (let i = 0; i < HAIKU_RUNGS; i++) {
     if (isBad(kind, rows, i)) return null
+    const s = statAt(rows, kind, i)
+    // A cheaper Haiku rung already trusted has been measured and lost to `best` on cost per pass, so a
+    // dearer Haiku rung has nothing left to prove (2026-10-09: mechanical sent every pick to Haiku high,
+    // 0 passes in 2, while Haiku medium passed 7 of 9 and Sonnet medium 32 of 33).
+    if (trusted(s)) return null
     // Only until the rung has its samples: one that settles between the bars (0.5 to 0.7) goes back
     // to the every-EXPLORE_EVERY-th cadence, or it would take every pick of the kind for good.
-    const s = statAt(rows, kind, i)
-    if (!trusted(s) && s.n < MIN_SAMPLES) return i
+    if (s.n < MIN_SAMPLES) return i
   }
   return null
 }

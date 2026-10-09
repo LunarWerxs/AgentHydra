@@ -99,6 +99,20 @@ describe('pickConfig', () => {
     )
   })
 
+  test('a trusted Haiku medium that lost on cost ends the trial: Haiku high is not tried on every pick', () => {
+    // 2026-10-09, mechanical: Haiku medium passed 3 of 3 at four times Sonnet low's cost per pass, and
+    // Haiku high, with one verdict, took every pick. A dearer Haiku rung cannot beat what its cheaper
+    // sibling already lost to.
+    const rows = scoreRows([
+      ...times(3, () => task('mechanical', v('pass', HAIKU, 'medium', 400_000))),
+      task('mechanical', v('fail', HAIKU, 'high')),
+      ...times(3, () => task('mechanical', v('pass', SONNET, 'low', 100_000))),
+    ])
+    expect([0, 1, 2].map((i) => pickConfig('mechanical', rows, i).config)).toEqual(
+      Array(3).fill({ model: SONNET, effort: 'low' }),
+    )
+  })
+
   test('of the settings that pass reliably, the one that costs least per passed task wins', () => {
     // Owner, 2026-10-02: the cheapest model that reliably completes the task. Sonnet medium passing
     // 7 of 9 code tasks at a quarter of the quota beats Opus high passing every one; the first

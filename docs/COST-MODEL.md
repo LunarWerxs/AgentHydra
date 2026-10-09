@@ -66,7 +66,7 @@ The answer carries the route, a one-sentence reason, both dollar figures and whe
 | `routing_api_preference_pct` | 20 | Share of close calls sent to the API (0 to 100). |
 | `routing_close_ratio` | 3 | Two costs within this factor are close. |
 | `routing_session_overhead_pct` | 1 | % of a Pro window every subscription task pays to start a session. |
-| `routing_discounts` | all 0 | JSON `{ anthropic, deepseek, openrouter, other }`, percent off list. |
+| `routing_discounts` | all 0 | JSON `{ anthropic, deepseek, openrouter, hosted, other }`, percent off list. `hosted` is the paid hosts of open models (Baseten, Together, xAI, OpenAI, Chutes, Fireworks, Moonshot, Nebius, DashScope; `HOSTED_PROVIDERS` in `routing-cost.ts`), `other` the free-tier pools and anything unnamed. |
 | `routing_price_pro` / `_max5` / `_max20` | 20 / 100 / 200 | Monthly plan prices in USD. |
 
 The owner's bulk API rate goes into `routing_discounts`: list prices overstate what the owner pays, so enter the
@@ -82,6 +82,11 @@ Mistral, Zhipu, Cohere, Hugging Face, Cerebras; every paid OpenRouter key is spe
 there), `anthropic` 0 and `deepseek` 0 (given credit that is never topped up: 34 of 45 Anthropic keys had run out of
 credit that day, and the DeepSeek balance was below zero). A free-tier tool task now stays on its free key; a task
 whose API leg is a Claude model goes to a subscription, about 50 times cheaper than list.
+
+`hosted` was split out of `other` on 2026-10-09 and starts at 0: Baseten, Together and xAI are paid credit too, and
+inside `other` at 100 their legs priced at $0, so no tool task on them ever went to a subscription. That week the
+Anthropic keys ran dry ($1,784 of HSwarm's $2,335 went to them) and the work moved to Baseten, Together and xAI
+($237 on 2026-10-09 alone) while the CLI accounts sat at 30% of their week.
 
 ## Endpoints
 

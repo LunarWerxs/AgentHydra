@@ -125,6 +125,9 @@ export interface Discounts {
   anthropic: number
   deepseek: number
   openrouter: number
+  /** Paid third-party hosts (HOSTED_PROVIDERS): given credit, never refilled. */
+  hosted: number
+  /** The free-tier pools and anything unnamed. */
   other: number
 }
 
@@ -153,6 +156,7 @@ export function clampDiscounts(raw: unknown): Discounts {
     anthropic: one('anthropic'),
     deepseek: one('deepseek'),
     openrouter: one('openrouter'),
+    hosted: one('hosted'),
     other: one('other'),
   }
 }
@@ -266,8 +270,27 @@ export function costModel(now = Date.now()): CostModel {
 
 // --- the table of models ------------------------------------------------------
 
+/** HSwarm's paid hosts of open models (their provider files bill per token). They fell into `other` with the
+ *  free-tier pools until 2026-10-09, so at the owner's `other` 100 their legs priced at $0 and a tool task on one
+ *  never went to a subscription: Baseten, Together and xAI took $237 of credit that is never refilled in one day
+ *  while CliMayte's accounts sat idle. Matched as the provider name HSwarm sends, or a `rank:<model>:<host>` id. */
+export const HOSTED_PROVIDERS = [
+  'baseten',
+  'together',
+  'grok_xai',
+  'xai',
+  'openai',
+  'chutes',
+  'fireworks',
+  'moonshot',
+  'nebius',
+  'dashscope',
+] as const
+
 export function providerGroup(provider: string): keyof Discounts {
   const p = provider.toLowerCase()
+  const host = p.startsWith('rank:') ? (p.split(':').at(-1) ?? '') : p
+  if ((HOSTED_PROVIDERS as readonly string[]).includes(host)) return 'hosted'
   if (p.includes('anthropic') || p.includes('claude')) return 'anthropic'
   if (p.includes('deepseek')) return 'deepseek'
   if (p.includes('openrouter')) return 'openrouter'

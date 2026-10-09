@@ -8,6 +8,7 @@ import {
   decideRoute,
   effectiveFraction,
   measuredWindowsPerWeek,
+  providerGroup,
   type RoutingContext,
 } from '../src/routing-cost'
 
@@ -26,12 +27,23 @@ test('effectiveFraction: a Pro plan at the research numbers is about 1.9% of lis
 })
 
 test('atYourRate: a 20% anthropic discount takes 20% off a Claude model and leaves DeepSeek at list', () => {
-  const d = { anthropic: 20, deepseek: 0, openrouter: 0, other: 0 }
+  const d = { anthropic: 20, deepseek: 0, openrouter: 0, hosted: 0, other: 0 }
   expect(atYourRate('claude-opus-5-5', 10, d)).toBeCloseTo(8, 10)
   expect(atYourRate('deepseek-v4-example', 10, d)).toBe(10)
   expect(atYourRate('some-other-model', 10, d)).toBe(10)
   expect(anyDiscount(d)).toBe(true)
-  expect(anyDiscount({ anthropic: 0, deepseek: 0, openrouter: 0, other: 0 })).toBe(false)
+  expect(anyDiscount({ anthropic: 0, deepseek: 0, openrouter: 0, hosted: 0, other: 0 })).toBe(false)
+})
+
+test('a paid host is never priced as a free tier: its leg keeps its cost when free tiers are 100% off', () => {
+  // The owner's setting (docs/COST-MODEL.md): free tiers 100, given credit 0. A DeepSeek model on Baseten is Baseten's
+  // credit, not DeepSeek's and not a free tier, so a tool task on it is weighed against a subscription at list.
+  const d = { anthropic: 0, deepseek: 0, openrouter: 100, hosted: 0, other: 100 }
+  for (const host of ['baseten', 'together', 'grok_xai', 'rank:glm-5-3:together'])
+    expect(providerGroup(host)).toBe('hosted')
+  expect(atYourRate('baseten', 10, d)).toBe(10)
+  expect(atYourRate('gemini', 10, d)).toBe(0)
+  expect(providerGroup('rank:claude-opus-5-5-high:direct')).toBe('anthropic')
 })
 
 test('windowsPerWeek is the inverse of week-rise per session-rise, from stored samples', () => {
@@ -72,7 +84,7 @@ const ctx = (over: Partial<RoutingContext> = {}): RoutingContext => ({
   enabled: true,
   apiPreferencePct: 60,
   closeRatio: 3,
-  discounts: { anthropic: 0, deepseek: 0, openrouter: 0, other: 0 },
+  discounts: { anthropic: 0, deepseek: 0, openrouter: 0, hosted: 0, other: 0 },
   sessionOverheadPct: 0,
   dollarsPerProWindow: 20.7,
   fleetFraction: 0.02,
@@ -122,7 +134,7 @@ test('a discount changes the outcome', () => {
   const d = decideRoute(
     input,
     ctx({
-      discounts: { anthropic: 50, deepseek: 0, openrouter: 0, other: 0 },
+      discounts: { anthropic: 50, deepseek: 0, openrouter: 0, hosted: 0, other: 0 },
       apiPreferencePct: 100,
     }),
   )

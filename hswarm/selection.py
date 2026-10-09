@@ -231,9 +231,12 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
                            "benchmark_slug": p["slug"], "score": p.get("score"), "benchmark_cost_usd": p["cost"]*factor,
                            "source": p["source"], "scores": {k: p["scores"][k] for k in floors},
                            "rates": config.price(name), "provider": entry["provider"], "configuration": p["name"],
-                           "free": bool(config.PROVIDERS[entry["provider"]].get("free_calls"))})
-    # A provider whose calls cost nothing (`free_calls`, NVIDIA's trial keys) serves first; among free routes, and among
-    # paid ones, the cheapest capable model still goes first, so a free route never means a bigger model than needed.
+                           "free": config.billed_of(name) is False})
+    # A route whose calls take no money serves first: `free_calls` (NVIDIA's trial keys), a free-tier key pool
+    # (`key_billing = "free"`: Gemini, Cerebras, Groq) or an OpenRouter `:free` model. Until 2026-10-09 only `free_calls`
+    # counted, so a general task ran on paid Baseten DeepSeek ahead of a free-tier Gemini key that met the same floor
+    # (2,776 tool-free tasks in 36 h). Among free routes, and among paid ones, the cheapest capable model still goes
+    # first, so a free route never means a bigger model than needed; a rate-limited free key is moved back by note_speed.
     candidates.sort(key=lambda c: (priority_rank(c["model"]), not c["free"], c["benchmark_cost_usd"], -(c["score"] or 0), c["model"]))
     last = _last_resort(candidates, excluded=excluded, usable=usable, min_context=min_context, profile=profile,
                         tools=tools, backend=backend, vision=vision, strict=reasoning_effort is not None or bool(min_scores),

@@ -9,10 +9,11 @@ export interface RoutingDiscounts {
   anthropic: number
   deepseek: number
   openrouter: number
+  hosted: number
   other: number
 }
 export type DiscountKey = keyof RoutingDiscounts
-export const DISCOUNT_KEYS: readonly DiscountKey[] = ['anthropic', 'deepseek', 'openrouter', 'other']
+export const DISCOUNT_KEYS: readonly DiscountKey[] = ['anthropic', 'deepseek', 'openrouter', 'hosted', 'other']
 
 export interface RoutingSettings {
   enabled: boolean

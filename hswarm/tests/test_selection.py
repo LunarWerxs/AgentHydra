@@ -38,6 +38,17 @@ def test_candidates_are_free_first_then_cheapest_and_meet_every_floor():
             assert c["scores"][k] >= v
 
 
+def test_a_free_tier_key_pool_ranks_with_the_free_routes():
+    # 2026-10-09: only `free_calls` counted as free, so paid Baseten DeepSeek ran 2,776 general tasks in 36 h ahead
+    # of a free-tier Gemini key at the same floor. A provider whose key pool is free tier (key_billing = "free") takes
+    # no money per call, so its routes rank with the free ones; a paid host's never do.
+    cands = _p("research", purpose="production")
+    by_provider = {c["provider"]: c["free"] for c in cands if not c.get("unevidenced")}
+    assert by_provider.get("gemini") is True
+    for paid in ("baseten", "together", "anthropic"):
+        assert by_provider.get(paid) in (None, False)
+
+
 def test_a_provider_whose_terms_allow_evaluation_only_never_serves_a_production_task(monkeypatch):
     """The gate stays tested even though NO SHIPPED PROVIDER SETS THE FLAG. NVIDIA carried it from 2026-09-29 until the
     owner reversed that on 2026-09-30 ("that ruling's bullshit, change it back"), so the flag is now a capability with
