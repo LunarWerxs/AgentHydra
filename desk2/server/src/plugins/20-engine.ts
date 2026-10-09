@@ -227,6 +227,8 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   for (const path of ['/api/chats', '/api/chats/*', '/api/sessions/*', '/api/queue', '/api/queue/*', '/api/server/shutdown']) app.use(path, afterHosts)
   // The browser plugin (65) reads a chat's session ids here: which browser pages are the chat's own.
   ctx.deps.chatSessions = (chatId: string): string[] => manager.browserSessions(chatId)
+  // The headless audio plugin (67) names the chat that owns a Claude Code session.
+  ctx.deps.chatForSession = (sessionId: string): string | null => manager.chatForSession(sessionId)
   const queue = new QueueManager({
     home: ctx.home,
     manager,

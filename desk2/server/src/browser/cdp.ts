@@ -16,7 +16,7 @@ interface PortFile {
   wsPath: string | null
 }
 
-function readPortFile(dir: string): PortFile | null {
+export function readPortFile(dir: string): PortFile | null {
   try {
     const [first, second] = readFileSync(join(dir, 'DevToolsActivePort'), 'utf8').split('\n')
     const text = first?.trim() ?? ''

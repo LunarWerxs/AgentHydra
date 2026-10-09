@@ -692,6 +692,7 @@ export type ServerEvent =
   | { type: 'bridge.status'; up: boolean; url: string }
   | { type: 'external.update'; sessions: ExternalSession[] }
   | { type: 'climayte.update'; workers: CliMayteWorker[] }
+  | { type: 'browser.audio'; state: { audible: string[]; muted: string[]; unattributed: { profile: string; url: string }[] } }
   | { type: 'swarm.update'; jobs: SwarmJob[] }
   | { type: 'accounts.update'; accounts: AccountInfo[] }
   | { type: 'settings.update'; settings: DeskSettings }
