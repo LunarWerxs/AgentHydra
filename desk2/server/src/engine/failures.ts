@@ -17,7 +17,7 @@ const MAX_MESSAGE = 500
 export function classifyFailure(text: string, fallback: FailureCause = 'unknown'): FailureCause {
   if (/\bhooks?\b/i.test(text) && /timed? ?out|timeout|exceeded|too long/i.test(text)) return 'hook_timeout'
   if (/disabled claude subscription access|(organization|org)[^\n]{0,40}(disabled|not allowed|mismatch)|oauth authentication is currently not allowed/i.test(text)) return 'org_disabled'
-  if (/failed to authenticate|please run \/login|not logged in|invalid api key|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|invalid authentication credentials|\b40[13]\b[^\n]{0,40}(unauthori[sz]ed|forbidden|authenticat)|signed out/i.test(text)) return 'auth_expired'
+  if (/failed to authenticate|please run \/login|not logged in|invalid api key|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|invalid authentication credentials|\b40[13]\b[^\n]{0,40}(unauthori[sz]ed|forbidden|authenticat)|identity verification is required|signed out/i.test(text)) return 'auth_expired'
   if (isUsageLimitText(text)) return 'usage_limit'
   if (/\bhooks?\b[^\n]*\bfailed\b/i.test(text)) return 'hook_failed'
   if (/ede_diagnostic|interrupted|request was aborted|aborted by user/i.test(text)) return 'interrupted'
