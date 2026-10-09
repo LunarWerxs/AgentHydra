@@ -5,105 +5,91 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.2] - 2026-10-08
 
 **TL;DR**
 
+- **AgentHydra 2.0 comes to installed copies**
 - **A power cut no longer takes the window or the Free accounts down**
-- **The working mark picks its own look for five minutes, and runs at about half speed**
+- **Drag the window from its empty top row; the pane buttons sit beside minimize, maximize and close**
+- **The working line says what the turn is doing, with a timer since your last message**
+- **The working mark picks its own look every five minutes, and moves more slowly**
 - **Background tasks slides in and out, opens narrower and drags to any width**
 - **Thinking folds into the tool runs around it in outside chats too**
-- **Clicking one app while all are shown shows just that one**
-- **New puts projects with open chats first, with a count, and files chats into the project they work in**
+- **With the cloud off, every local Desktop chat is listed, and row menus can move a chat to another account**
+- **New shows your projects at once, open-chat projects first, each with its git state**
 - **Right-click a project to open its folder; choose which folders New shows**
-- **New shows your projects, each with its git sync state**
-- **A linked CLI login stays signed in while its desktop app is closed**
-- **A CliMayte worker's folder moves its chat too**
-- **A signed-out desktop profile signs in from its synced copy**
-- **Opening a desktop account starts Claude in under a second, and several open at once**
-- **Usage history shows what the Free accounts did**
-- **Tokens per day opens at once**
-- **A Free account wears a red mark only when it is really failing, and shows its plan**
-- **ChatGPT Free accounts slow down before ChatGPT locks them out**
-- **HSwarm uses every idle Free account at once, not six at most**
-- **The Free tab's + menu offers only Free accounts; a slow check no longer looks like a dead login**
-- **A Free ChatGPT chat can ask for GPT-6 or Luna Thinking mini**
-- **Updates install on a PC that is never idle**
-- **An update no longer stops part-way on a program that is running**
+- **Desktop accounts open faster, several at once, and stay signed in**
+- **The Free accounts: usage history, honest red marks, ChatGPT pacing, and HSwarm uses every idle one**
+- **Moving several chats moves the ready ones first, and a restart waits for a move**
+- **Archiving from a chat's menu works in any language and never picks the wrong item**
+- **Updates install on a PC that is never idle, and never stop half-way on a running program**
 
-**Everything in Unreleased**
+**Everything in 2.0.2**
 
+- **AgentHydra 2.0 comes to installed copies.** 2.0.1 was a preview that installed copies were not offered;
+  2.0.2 is the 2.0 they update to. What 2.0 brings is in 2.0.1's notes below.
 - **A power cut no longer takes the window or the Free accounts down.** A Free accounts list that a crash left empty
   is set aside and rebuilt from the accounts' own folders, and each account takes its name back at its next check.
   Every saved list is now on the disk before it replaces the old one, so a crash leaves the old copy or the new one.
-- **The working mark picks its own look for five minutes, and runs at about half speed.** The Working animation
+- **Drag the window from its empty top row.** AgentHydra draws its own title bar: the empty top row moves the
+  window, Maximize offers Windows 11's snap layouts, and the pane buttons sit beside minimize, maximize and close.
+- **The working line says what the turn is doing now.** It is larger, counts the time since your last message,
+  and its ">" opens the step it names.
+- **The working mark picks its own look every five minutes, and moves more slowly.** The Working animation
   picker is gone from Settings -> General -> Appearance: every mark in the window shows the same randomly chosen
-  look, swapping for another (never the same twice in a row) every five minutes, and each animation is slowed to
-  about half its former speed.
+  look and swaps to another every five minutes, never the same one twice in a row. The marks move more slowly,
+  keep moving while the window is in the background, and the sidebar slides smoothly.
 - **Background tasks slides in and out, opens narrower and drags to any width.** The panel slides in from the
-  right and back out instead of appearing at once, opens at 360px instead of 440px, and its left edge drags it
-  wider or narrower; the width is remembered. Narrow, its agent table leaves out the model and each agent's
-  estimate. What a task was told is no longer a paragraph in its card: hover its name to read it.
+  right instead of appearing at once, opens narrower, and its left edge drags it to the width you want, which is
+  remembered. What a task was told is no longer a paragraph in its card: hover its name to read it.
 - **Thinking folds into the tool runs around it in outside chats too.** A Claude Desktop or terminal session
-  open in AgentHydra showed each thinking block as its own row between the commands, so one stretch of work
-  could be a dozen rows; it is one row again, as in AgentHydra's own chats.
-- **Clicking one app while all are shown shows just that one.** In the sidebar's Apps filter, with every app
-  ticked, clicking one now leaves only it ticked. The accounts menu also drops its hint line.
-- **New puts projects with open chats first, with a count, and files chats into the project they work in.** A
-  project's tile shows how many of its chats are not archived, Claude Desktop's included, and those projects come
-  first; the rest follow by when you last used them. Project tiles no longer run into each other. A chat started in a
-  folder that holds several projects counts for the one it worked in, and is moved once into that project's group in
-  the sidebar; a chat you put in a group yourself is never moved.
-- **Right-click a project to open its folder; choose which folders New shows.** A project tile's right-click menu
-  opens its file location, starts a new chat there, copies its path or hides it from the grid. The folder button
-  by the filter adds a single project folder, or a folder whose subfolders each become a tile, and Manage folders
-  lists what is shown and hidden, with Remove or Unhide for each.
-- **New shows your projects.** Clicking New opens a grid of the folders you work in, each with its logo, its path
-  and whether its git checkout is up to date, behind, ahead or has uncommitted changes. Clicking one starts a new
-  chat in that folder. The stats card moved behind a Stats tab.
-- **Opening a desktop account starts Claude in under a second, and several open at once.** The checks
-  AgentHydra runs before starting Claude now run side by side and check its files many at a time; every
-  file is still checked on every Open. A new Claude version is prepared in the background as soon as it
-  is installed, so the first Open after an update no longer waits for it. Opening a second account no
-  longer waits for the first to finish starting. The Open button spins while it works, and the row shows
-  the account running as soon as Claude has started.
-- **A linked CLI login stays signed in while its desktop app is closed.** AgentHydra refreshes a closed
-  profile's Claude Code grant before it runs out, without opening a window. When a login has expired anyway,
-  CliMayte names that account by number in its waiting reason and in the capacity answer.
+  open in AgentHydra showed each thinking block as its own row between the commands; it is one row again, as in
+  AgentHydra's own chats.
+- **With the cloud off, every local Desktop chat is listed.** The Active filter keeps only chats with unread
+  messages or errors, and clicking one app while all are shown shows just that one. A row's menu names the chat
+  and its account, and offers Move to account.
+- **New shows your projects at once.** Clicking New opens a grid of the folders you work in, each with its logo,
+  its path and whether its git checkout is up to date, behind, ahead or has uncommitted changes, without waiting
+  for every folder's git state first. Projects with chats that are not archived come first, with a count; a
+  project reached through a junction is one tile. A chat started in a folder of several projects is filed into
+  the project it worked in.
+- **Right-click a project to open its folder; choose which folders New shows.** A tile's right-click menu opens
+  its file location or starts a new chat there. The folder button by the filter adds a project folder, or a folder
+  whose subfolders each become a tile, and Manage folders lists what is shown and hidden.
+- **Desktop accounts open faster, several at once.** The checks AgentHydra runs before starting Claude run side
+  by side, and every file is still checked on every Open. Opening a second account no longer waits for the first,
+  and the Open button spins while it works.
+- **A linked CLI login stays signed in while its desktop app is closed.** AgentHydra renews a closed profile's
+  Claude Code login before it runs out, without opening a window. A closed profile its app shows signed out takes
+  its account's signed-in copy from another PC; a profile still signed in is never replaced.
 - **A CliMayte worker's folder moves its chat.** When AgentHydra gives a worker a new folder, the chat moves
-  there at once, with the same line as a move made in the sidebar, and it stays there after a restart. A
-  folder set in the sidebar still reaches the worker with the next message, and a UNC path or a folder that
-  does not exist moves nothing. A chat can now also move itself to another folder when asked: it is told its
-  own Desk id and the one call that moves it.
-- **A signed-out desktop profile signs in from its synced copy.** A closed desktop profile that its app shows
-  signed out takes its account's copy from another PC when that copy is still signed in, so its linked CLI
-  account stops being refused. A profile still signed in is never replaced, and a copy that is itself signed out
-  is never taken.
-- **Usage history shows what the Free accounts did.** With the Free rows on screen, the card's header line gives
-  the Free totals, and opened it shows the tokens of all Free accounts, of Claude and of ChatGPT, how many
-  messages each model answered, and Free tokens per day.
-- **Tokens per day opens at once.** The chart took long enough to load that it went unnoticed; it now reads one
-  summary and appears in a fraction of a second.
-- **A Free account wears a red mark only when it is really failing, and shows its plan.** The warning triangle
-  shows only when nearly all of an account's messages in the last hour failed, with the commonest reason; hover
-  the name for the hour's count. Another tool's refused message no longer marks a working account. A paid plan
-  the site reports, such as ChatGPT Go, is a badge beside the name.
+  there at once and stays there after a restart.
+- **Usage history shows what the Free accounts did, and Tokens per day opens at once.** With the Free rows on
+  screen, the card gives the Free totals, the tokens of Claude and of ChatGPT, and the messages each model
+  answered. The Free numbers card keeps the totals instead of a row per account.
+- **A Free account wears a red mark only when it is really failing, and shows its plan.** Another tool's refused
+  message no longer marks a working account, and a paid plan the site reports, such as ChatGPT Go, is a badge
+  beside the name.
 - **ChatGPT Free accounts slow down before ChatGPT locks them out.** AgentHydra spaces each ChatGPT account's new
-  chats just under the rate at which ChatGPT starts refusing them, and learns that rate per account. A task waits
-  for a paced account instead of failing.
-- **HSwarm uses every idle Free account at once, not six at most.** HSwarm sent at most six tasks to the Free
-  accounts at a time, so the rest went to paid models while accounts sat idle. It now uses as many as are idle.
-- **The Free tab's + menu offers only Free accounts; a slow check no longer looks like a dead login.** The menu
-  says New free Claude account or New free ChatGPT account. A check that times out because AgentHydra was busy
-  asks again, and says AgentHydra was busy instead of reporting the login as dead.
-- **A Free ChatGPT chat can ask for GPT-6 or Luna Thinking mini.** `free_chat` takes either as its model for a
-  new ChatGPT chat when the account offers it; Luna Instant stays the default.
+  chats under the rate at which ChatGPT starts refusing them, and a task waits for a paced account instead of
+  failing. A new ChatGPT chat can ask for GPT-6 or Luna Thinking mini where the account offers them.
+- **HSwarm uses every idle Free account at once.** It sent at most six tasks to the Free accounts at a time, so
+  the rest went to paid models while accounts sat idle.
+- **The Free tab's + menu offers only Free accounts, and a slow check no longer looks like a dead login.**
+- **Moving several chats moves the ready ones first.** A chat still finishing its turn no longer holds the
+  others back: it is tried again after them. A restart of AgentHydra waits while chats are being moved, since one
+  cut short leaves a chat on both accounts; the reply to a move lost that way says how to finish it.
+- **Archiving from a chat's menu works in any language and never picks the wrong item.** On a Korean app no
+  chat could be found to archive or rename; now it can. Without a known label, only the item directly above
+  Delete is taken, and any other menu shape is refused. A busy refusal now says what held the chat, and
+  archiving a chat that has a copy on several accounts can name the account.
 - **Updates install on a PC that is never idle.** Auto-update waited for every run and CliMayte worker to
   finish, which never happened on a busy PC. It now waits at most an hour, then installs, and the work that was
   running carries on after the restart.
-- **An update no longer stops part-way on a program that is running.** On Windows a program file that is open
-  cannot be replaced, so an update that changed one, such as a running CliMayte worker, stopped half done. The
-  update now moves the running copy aside, installs the new one, and clears the old copy on the next update.
+- **An update no longer stops half-way on a program that is running.** On Windows a running program file cannot
+  be replaced, so an update that changed one stopped half done. The update now moves the running copy aside and
+  installs the new one.
 
 ## [2.0.1] - 2026-10-08
 
