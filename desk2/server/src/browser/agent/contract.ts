@@ -13,6 +13,46 @@ export interface ToolParams {
   browser_snapshot: { mode?: string; maxLines?: number; attachPort?: number; profile?: string }
   browser_get_text: { attachPort?: number; profile?: string }
   browser_read: { selector: string; attr?: string; attachPort?: number; profile?: string }
+  browser_click: {
+    ref?: string
+    text?: string
+    selector?: string
+    x?: number
+    y?: number
+    double?: boolean
+    button?: string
+    waitMs?: number
+    attachPort?: number
+    profile?: string
+  }
+  browser_hover: {
+    ref?: string
+    text?: string
+    selector?: string
+    x?: number
+    y?: number
+    waitMs?: number
+    attachPort?: number
+    profile?: string
+  }
+  browser_select: {
+    option: string
+    selector?: string
+    trigger?: string
+    x?: number
+    y?: number
+    attachPort?: number
+    profile?: string
+  }
+  browser_type: {
+    text?: string
+    secret?: string
+    ref?: string
+    selector?: string
+    attachPort?: number
+    profile?: string
+  }
+  browser_press_key: { key: string; waitMs?: number; attachPort?: number; profile?: string }
   browser_take_screenshot: {
     path?: string
     fullPage?: boolean
