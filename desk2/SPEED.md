@@ -178,3 +178,29 @@ list and process queries (31dd5ec8), a `spawnSync` in message delivery that froz
 by the watchdog, a synchronous agent-catalog walk (19d99db5), CliMayte's boot reading every finished worker
 (42c1ed70) and the HSwarm account map read on every ask (a54954be). Seconds blocked went from 40 per 15 minutes
 before to none in a 30-minute busy sample after; `/api/health` from 1.8 s on average to 2 ms.
+
+## 2026-10-09, the live browser pane
+
+The owner found the saved-browser pane crawling. `bun run e2e:browser-speed` (`e2e/browser-speed.e2e.ts`) runs the
+pane's own `LiveSession` against a real Chrome and a viewer that decodes and draws like `SavedBrowsers.vue`, then
+times the first frame, the frame rate and how long a click and a wheel take to show up in a drawn frame (12 probes,
+4 s each). The cause was not the stream itself. A visible Chrome whose window is covered, which it always is with
+the Desk window on top, is throttled by Windows' occlusion tracking and sends no screencast frames at all.
+
+| headed Chrome, window covered | first frame | fps drawn | click median/p90 | wheel median/p90 | probes timed out |
+| --- | --- | --- | --- | --- | --- |
+| before: launched without flags | never | 0 | none | none | 12 of 12 |
+| after: `LIVE_CHROME_FLAGS` | 251 ms | 47.4 | 64/817 ms | 149/168 ms | 0 |
+
+`LIVE_CHROME_FLAGS` in `server/src/browser/cdp.ts` (`--disable-backgrounding-occluded-windows`,
+`--disable-renderer-backgrounding`, `--disable-background-timer-throttling`,
+`--disable-features=CalculateNativeWinOcclusion`) go on every Chrome the Desk launches. A saved Chrome that is
+already open keeps its old flags until it is closed and opened again. Connections' browser manager launches with the
+same four flags since Connections d69ddd6071. The pane also caps the screencast at the canvas's real pixels
+(CSS size times `devicePixelRatio`, clamped to 1-3), sends JPEG at quality 60 (about 26 KB a frame, was 28.5 KB),
+and adds up the wheel ticks of one animation frame into one message.
+
+Tried and dropped: holding frames on the server until the pane says it drew one (one in flight, then three). Back to
+back under the same load it drew 21 fps against 47 (click 180/375 ms, wheel 343/1037 ms), and with three in flight
+one run never finished. All runs were on a box busy with other agent work, so the frame rate moves between runs;
+under the heaviest load the same unflagged-versus-flagged gap held while both slowed.

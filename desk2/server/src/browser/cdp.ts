@@ -9,6 +9,7 @@ import type { BrowserLiveIn, BrowserLiveOut, BrowserTab } from '@shared/browser'
 import type { TabScope } from './ownership'
 
 const HOST = '127.0.0.1'
+const FALLBACK_FRAME = { width: 1280, height: 800 }
 
 interface PortFile {
   port: number
@@ -110,11 +111,19 @@ export function launchChrome(dir: string, url: string | undefined, login: boolea
   return p
 }
 
+/** Without these a Chrome whose window is covered or off screen throttles its page and sends no screencast frames at all. */
+export const LIVE_CHROME_FLAGS = [
+  '--disable-backgrounding-occluded-windows',
+  '--disable-renderer-backgrounding',
+  '--disable-background-timer-throttling',
+  '--disable-features=CalculateNativeWinOcclusion',
+]
+
 async function doLaunch(dir: string, url: string | undefined, login: boolean): Promise<number | null> {
   const chrome = findChrome()
   if (!chrome) throw new LaunchError('Chrome is not installed (looked in its standard install folders)')
   rmSync(join(dir, 'DevToolsActivePort'), { force: true }) // a stale file must not point at a Chrome that is gone
-  const args = [`--user-data-dir=${dir}`, '--no-first-run', '--no-default-browser-check']
+  const args = [`--user-data-dir=${dir}`, '--no-first-run', '--no-default-browser-check', ...LIVE_CHROME_FLAGS]
   if (!login) args.push('--remote-debugging-port=0')
   if (url) args.push(url)
   const child = spawn(chrome, args, { detached: true, stdio: 'ignore' })
@@ -357,6 +366,7 @@ export class LiveSession {
   frame: { at: number; data: string; width: number; height: number } | null = null
   /** The page size the viewer asked for, re-applied on every attach. */
   private size: { width: number; height: number } | null = null
+  private dpr = 1
 
   constructor(
     private readonly port: number,
@@ -411,7 +421,7 @@ export class LiveSession {
     }
     await this.call('Page.enable')
     if (this.size) await this.applySize(this.size)
-    await this.call('Page.startScreencast', { format: 'jpeg', quality: 70, everyNthFrame: 1 })
+    await this.startScreencast()
     // Tab changes arrive as Target events; a Chrome that refuses them is left to the poll.
     await this.call('Target.setDiscoverTargets', { discover: true }).catch(() => undefined)
     await this.sendPage()
@@ -419,6 +429,10 @@ export class LiveSession {
 
   private async applySize(size: { width: number; height: number }): Promise<void> {
     await this.call('Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: 0, mobile: false })
+  }
+
+  private startScreencast(): Promise<unknown> {
+    return this.call('Page.startScreencast', { format: 'jpeg', quality: 60, everyNthFrame: 1, ...screencastCap(this.size ?? FALLBACK_FRAME, this.dpr) })
   }
 
   private detach(): void {
@@ -583,7 +597,10 @@ export class LiveSession {
   async input(msg: BrowserLiveIn): Promise<void> {
     if (this.ended) return
     // Remembered even while attaching, so the first size is not lost to a page that is not connected yet.
-    if (msg.type === 'viewport') this.size = { width: msg.width, height: msg.height }
+    if (msg.type === 'viewport') {
+      this.size = { width: msg.width, height: msg.height }
+      this.dpr = msg.devicePixelRatio ?? 1
+    }
     if (!this.cdp) return
     switch (msg.type) {
       case 'mouse':
@@ -617,7 +634,7 @@ export class LiveSession {
       case 'viewport': {
         await this.applySize(this.size!)
         await this.call('Page.stopScreencast')
-        await this.call('Page.startScreencast', { format: 'jpeg', quality: 70, everyNthFrame: 1 })
+        await this.startScreencast()
         return
       }
       case 'tab':
@@ -695,6 +712,14 @@ function parseKey(m: Fields): BrowserLiveIn | null {
 
 const clampSize = (n: number): number => Math.min(4000, Math.max(200, Math.round(n)))
 
+/** The pane's device pixel ratio, kept to 1..3 so a page cannot ask for an oversized screencast. */
+export const clampDpr = (n: number): number => Math.min(3, Math.max(1, n))
+
+/** The screencast's size cap: the page's CSS size times the pane's ratio, which is the canvas's real pixel size. */
+export function screencastCap(size: { width: number; height: number }, dpr: number): { maxWidth: number; maxHeight: number } {
+  return { maxWidth: Math.round(size.width * dpr), maxHeight: Math.round(size.height * dpr) }
+}
+
 /** One checker per message type; a type not named here is dropped. */
 const LIVE_IN: Record<string, (m: Fields) => BrowserLiveIn | null> = {
   mouse: parseMouse,
@@ -705,7 +730,11 @@ const LIVE_IN: Record<string, (m: Fields) => BrowserLiveIn | null> = {
   navigate: (m) => (typeof m.url === 'string' ? { type: 'navigate', url: m.url } : null),
   history: (m) => (m.go === 'back' || m.go === 'forward' || m.go === 'reload' ? { type: 'history', go: m.go } : null),
   tab: (m) => (typeof m.id === 'string' ? { type: 'tab', id: m.id } : null),
-  viewport: (m) => (isNum(m.width) && isNum(m.height) ? { type: 'viewport', width: clampSize(m.width), height: clampSize(m.height) } : null),
+  viewport: (m) => {
+    if (!isNum(m.width) || !isNum(m.height)) return null
+    const ratio = isNum(m.devicePixelRatio) ? { devicePixelRatio: clampDpr(m.devicePixelRatio) } : {}
+    return { type: 'viewport', width: clampSize(m.width), height: clampSize(m.height), ...ratio }
+  },
 }
 
 /** A message from the page checked field by field (it is JSON from a socket, not trusted to be a BrowserLiveIn). */

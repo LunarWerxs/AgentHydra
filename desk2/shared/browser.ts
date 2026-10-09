@@ -151,5 +151,5 @@ export type BrowserLiveIn =
   | { type: 'navigate'; url: string }
   | { type: 'history'; go: 'back' | 'forward' | 'reload' }
   | { type: 'tab'; id: string }
-  /** The size in CSS pixels the live canvas box has; the page is laid out at it so it fills the pane. */
-  | { type: 'viewport'; width: number; height: number }
+  /** The size in CSS pixels the live canvas box has; the page is laid out at it so it fills the pane. devicePixelRatio caps the screencast at the canvas's real pixels. */
+  | { type: 'viewport'; width: number; height: number; devicePixelRatio?: number }

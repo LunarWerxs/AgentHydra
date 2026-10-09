@@ -201,6 +201,30 @@ export function mouseButton(e: { type: string; button: number; buttons: number }
   return e.button === 0 ? 'left' : e.button === 1 ? 'middle' : e.button === 2 ? 'right' : 'none'
 }
 
+export type WheelDelta = Omit<Extract<BrowserLiveIn, { type: 'wheel' }>, 'type'>
+
+/** Wheel ticks between two animation frames become one wheel message: the deltas add up, at the latest point. */
+export function wheelCoalescer(send: (w: WheelDelta) => void, nextFrame: (run: () => void) => void) {
+  let acc: WheelDelta | null = null
+  let queued = false
+  const flush = () => {
+    queued = false
+    const w = acc
+    acc = null
+    if (w) send(w)
+  }
+  return {
+    add(w: WheelDelta) {
+      acc = acc ? { x: w.x, y: w.y, deltaX: acc.deltaX + w.deltaX, deltaY: acc.deltaY + w.deltaY } : w
+      if (!queued) {
+        queued = true
+        nextFrame(flush)
+      }
+    },
+    flush,
+  }
+}
+
 export interface KeyLike extends ModifierState {
   type: string
   key: string

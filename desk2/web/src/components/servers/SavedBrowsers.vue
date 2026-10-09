@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, RefreshCw, RotateCw } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import { isRealPage, type BrowserLiveIn, type BrowserLiveOut, type BrowserProfiles, type BrowserTab } from '@shared/browser'
 import { browserOpen, browserProfiles } from './api'
-import { clipboardAction, fitFrame, keyMessage, liveSocketUrl, mapPoint, modifiersOf, mouseButton, normalizeAddress, profileRows } from './logic'
+import { clipboardAction, fitFrame, keyMessage, liveSocketUrl, mapPoint, modifiersOf, mouseButton, normalizeAddress, profileRows, wheelCoalescer } from './logic'
 import { ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
 // A saved-browser tab: one saved Chrome browser of this chat's workspace (shared/browser.ts), watched live on a canvas
@@ -84,7 +84,7 @@ function queueViewport(now = false) {
     if (width < 1 || height < 1) return
     if (sentSize && Math.abs(sentSize.width - width) < 2 && Math.abs(sentSize.height - height) < 2) return
     sentSize = { width, height }
-    send({ type: 'viewport', width, height })
+    send({ type: 'viewport', width, height, devicePixelRatio: window.devicePixelRatio || 1 })
   }
   if (now) go()
   else viewportTimer = setTimeout(go, 150)
@@ -172,6 +172,7 @@ function connect(name: string, tabId?: string) {
   })
 }
 const send = (m: BrowserLiveIn) => socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify(m))
+const wheel = wheelCoalescer((w) => send({ type: 'wheel', ...w }), (run) => requestAnimationFrame(run))
 
 function select(name: string) {
   actionError.value = null
@@ -233,6 +234,7 @@ const box = () => canvas.value!.getBoundingClientRect()
 const frameSize = () => (frame ? { width: frame.width, height: frame.height } : null)
 let dragging = false
 function mouse(e: MouseEvent, event: 'down' | 'up' | 'move') {
+  if (event !== 'move') wheel.flush()
   const f = frameSize()
   if (!f || !canvas.value) return
   const p = mapPoint(box(), f, e.clientX, e.clientY, event !== 'down')
@@ -266,7 +268,7 @@ function onMove(e: MouseEvent) {
 function onWheel(e: WheelEvent) {
   const f = frameSize()
   const p = f && canvas.value ? mapPoint(box(), f, e.clientX, e.clientY) : null
-  if (p) send({ type: 'wheel', x: p.x, y: p.y, deltaX: e.deltaX, deltaY: e.deltaY })
+  if (p) wheel.add({ x: p.x, y: p.y, deltaX: e.deltaX, deltaY: e.deltaY })
 }
 function onKey(e: KeyboardEvent) {
   const action = clipboardAction(e)
