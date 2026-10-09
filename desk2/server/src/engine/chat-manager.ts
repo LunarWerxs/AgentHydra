@@ -310,6 +310,7 @@ export class ChatManager {
   private liveModels: ModelChoice[] | null = null
   private readonly newChats: 'climayte' | 'sdk'
   private syncing: Promise<void> | null = null
+  private workerRows = new Map<string, AhWorker>()
   /** The JSON of each chat's items as last answered, while its file and media stand as they were (see itemsBody). */
   private readonly itemsBodies = new Map<string, { stamp: string; body: string; count: number }>()
   private itemsBodyBytes = 0
@@ -1387,7 +1388,15 @@ export class ChatManager {
     const entries = [...this.chats.values()].filter((e) => e.chat.workerId && (only ? e.chat.id === only : e.workerLive !== false))
     if (!entries.length) return
     const from = this.now()
-    const raw = await this.bridge.workersByIds(entries.map((e) => e.chat.workerId as string))
+    const ids = entries.map((e) => e.chat.workerId as string)
+    let raw: AhWorker[]
+    try {
+      raw = await this.bridge.workersByIds(ids)
+      this.workerRows = new Map(raw.map((w) => [w.id, w]))
+    } catch (err) {
+      console.warn(`[desk] could not read the chats' workers this round: ${err instanceof Error ? err.message : String(err)}`)
+      raw = ids.flatMap((id) => this.workerRows.get(id) ?? [])
+    }
     const byId = new Map(raw.map((w) => [w.id, w]))
     for (const e of entries) {
       const w = byId.get(e.chat.workerId as string)
