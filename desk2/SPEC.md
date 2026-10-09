@@ -953,7 +953,10 @@ server started or the file count changed, `restartable` when `~/.hydra-desk-2/se
 (the launcher started it; Windows only). While stale, Menu has a blue dot and **Restart to update**, which
 `POST /api/server/restart` turns into `launcher/restart.ps1`, started hidden outside the server's process tree
 (stop.ps1 ends that tree) with its output in `logs/restart.log`; the chats run on and the window reconnects.
-A server the launcher did not start answers 409 and Menu says to run restart.ps1. A server older than a route
+Only the window may ask: the route and `POST /api/server/shutdown` answer 409 to any other caller (an agent, a
+script, curl; `server/src/caller.ts`, identified by `X-Desk-Caller: window|launcher` and `User-Agent`), with the
+owner's message, and log every ask with its caller and chat (`X-Desk-Chat`) to `logs/restart.log`. stop.ps1 sends
+`X-Desk-Caller: launcher`. A server the launcher did not start answers 409 to the window too. A server older than a route
 the window calls answers `no route ...`, which the window shows as "Hydra Desk 2's server is older than this
 window: Menu > Restart to update".
 

@@ -86,3 +86,7 @@ between server/ and web/.
   `.credentials.json` stay out of logs and output.
 - Never open a visible console window: detached processes use `Start-Process -WindowStyle Hidden` with
   logs to files.
+- Never restart or stop the live server. Do not curl `/api/server/restart` or `/api/server/shutdown`, and do not run
+  `launcher/restart.ps1` or `launcher/stop.ps1` against it. The server refuses those asks from anything but the window
+  (409, logged with the caller in `~/.hydra-desk-2/logs/restart.log`). The owner restarts it from the window's
+  Menu > Restart to update. Test a restart on your own copy on a spare port with its own home folder.

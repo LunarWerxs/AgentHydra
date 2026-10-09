@@ -8,6 +8,7 @@
 import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { deadClasses } from './dead-classes'
+import { retainAssets } from './retain-assets'
 import { sfcErrors } from './sfc-errors'
 
 const app = process.cwd()
@@ -48,6 +49,7 @@ if (dead.length) {
   console.error(`build failed: these classes have no CSS rule, so they do nothing:\n${list}\n${live} was left as it was`)
   process.exit(1)
 }
+if (existsSync(live)) retainAssets(live, next)
 if (existsSync(live)) await rename(live, old)
 try {
   await rename(next, live)

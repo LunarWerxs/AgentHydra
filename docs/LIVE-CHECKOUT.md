@@ -61,7 +61,9 @@ order, while no CliMayte runner (`climayte-runner-*.exe`) is working, since a da
 2. `live\misc\Restart-Daemon.ps1`. Then check that the daemon's parent chain ends in
    `live\misc\AgentHydra-Tray.exe`. A tray still running as `lunarwerx-tray.exe` (a shortcut made before the tray
    was renamed) brings the daemon back from `app\` within seconds: stop that tray and run the restart again.
-3. Desk 2: `live\desk2\launcher\restart.ps1`. Chats keep running in their hosts and the open window reconnects.
+3. Desk 2: the owner restarts it from the window's Menu > Restart to update (agents do not run `launcher\restart.ps1`
+   or call the restart route; the server refuses them, see `desk2/AGENTS.md`). Chats keep running in their hosts and
+   the open window reconnects.
 4. Switch-card watchers: stop the ones whose command line names `app\`, then run the
    `AgentHydra-SwitchCardWatchers` task. It starts them again from `live\`.
 5. Dev-servers service: once `GET http://127.0.0.1:7798/dw/status` shows `running: 0`, any `/dw/api/*` request

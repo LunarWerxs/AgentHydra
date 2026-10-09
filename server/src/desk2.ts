@@ -116,7 +116,7 @@ async function httpShutdown(url: string): Promise<void> {
   try {
     await fetch(`${url}/api/server/shutdown`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-desk-caller': 'launcher' },
       body: '{}',
       signal: AbortSignal.timeout(15_000),
     })

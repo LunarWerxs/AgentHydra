@@ -9,13 +9,15 @@
 // headers: to AgentHydra it is a local client, the same as Desk's own bridge calls.
 // /oauth/* (AgentHydra's sign-in pages) is sent to AgentHydra itself: a sign-in is a page of its own.
 
-import { existsSync, statSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import type { Hono } from 'hono'
 import { bridge } from '../bridge'
+import { indexReader } from '../static-index'
 import { cacheControl } from '../static-cache'
 
 const DIST = resolve(import.meta.dir, '../../../hydra/dist')
+const readIndex = indexReader(join(DIST, 'index.html'))
 const BASE = '/ah'
 const NOT_PASSED_ON = ['origin', 'referer', 'cookie', 'host', 'connection', 'accept-encoding', 'content-length']
 
@@ -74,15 +76,15 @@ export default function plugin(app: Hono): void {
   })
 
   app.get(BASE, (c) => c.redirect(`${BASE}/${new URL(c.req.url).search}`, 301))
-  app.get(`${BASE}/*`, (c) => {
-    const index = join(DIST, 'index.html')
+  app.get(`${BASE}/*`, async (c) => {
     const path = decodeURIComponent(new URL(c.req.url).pathname).slice(BASE.length)
     const file = resolve(DIST, `.${path}`)
     if (file.startsWith(DIST + sep) && statSync(file, { throwIfNoEntry: false })?.isFile()) {
       return new Response(Bun.file(file), { headers: { 'cache-control': cacheControl(path) } })
     }
     // Only the fall-back needs index.html, so a file that is there costs one stat.
-    if (!existsSync(index)) return c.text("AgentHydra's pages are not built yet: run bun run build in desk2.", 503)
-    return new Response(Bun.file(index), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } })
+    const html = await readIndex()
+    if (html === null) return c.text("AgentHydra's pages are not built yet: run bun run build in desk2.", 503)
+    return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } })
   })
 }

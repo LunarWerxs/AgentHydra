@@ -12,6 +12,7 @@ import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 import type { Context, Hono } from 'hono'
 import type { DeskSettings, ServerEvent } from '@shared/protocol'
 import type { ServerContext } from '../context'
+import { callerKind, describeCaller, logRestartAsk, OWNER_ONLY_RESTART } from '../caller'
 import { bridge } from '../bridge'
 import { findSessionJsonl } from '../bridge/session-jsonl'
 import { mainConfigFile, readAgentHydraMcp, type QueryImpl } from '../engine/chat-runtime'
@@ -473,15 +474,18 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   // The launcher's stop and restart (SPEC "Launcher"): the server stops the way SIGTERM stops it, the chats running
   // on in their hosts for the next server; `chats: true` ends them first.
   const shutdown = (deps.shutdown as (() => void) | undefined) ?? (() => void process.emit('SIGTERM'))
-  app.post('/api/server/shutdown', (c) =>
-    answer(c, async () => {
+  app.post('/api/server/shutdown', (c) => {
+    const refused = callerKind(c.req.raw.headers) === 'other'
+    logRestartAsk(ctx.home, `shutdown asked: ${describeCaller(c.req.raw.headers)} -> ${refused ? 'refused' : 'accepted'}`)
+    if (refused) return c.json({ error: OWNER_ONLY_RESTART }, 409)
+    return answer(c, async () => {
       const chats = ((await c.req.json().catch(() => null)) as { chats?: unknown } | null)?.chats === true
       if (chats) await manager.closeAll({ chats: true })
       // After this answer has left.
       setTimeout(shutdown, 50)
       return { ok: true, chats }
-    }),
-  )
+    })
+  })
 
   const stopClimayte = pollClimayte(ctx, manager)
 

@@ -88,7 +88,7 @@ export function watchServerUpdate(): () => void {
 export async function restartServer(): Promise<void> {
   restartState.value = { restarting: true }
   try {
-    const res = await fetch('/api/server/restart', { method: 'POST' })
+    const res = await fetch('/api/server/restart', { method: 'POST', headers: { 'X-Desk-Caller': 'window' } })
     if (res.ok) return
     const error = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error
     restartState.value = { error: typeof error === 'string' && error ? error : `${res.status} ${res.statusText}` }

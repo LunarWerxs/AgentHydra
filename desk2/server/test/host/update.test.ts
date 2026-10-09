@@ -2,7 +2,7 @@
 // starts launcher/restart.ps1 only for a server the launcher started.
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -49,25 +49,37 @@ test('stale once a file of the server is newer than its start, or one was added 
   expect((await read()).stale).toBe(true)
 })
 
-test('restart starts launcher/restart.ps1, logging to the data home, only for the server the launcher started', async () => {
+test('restart starts launcher/restart.ps1, logging to the data home, only for the window on a server the launcher started', async () => {
   const { desk, home, started } = await boot()
-  const restart = () => fetch(`${desk.url}/api/server/restart`, { method: 'POST' })
+  const restart = (headers: Record<string, string> = {}) => fetch(`${desk.url}/api/server/restart`, { method: 'POST', headers })
+  const windowAsk = { 'X-Desk-Caller': 'window', 'X-Desk-Chat': 'chat-1', 'User-Agent': 'Desk2Window/1' }
   // No pid file: started some other way (bun run dev), so nothing would bring it back.
-  const refused = await restart()
-  expect(refused.status).toBe(409)
-  expect((await refused.json()).error).toContain('restart.ps1')
+  expect((await restart(windowAsk)).status).toBe(409)
   pidFile(home, 1)
-  expect((await restart()).status).toBe(409)
+  expect((await restart(windowAsk)).status).toBe(409)
   expect(started).toEqual([])
 
   pidFile(home, 4242)
   expect((await (await fetch(`${desk.url}/api/server/update`)).json()).restartable).toBe(true)
-  const ok = await restart()
+  const ok = await restart(windowAsk)
   expect(ok.status).toBe(202)
   expect(started).toHaveLength(1)
+  const log = readFileSync(join(home, 'logs', 'restart.log'), 'utf8')
+  expect(log).toContain('restart asked: caller=window chat=chat-1 user-agent="Desk2Window/1" -> accepted')
+  expect(log).toContain('refused (not started by the launcher)')
   const command = started[0]!.at(-1)!
   expect(command).toContain(join('launcher', 'restart.ps1'))
   expect(command).toContain(`*>> '${join(home, 'logs', 'restart.log')}'`)
+})
+
+test('an agent or script asking for a restart is refused with the owner message, and its ask is logged', async () => {
+  const { desk, home, started } = await boot()
+  pidFile(home, 4242)
+  const res = await fetch(`${desk.url}/api/server/restart`, { method: 'POST', headers: { 'User-Agent': 'curl/8.4' } })
+  expect(res.status).toBe(409)
+  expect((await res.json()).error).toContain("the owner's")
+  expect(started).toEqual([])
+  expect(readFileSync(join(home, 'logs', 'restart.log'), 'utf8')).toContain('restart asked: caller=other chat=none user-agent="curl/8.4" -> refused (not the window)')
 })
 
 test('not restartable off Windows: the launcher scripts are PowerShell', async () => {

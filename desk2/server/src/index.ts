@@ -9,6 +9,7 @@ import pkg from '../package.json'
 import { type HelloProvider, type HostRoute, type Plugin, type ServerContext, setContext, type WsRoute } from './context'
 import { REAL_HOME } from './real-home'
 import { createSettingsStore, SettingsError } from './settings'
+import { indexReader } from './static-index'
 import { cacheControl } from './static-cache'
 import { createWsHub, type WsClient } from './ws'
 
@@ -113,7 +114,7 @@ async function loadPlugins(app: Hono, ctx: ServerContext, dir: string): Promise<
 }
 
 function serveStatic(app: Hono, dist: string): void {
-  const index = join(dist, 'index.html')
+  const readIndex = indexReader(join(dist, 'index.html'))
   app.get('*', async (c) => {
     const path = decodeURIComponent(new URL(c.req.url).pathname)
     const file = resolve(dist, `.${path}`)
@@ -123,7 +124,9 @@ function serveStatic(app: Hono, dist: string): void {
       const isFile = await found.stat().then((st) => st.isFile(), () => false)
       if (isFile) return new Response(found, { headers: { 'cache-control': cacheControl(path) } })
     }
-    return new Response(Bun.file(index), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } })
+    const html = await readIndex()
+    if (html === null) return new Response('the window is not built yet', { status: 503 })
+    return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } })
   })
 }
 
@@ -197,7 +200,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
 
   app.all('/api/*', (c) => c.json({ error: `no route ${c.req.method} ${new URL(c.req.url).pathname}` }, 404))
   const dist = resolve(opts.webDist ?? WEB_DIST)
-  if (existsSync(join(dist, 'index.html'))) serveStatic(app, dist)
+  serveStatic(app, dist)
 
   const server = Bun.serve<unknown>({
     port: opts.port,

@@ -542,7 +542,9 @@ powershell -NoProfile -File launcher\stop.ps1                # stop the server t
 ```
 
 `stop.ps1` stops only the server `start.ps1` started (by the pid file it wrote), together with the
-Claude Code processes its chats were running. It never touches any other bun process.
+Claude Code processes its chats were running. It never touches any other bun process. These are for the owner:
+an agent does not run `stop.ps1` or `restart.ps1` against the live server, and the server refuses its restart
+and shutdown asks (409; `desk2/AGENTS.md`).
 
 If the server does not answer within 20 seconds, the launcher shows a message box with the end of the
 server log.

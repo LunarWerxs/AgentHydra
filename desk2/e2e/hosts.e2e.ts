@@ -58,7 +58,9 @@ async function startServer(): Promise<number> {
 }
 
 async function api<T>(method: string, path: string, body?: unknown): Promise<{ status: number; body: T }> {
-  const res = await fetch(base + path, { method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const headers: Record<string, string> = { 'x-desk-caller': 'launcher' }
+  if (body !== undefined) headers['content-type'] = 'application/json'
+  const res = await fetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
   return { status: res.status, body: (await res.json().catch(() => null)) as T }
 }
 

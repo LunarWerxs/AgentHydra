@@ -4,10 +4,11 @@
 // server still ran the code from before they landed, and nothing in the window said so.
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Hono } from 'hono'
 import type { ServerUpdate } from '@shared/protocol'
+import { callerKind, describeCaller, logRestartAsk, OWNER_ONLY_RESTART } from '../caller'
 import type { ServerContext } from '../context'
 import { detachedCommand } from '../host/launch'
 
@@ -104,9 +105,16 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   })
 
   app.post('/api/server/restart', (c) => {
-    if (!restartable())
-      return c.json({ error: "This server was not started by AgentHydra's window launcher, so it cannot restart itself: run desk2/launcher/restart.ps1" }, 409)
-    mkdirSync(join(ctx.home, 'logs'), { recursive: true })
+    const who = describeCaller(c.req.raw.headers)
+    if (callerKind(c.req.raw.headers) !== 'window') {
+      logRestartAsk(ctx.home, `restart asked: ${who} -> refused (not the window)`)
+      return c.json({ error: OWNER_ONLY_RESTART }, 409)
+    }
+    if (!restartable()) {
+      logRestartAsk(ctx.home, `restart asked: ${who} -> refused (not started by the launcher)`)
+      return c.json({ error: "This server was not started by AgentHydra's window launcher, so the window cannot restart it. Leave it to the owner." }, 409)
+    }
+    logRestartAsk(ctx.home, `restart asked: ${who} -> accepted`)
     const log = join(ctx.home, 'logs', 'restart.log')
     const quote = (s: string) => `'${s.replace(/'/g, "''")}'`
     deps.start(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `& ${quote(RESTART_SCRIPT)} *>> ${quote(log)}`])

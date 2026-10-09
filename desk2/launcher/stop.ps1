@@ -59,7 +59,7 @@ function Get-ChatHosts {
 function Ask-Shutdown {
   try {
     $body = if ($Chats) { '{"chats":true}' } else { '{}' }
-    Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/api/server/shutdown" -ContentType 'application/json' -Body $body -TimeoutSec 60 | Out-Null
+    Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/api/server/shutdown" -ContentType 'application/json' -Body $body -Headers @{ 'X-Desk-Caller' = 'launcher' } -TimeoutSec 60 | Out-Null
     return $true
   } catch { return $false }
 }
