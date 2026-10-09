@@ -21,6 +21,7 @@ import { readdir as readdirAsync, readFile as readFileAsync } from 'node:fs/prom
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
+import { closeWorkerTabs } from './climayte-browser-tabs'
 import { type EtaReview, etaFullOfEvent, reviewOfEvent } from './climayte-eta'
 import {
   appendJournal,
@@ -715,6 +716,7 @@ export function changed(w: CliMayteWorker): void {
   dirty.add(w.id)
   save()
   notify(w)
+  void closeWorkerTabs(w)
 }
 
 const isInit = (ev: unknown): boolean =>
