@@ -16,8 +16,7 @@ Message delivery has one native action of its own, the native send
 ## Operating instructions for agents
 
 Use AgentHydra's production native route for archive and migration-source cleanup before
-considering Lua, sidebar menus or UIA. The archive and migration scripts already do this;
-the POC runner is for diagnostics and bounded experiments, not the general move API.
+considering Lua, sidebar menus or UIA. The archive and migration scripts already do this.
 
 1. Resolve the intended account to its exact full profile path with
    `GET /api/instances` or `/api/instance-numbers/resolve?ref=<reference>`. Read current
@@ -143,8 +142,7 @@ source rows visible and every effort unconfirmed (2026-10-09). When an archive r
 it moved.
 
 A native live proof on **another_meh
-(#8)** imported a disposable chat, restored its settings and archived it. See the
-[results](CLAUDE-DESKTOP-POC-RESULTS.md) for timings and preservation checks.
+(#8)** imported a disposable chat, restored its settings and archived it.
 
 ## Connection requirement
 
@@ -183,15 +181,6 @@ No stock automatic activation path has been identified. AgentHydra now has an
 opt-in managed-copy launcher that enables only `EnableNodeCliInspectArguments`
 and starts the inspector from a launch flag. Full startup and native chat archive
 were verified on Ashley #15; see the production proof below.
-
-The native-only POC runner under `scripts/claude-native-poc/native-control.ts`
-connects to an explicitly selected loopback inspector port and checks the PID
-and full profile path. It never launches an instance or invokes a UI fallback.
-Its native program requires the already-loaded manager in `require.cache` and
-refuses a different app version or source hash. The live proof verified the
-connection, native state, unchanged transcript bytes and before/after native
-screenshots. Capturing those screenshots does not send window input or change
-foreground focus.
 
 A native bridge needs an enabled developer connection and verified per-instance
 discovery. Launching stock Claude with a Chromium remote debugging port
@@ -436,6 +425,14 @@ background_task`), and two had been left `isStopping` with no engine by an earli
 accounts (`chat-busy`). The native archive refuses `isStopping` too, so going around that flag
 would land the copy and then fail to archive the old chat.
 
+One exception, for a move's own source row only (`sourceSuperseded`, sent once the landing on the
+target is verified): a stale stop, meaning `isStopping` with no engine, no query, nothing starting,
+pending or losable, is archived. On 2026-10-09 a batch move left one source row in that state;
+the 15 s busy retry and `migrate_reconcile --finish` were both refused, and the flag cleared by
+itself about ten minutes later. Every other archive still treats `isStopping` as busy. A move whose
+source row still shows is reported as unfinished, never as OK (`source_unsettled` in
+`migrate_chat.py`, shared by `migrate_batch`).
+
 ## Sending a message into a chat (native send)
 
 `nativeProgram({ action: 'send', pid, profileDir, cliSessionId, text, fromName })` sends `text`
@@ -465,10 +462,8 @@ reached the app is never retried another way; a refusal before dispatch falls ba
 - Support for reviewed future Claude versions and explicit opt-in for new profiles.
   Desktop shortcuts launch Claude directly, so covering those requires routing
   them through AgentHydra's launch path too.
-- General destination settings restoration beyond the deliberately restricted
-  disposable-chat POC. The proof restored effort and permission/Chrome mode
-  through the native setters, but the general migration pipeline still owns its
-  existing destination settings handling.
+- Chrome permission mode on landing. A move restores effort, ultracode and Bypass permissions
+  natively (the `ultracode` action); the Chrome mode is still left to the import.
 - Native unarchive with archive-watcher cancellation before dispatch.
 
 The installed `claude://resume` handler accepts only the session ID. It does not

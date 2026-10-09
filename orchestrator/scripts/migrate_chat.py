@@ -2267,7 +2267,25 @@ def main(argv: list[str]) -> int:
                        archivewatchlib.ids_for_match(land.match, land.session_id),
                        f"migrate_chat {land.session_id}"):
         return out(payload, outcome.as_json, 2)
+    unsettled = source_unsettled(payload)
+    if unsettled:
+        payload["ok"] = False
+        payload["unfinished"] = [unsettled]
+        return out(payload, outcome.as_json, 2)
     return out(payload, outcome.as_json, 0)
+
+
+def source_unsettled(payload: dict) -> str | None:
+    """Why a landed chat is still a HALF-MOVE, or None when the source row is settled.
+
+    A chat on its new account whose old copy still shows on the account it left is not a
+    finished move (2026-10-09: a batch printed OK for a chat whose source row the app refused
+    to archive, and the owner found the duplicate himself). Shared with migrate_batch, so a lone
+    move and a batch grade the same row the same way."""
+    if payload.get("sourceRow") != "visible":
+        return None
+    return (f"the source row is still visible on {payload.get('from') or 'the source account'} "
+            "(the old account still shows this chat); `migrate_reconcile --finish` settles it")
 
 
 #: How long the target app may take to finish starting a landed chat's engine before its pause.

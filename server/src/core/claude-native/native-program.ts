@@ -563,6 +563,26 @@ function nativeBusyFlags(manager: any, before: any, session: any): string[] {
   return Object.keys(flags).filter((name) => !!flags[name])
 }
 
+/**
+ * A stop the app never finished: `isStopping` with no engine, no query and nothing pending or
+ * losable. A move leaves its source row this way, and the app can hold the flag for minutes
+ * (2026-10-09: the batch's 15 s busy retry and migrate_reconcile --finish were both refused,
+ * and the row cleared by itself about ten minutes later). Nothing is left to interrupt.
+ */
+function nativeStaleStop(before: any, session: any): boolean {
+  return (
+    before.isStopping &&
+    !before.isRunning &&
+    !before.hasQuery &&
+    !before.starting &&
+    !before.losableWork &&
+    !before.pendingInput &&
+    !before.pendingPermission &&
+    !before.pendingDialog &&
+    !session.startResumeInFlight
+  )
+}
+
 function nativeArchivePreconditions(
   found: any,
   session: any,
@@ -575,8 +595,11 @@ function nativeArchivePreconditions(
   if (session.spawnedFrom && !session.lineageDetached && !sourceSuperseded) {
     nativeRefuse('attached parent could receive side effects')
   }
+  // A move's superseded source (landing verified on the target) is archived over a stale stop;
+  // every other caller still treats `isStopping` as busy.
+  const staleSupersededStop = sourceSuperseded && nativeStaleStop(before, session)
   if (
-    nativeSessionIsBusy(before, session) ||
+    (nativeSessionIsBusy(before, session) && !staleSupersededStop) ||
     nativeManagerIsBusy(found.manager, session.sessionId)
   ) {
     nativeRefuse(
@@ -1198,6 +1221,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeSessionIsBusy,
     nativeManagerIsBusy,
     nativeBusyFlags,
+    nativeStaleStop,
     nativeArchivePreconditions,
     nativeArchiveFlags,
     nativeBystanderChanges,

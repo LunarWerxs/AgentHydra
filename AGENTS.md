@@ -64,9 +64,6 @@ have not all been converted. Use their existing guarded workflows; do not claim
 an entire migration is native or substitute a one-off POC for production tooling.
 Other message delivery (the peer pipe, the composer) is a separate feature.
 
-The scripts under `scripts/claude-native-poc/` and proof-result documents are
-diagnostics/history, not instructions to repeat the old menu activation process.
-
 ## Repository work
 
 Keep unrelated working-tree changes intact. The main UI is AgentHydra 2.0's window in
