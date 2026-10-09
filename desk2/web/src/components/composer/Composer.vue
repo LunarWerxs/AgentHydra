@@ -72,6 +72,7 @@ import { repoYeti, repoYetiAction, watchRepoYeti } from '@/components/connectors
 import ChangeProjectMenu from './ChangeProjectMenu.vue'
 import { joinDrafts, putBackDraft } from './change-project'
 import { Tip } from '@/components/ui/tooltip'
+import { Info } from '@lucide/vue'
 import { ANNOTATED_EVENT, openLightbox, type Annotated } from '@/components/transcript/lib/media'
 import { provideTranscript } from '@/components/transcript/context'
 import { useShellSource } from '@/components/shell/source'
@@ -95,6 +96,9 @@ const props = defineProps<{
   chat: ChatSummary | null
   /** A chat working in Claude Desktop: a send goes into it as text (`send`), pictures and voice are off (`why` says so). */
   into?: { send: (text: string) => Promise<void>; why: string }
+  /** A sentence about where a send goes (an outside chat continues as a copy): an info mark in the toolbar row says it on
+   *  hover or focus, not a line over the box (owner, 2026-10-08: "Should this just be a small info hover icon"). */
+  note?: string
   /** Gallery only: start in a given state without a server. */
   demo?: {
     text?: string
@@ -1289,6 +1293,12 @@ onBeforeUnmount(() => {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <Tip v-if="note" :label="note" side="top">
+          <button type="button" :class="TOOL_ICON" :aria-label="note" data-composer-note>
+            <Info class="size-3.5" />
+          </button>
+        </Tip>
 
         <div class="flex-1" />
 

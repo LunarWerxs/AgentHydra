@@ -233,10 +233,8 @@ onUnmounted(() => {
     </div>
 
     <template v-if="standIn">
-      <div v-if="continueNote" class="shrink-0 px-8 pb-2">
-        <p class="mx-auto w-full max-w-3xl truncate px-2 text-[12px] leading-4 text-(--text-muted)" role="status">{{ continueNote }}</p>
-      </div>
-      <Composer :key="standIn.id" :chat="standIn" />
+      <!-- In place or as a copy, and on which account: the info mark in the composer's toolbar says it on hover. -->
+      <Composer :key="standIn.id" :chat="standIn" :note="continueNote || undefined" />
     </template>
 
     <template v-else-if="desktopChat && session">
