@@ -10,7 +10,7 @@ import type { PermissionResult, SDKMessage } from '@anthropic-ai/claude-agent-sd
 import type { ChatSummary, ExternalSession, QueueState, ServerEvent, SessionMeta, TranscriptItem } from '@shared/protocol'
 import { createServer, type DeskServer } from '../../../src/index'
 import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
-import { titleFrom } from '../../../src/engine/chat-manager'
+import { titleFrom } from '@shared/chat-title'
 import { FailureLedger } from '../../../src/engine/failures'
 import { explorerArg } from '../../../src/engine/reveal'
 import { STATIC_COMMANDS, STATIC_MODELS } from '../../../src/engine/models'

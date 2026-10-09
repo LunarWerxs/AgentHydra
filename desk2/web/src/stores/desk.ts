@@ -38,6 +38,7 @@ import type {
   ExternalBranchRequest,
   ExternalBranchResult
 } from '@shared/protocol'
+import { newChatTitle } from '@shared/chat-title'
 import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
 import { SEARCH_LIMIT, SEARCH_MIN_CHARS, SearchError } from '@/components/sidebar/search'
@@ -567,10 +568,13 @@ function isDrawnMessage(item: TranscriptItem): boolean {
   return item.id.startsWith(PENDING_MSG) || item.id.startsWith('desk-sent:')
 }
 
-/** The placeholder whose POST is still out and that this chat is: same folder, made no earlier than it. */
+/** The placeholder whose POST is still out and that this chat is: same folder, title, and account, made no earlier than it. */
 function adoptablePlaceholder(chat: ChatSummary): string | null {
+  if ([...placeholderAlias.values()].includes(chat.id)) return null
   for (const [placeholder, make] of placeholderMakes) {
-    if (make.req.cwd !== chat.cwd) continue
+    const req = make.req
+    if (req.cwd !== chat.cwd || chat.title !== newChatTitle(req)) continue
+    if (req.accountId && req.accountId !== 'auto' && chat.account.id !== req.accountId) continue
     const row = store.chats.find((c) => c.id === placeholder)
     if (row && chat.createdAt >= row.createdAt) return placeholder
   }

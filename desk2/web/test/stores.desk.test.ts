@@ -352,7 +352,7 @@ describe('useDesk store', () => {
       const made = desk.createChat({ cwd: 'C:/Users/me/early', prompt: 'Example early' })
       const placeholder = (desk.selected.value as { id: string }).id
       const row = desk.chats.value.find((c) => c.id === placeholder)!
-      const chat = { ...row, id: 'chat-early', sessionId: 'session-early', createdAt: Date.now() + 1 }
+      const chat = { ...row, id: 'chat-early', sessionId: 'session-early', title: 'Example early', createdAt: Date.now() + 1 }
       MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat })
       expect(desk.chats.value.filter((c) => c.id === 'chat-early' || c.id === placeholder)).toEqual([expect.objectContaining({ id: 'chat-early' })])
       expect(desk.selected.value).toEqual({ kind: 'chat', id: 'chat-early' })
@@ -361,6 +361,30 @@ describe('useDesk store', () => {
       expect(desk.chats.value.filter((c) => c.id === 'chat-early')).toHaveLength(1)
       expect(desk.chats.value.some((c) => c.id === placeholder)).toBe(false)
       expect(desk.itemsByChat.value.get('chat-early')).toEqual([expect.objectContaining({ kind: 'user', text: 'Example early' })])
+    })
+
+    it('a different chat made in the same folder while the POST is out is not taken: the view stays on the placeholder', async () => {
+      const desk = useDesk()
+      await desk.init()
+      desk.select({ kind: 'new', cwd: 'C:/Users/me/shared' })
+      const answer = answerLater()
+      const made = desk.createChat({ cwd: 'C:/Users/me/shared', prompt: 'Example mine' })
+      const placeholder = (desk.selected.value as { id: string }).id
+      const row = desk.chats.value.find((c) => c.id === placeholder)!
+      MockWebSocket.last!.simulateMessage({
+        type: 'chat.upsert',
+        chat: { ...row, id: 'chat-other', sessionId: 'session-other', title: 'Example other chat', createdAt: Date.now() + 1 }
+      })
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: placeholder })
+      expect(desk.chats.value.some((c) => c.id === 'chat-other')).toBe(true)
+      answer({ ...row, id: 'chat-mine', sessionId: 'session-mine', title: 'Example mine', createdAt: Date.now() + 2 })
+      await made
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: 'chat-mine' })
+      expect(desk.chats.value.filter((c) => c.id === 'chat-mine')).toHaveLength(1)
+      expect(desk.chats.value.filter((c) => c.id === 'chat-other')).toHaveLength(1)
+      expect(desk.chats.value.some((c) => c.id === placeholder)).toBe(false)
+      expect(desk.itemsByChat.value.get('chat-mine')).toEqual([expect.objectContaining({ kind: 'user', text: 'Example mine' })])
+      expect(desk.itemsByChat.value.get('chat-other') ?? []).toEqual([])
     })
 
     it('a history snapshot that already holds the sent message takes its bubble: one bubble', async () => {

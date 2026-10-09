@@ -40,6 +40,7 @@ import type {
   SlashCommandInfo,
   TranscriptItem,
 } from '@shared/protocol'
+import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
 import { hasRoom } from '../bridge/accounts'
 import type { AhWorker } from '../bridge/client'
@@ -136,9 +137,6 @@ export interface SendOptions {
  *  never answered now that CliMayte queues a worker until an account has room; the queue still reads it. */
 export type QueueCreated = { waiting: 'no-room' | 'unreachable' } | { chat: ChatSummary; firstSend: Promise<string | null> }
 
-export const TITLE_MAX = 60
-/** A chat's title until its first message names it. */
-export const NEW_TITLE = 'New session'
 /** How many accounts a generated title is asked of: the first, and one retry. */
 const TITLE_TRIES = 2
 /** A chat with a turn under way (the send queue waits on these). */
@@ -176,13 +174,6 @@ function workersKey(workers: readonly CliMayteWorker[]): string {
 }
 /** The bridge answers the very same array while the worker list did not change, so its key is worked out once. */
 const workerKeys = new WeakMap<readonly CliMayteWorker[], string>()
-
-/** The first line of the prompt, at most 60 chars (SPEC "Titles"). */
-export function titleFrom(prompt: string): string {
-  const line = prompt.split(/\r?\n/).find((l) => l.trim())?.trim() ?? ''
-  if (line.length <= TITLE_MAX) return line
-  return line.slice(0, TITLE_MAX - 1).trimEnd() + '…'
-}
 
 interface Entry {
   chat: ChatSummary
@@ -588,7 +579,7 @@ export class ChatManager {
     const chat: ChatSummary = {
       id: randomUUID(),
       sessionId: null,
-      title: req.title?.trim() || (prompt ? titleFrom(prompt) : NEW_TITLE),
+      title: newChatTitle(req),
       cwd,
       account,
       accountAuto: auto,
