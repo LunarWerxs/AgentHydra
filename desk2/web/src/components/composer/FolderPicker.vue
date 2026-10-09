@@ -3,8 +3,10 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { icons, newSessionGlyphs } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import type { ComposerApi } from './api'
-import { folderRows } from './folders'
+import { folderIcon, folderRows } from './folders'
 import { folderName } from './logic'
+import { gridProjects } from '../shell/project-grid'
+import { useShellSource } from '../shell/source'
 import { HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR } from './menu'
 import { Tip } from '@/components/ui/tooltip'
 import { ENV_PILL_BUTTON, PILL_TEXT } from './pill'
@@ -17,6 +19,7 @@ const Plus = icons.add
 const Remove = icons.dismiss
 const props = defineProps<{ modelValue: string | null; api: ComposerApi }>()
 const emit = defineEmits<{ 'update:modelValue': [cwd: string] }>()
+const src = useShellSource()
 
 /** Rows the menu shows; the server keeps a few more. */
 const SHOWN = 10
@@ -24,7 +27,19 @@ const SHOWN = 10
 const open = ref(false)
 const recent = ref<string[]>([])
 const error = ref<string | null>(null)
-const rows = computed(() => folderRows(recent.value.slice(0, SHOWN), props.modelValue))
+// A logo that failed to load is dropped for good: the folder glyph shows instead.
+const failedLogos = ref(new Set<string>())
+function failed(logo: string | null) {
+  if (logo) failedLogos.value.add(logo)
+}
+function usable(logo: string | null): string | null {
+  return logo && !failedLogos.value.has(logo) ? logo : null
+}
+const projects = computed(() => (gridProjects.value ?? src.cachedProjects?.() ?? null)?.projects ?? [])
+const logo = computed(() => usable(folderIcon(projects.value, props.modelValue)))
+const rows = computed(() =>
+  folderRows(recent.value.slice(0, SHOWN), props.modelValue).map((r) => ({ ...r, icon: usable(folderIcon(projects.value, r.path)) }))
+)
 
 async function loadRecent() {
   try {
@@ -75,7 +90,8 @@ async function addFolder() {
     <Tip :label="modelValue ?? 'Choose a folder'">
       <DropdownMenuTrigger as-child>
         <button type="button" :class="ENV_PILL_BUTTON" class="min-w-0 shrink">
-          <newSessionGlyphs.folder class="size-4 shrink-0" />
+          <img v-if="logo" :src="logo" alt="" class="size-4 shrink-0 rounded-(--radius-6)" @error="failed(logo)" />
+          <newSessionGlyphs.folder v-else class="size-4 shrink-0" />
           <span class="truncate" :class="PILL_TEXT">{{ modelValue ? folderName(modelValue) : 'Choose folder' }}</span>
         </button>
       </DropdownMenuTrigger>
@@ -92,6 +108,7 @@ async function addFolder() {
           @select="choose(r.path)"
           @keydown.delete.prevent="remove(r.path)"
         >
+          <img v-if="r.icon" :src="r.icon" alt="" class="me-2 size-4 shrink-0 rounded-(--radius-6)" @error="failed(r.icon)" />
           <span class="min-w-0 flex-1 truncate">
             {{ r.name }}<span v-if="r.hint" class="ms-1.5 text-(--text-muted)">{{ r.hint }}</span>
           </span>

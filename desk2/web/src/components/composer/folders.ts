@@ -1,6 +1,7 @@
 // The folder menu's rows (FolderPicker): folder names only, like the real app. Folders that share a name also
 // get as much of the end of their parent path as tells them apart. No Vue here, so web/test/composer can test it.
 
+import type { ProjectEntry } from '@shared/protocol'
 import { folderName } from './logic'
 
 export interface FolderRow {
@@ -15,6 +16,12 @@ export interface FolderRow {
 export function sameFolder(a: string, b: string): boolean {
   const norm = (p: string) => p.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase()
   return norm(a) === norm(b)
+}
+
+/** The logo of the project whose folder is `folder`, or null (the folder glyph shows instead). */
+export function folderIcon(projects: readonly Pick<ProjectEntry, 'path' | 'icon'>[], folder: string | null): string | null {
+  if (folder === null) return null
+  return projects.find((p) => p.icon !== null && sameFolder(p.path, folder))?.icon ?? null
 }
 
 function parentParts(path: string): string[] {

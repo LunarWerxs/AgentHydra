@@ -10,6 +10,7 @@ import { focusFirstItem, MENU_CONTENT, MENU_ITEM } from '../sidebar/menuClasses'
 import ProjectFoldersDialog from './ProjectFoldersDialog.vue'
 import StatsCard from './StatsCard.vue'
 import { useShellSource } from './source'
+import { gridProjects } from './project-grid'
 import { addProjectFolder, filterProjects, pickedFolder, type ProjectAction, type ProjectMenuApi, projectActions, runProjectAction, shownProjects, syncLabel } from './projects'
 import { showHiddenProjects, showProjectDetails } from './projectDetails'
 
@@ -22,7 +23,8 @@ const src = useShellSource()
 
 const tab = ref<'projects' | 'stats'>('projects')
 const query = ref('')
-const answer = ref(src.cachedProjects?.() ?? null)
+const answer = gridProjects
+answer.value ??= src.cachedProjects?.() ?? null
 const loading = ref(false)
 const problem = ref<string | null>(null)
 const actionProblem = ref<string | null>(null)
