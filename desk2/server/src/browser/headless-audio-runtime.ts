@@ -76,6 +76,7 @@ export class HeadlessAudio {
   private readonly muting = new Set<string>()
   private readonly book = new MuteBook()
   private readonly pageDir = new Map<string, string>()
+  private lane: Promise<unknown> = Promise.resolve()
   private readonly now: () => number
   private last = ''
   private running = false
@@ -96,36 +97,48 @@ export class HeadlessAudio {
     void this.supervise()
   }
 
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.lane.then(fn)
+    this.lane = run.catch(() => undefined)
+    return run
+  }
+
   async stop(): Promise<void> {
     this.stopped = true
-    for (const chat of [...this.muting]) {
-      this.muting.delete(chat)
-      await this.unmuteChat(chat)
-    }
-    await this.unmuteChat(UNATTRIBUTED)
+    await this.serial(async () => {
+      for (const chat of [...this.muting]) {
+        this.muting.delete(chat)
+        await this.unmuteChat(chat)
+      }
+      await this.unmuteChat(UNATTRIBUTED)
+    })
     this.helper?.send('{"op":"quit"}')
     const killer = setTimeout(() => this.helper?.kill(), QUIT_GRACE_MS)
     killer.unref?.()
   }
 
-  async setMuted(chat: string, on: boolean): Promise<HeadlessAudioState> {
-    if (on) {
-      this.muting.add(chat)
-      await this.muteChat(chat)
-    } else {
-      this.muting.delete(chat)
-      await this.unmuteChat(chat)
-    }
-    this.publish()
-    return this.state()
+  setMuted(chat: string, on: boolean): Promise<HeadlessAudioState> {
+    return this.serial(async () => {
+      if (on) {
+        this.muting.add(chat)
+        await this.muteChat(chat)
+      } else {
+        this.muting.delete(chat)
+        await this.unmuteChat(chat)
+      }
+      this.publish()
+      return this.state()
+    })
   }
 
-  async setUnattributed(on: boolean): Promise<HeadlessAudioState> {
-    this.unattributedMuted = on
-    if (on) await this.tick()
-    else await this.unmuteChat(UNATTRIBUTED)
-    this.publish()
-    return this.state()
+  setUnattributed(on: boolean): Promise<HeadlessAudioState> {
+    return this.serial(async () => {
+      this.unattributedMuted = on
+      if (on) await this.scan().catch(() => undefined)
+      else await this.unmuteChat(UNATTRIBUTED)
+      this.publish()
+      return this.state()
+    })
   }
 
   private async supervise(): Promise<void> {
@@ -171,7 +184,7 @@ export class HeadlessAudio {
     try {
       do {
         this.again = false
-        await this.scan()
+        await this.serial(() => this.scan())
       } while (this.again && !this.stopped)
     } catch {
       // a failed scan waits for the helper's next line

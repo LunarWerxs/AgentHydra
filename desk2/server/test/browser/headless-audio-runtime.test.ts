@@ -61,6 +61,7 @@ interface Rig {
   helper: ReturnType<typeof fakeHelper>
   states: HeadlessAudioState[]
   calls: { probed: number[]; tabs: number[]; sound: string[]; mute: string[] }
+  hold: { gate: Promise<void> | null }
   failMute: Set<string>
   audibleIds: Set<string>
   pages: Map<number, BrowserTab[]>
@@ -75,6 +76,7 @@ function rig(opts: { platform?: string; ports: Record<string, number>; chats: Re
   const audibleIds = new Set<string>()
   const pages = new Map<number, BrowserTab[]>()
   const spawns: number[] = []
+  const hold: { gate: Promise<void> | null } = { gate: null }
   const direct = (s: string) => opts.chats[s] ?? null
   const page: PageAccess = {
     tabs: async (port) => {
@@ -84,6 +86,7 @@ function rig(opts: { platform?: string; ports: Record<string, number>; chats: Re
     sound: async (port, id) => {
       calls.probed.push(port)
       calls.sound.push(id)
+      if (hold.gate) await hold.gate
       return audibleIds.has(id) ? { audible: 1, contexts: 0 } : { audible: 0, contexts: 0 }
     },
     mute: async (_port, id, on) => {
@@ -103,7 +106,7 @@ function rig(opts: { platform?: string; ports: Record<string, number>; chats: Re
     chatOf: async () => chatResolver(direct, new Map(Object.entries(opts.workerOrigin ?? {}))),
     broadcast: (s) => states.push(s),
   }
-  return { rt: new HeadlessAudio(deps), helper, states, calls, failMute, audibleIds, pages, spawns }
+  return { rt: new HeadlessAudio(deps), helper, states, calls, hold, failMute, audibleIds, pages, spawns }
 }
 
 describe('attribution', () => {
@@ -197,6 +200,30 @@ describe('mute bookkeeping', () => {
 
     await r.rt.setMuted('chat-1', false)
     expect(r.helper.sent).toContain(JSON.stringify({ op: 'mute', pid: 31, on: false }))
+    await r.rt.stop()
+  })
+
+  test('an unmute that lands while a scan is in flight is not re-muted by that scan', async () => {
+    const a = profileDir({ T1: 'sess-a' })
+    const r = rig({ ports: { [a]: 9006 }, chats: { 'sess-a': 'chat-1' } })
+    r.pages.set(9006, [{ id: 'T1', url: 'https://example.test/a', title: '' }])
+    r.audibleIds.add('T1')
+    r.rt.start()
+    await until(() => r.spawns.length === 1)
+    r.helper.emit(line([[11, 0.5]], [browser(10, a), audio(11, 10)]))
+    await until(() => r.rt.state().audible.includes('chat-1'))
+    await r.rt.setMuted('chat-1', true)
+
+    let release!: () => void
+    r.hold.gate = new Promise<void>((res) => (release = res))
+    r.helper.emit(line([[11, 0.5]], [browser(10, a), audio(11, 10)]))
+    await until(() => r.calls.sound.length === 2)
+    const off = r.rt.setMuted('chat-1', false)
+    release()
+    await off
+    await new Promise((res) => setTimeout(res, 50))
+    expect(r.calls.mute.at(-1)).toBe('unmute:T1')
+    expect(r.rt.state().muted).toEqual([])
     await r.rt.stop()
   })
 })
