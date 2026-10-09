@@ -20,6 +20,7 @@ import { navigate } from './navigate'
 import { HANDOFF_TOOLS } from './handoff'
 import { PAGE_TOOLS } from './page-tools'
 import { READ_TOOLS } from './reads'
+import { SCRIPT_TOOLS } from './script'
 import { TAB_TOOLS } from './tabs'
 
 export { ToolInputError }
@@ -152,6 +153,7 @@ export const TOOL_DEFS: ToolDef[] = [
   ...PAGE_TOOLS,
   ...TAB_TOOLS,
   ...HANDOFF_TOOLS,
+  ...SCRIPT_TOOLS,
   {
     name: 'browser_profiles',
     description:

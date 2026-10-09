@@ -82,6 +82,7 @@ export interface ToolParams {
   browser_tab_errors: { match?: string; timeoutMs?: number; attachPort?: number; profile?: string }
   browser_tab: { match?: string; attachPort?: number; profile?: string }
   browser_close: { attachPort?: number; profile?: string }
+  browser_script: { steps: Record<string, unknown>[]; attachPort?: number; headed?: boolean; profile?: string }
 }
 
 export type ToolName = keyof ToolParams
