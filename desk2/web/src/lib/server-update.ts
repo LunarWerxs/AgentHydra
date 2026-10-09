@@ -8,7 +8,13 @@ import type { ServerUpdate } from '@shared/protocol'
 const LOOK_EVERY_MS = 60_000
 const SEEN_KEY = 'hydra-desk.menu.updateSeen'
 const ASK_MS = 4_000
-const RESTART_MS = 4_000
+// Long enough to outlast a busy server's stall (up to 15 s measured): the restart it would answer 202 to
+// at once is the one thing that clears the stall.
+const RESTART_MS = 20_000
+/** How long a restart may go without the new server's hello before the row says it did not happen
+ *  (owner, 2026-10-09: "I can't get the restart button to restart"; the row said Restarting… for good). */
+export const RESTART_WAIT_MS = 60_000
+export const RESTART_LOST = 'The server did not restart: it did not answer. Click to try again.'
 const storage = typeof localStorage === 'undefined' ? null : localStorage
 
 export const serverUpdate = ref<ServerUpdate | null>(null)
@@ -59,8 +65,25 @@ export async function checkServerUpdate(): Promise<void> {
   }
 }
 
+let restartWatch: ReturnType<typeof setTimeout> | null = null
+
+function stopRestartWatch(): void {
+  if (restartWatch) clearTimeout(restartWatch)
+  restartWatch = null
+}
+
+/** A restart no hello ends within `ms` did not happen: the row says so and takes a click again. */
+function watchRestart(ms: number): void {
+  stopRestartWatch()
+  restartWatch = setTimeout(() => {
+    restartWatch = null
+    if (restartState.value && 'restarting' in restartState.value) restartState.value = { error: RESTART_LOST }
+  }, ms)
+}
+
 /** A server said hello: a restart asked for is over (the new one is up), and it says whether it is current. */
 export function serverHello(): void {
+  stopRestartWatch()
   if (restartState.value && 'restarting' in restartState.value) restartState.value = null
   void checkServerUpdate()
 }
@@ -87,8 +110,9 @@ export function watchServerUpdate(): () => void {
 }
 
 /** Restarts the server onto the code on disk (launcher/restart.ps1); the chats run on and the window reconnects. */
-export async function restartServer(): Promise<void> {
+export async function restartServer(waitMs = RESTART_WAIT_MS): Promise<void> {
   restartState.value = { restarting: true }
+  watchRestart(waitMs)
   try {
     const res = await fetch('/api/server/restart', {
       method: 'POST',
@@ -96,11 +120,14 @@ export async function restartServer(): Promise<void> {
       signal: AbortSignal.timeout(RESTART_MS),
     })
     if (res.ok) return
+    stopRestartWatch()
     const error = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error
     restartState.value = { error: typeof error === 'string' && error ? error : `${res.status} ${res.statusText}` }
   } catch (err) {
-    // A server that is already restarting may not answer in time: the next hello ends the restarting state.
+    // A server that is already restarting may not answer in time: the next hello ends the restarting state,
+    // and with no hello by `waitMs` the watch says the restart did not happen.
     if ((err as Error).name === 'TimeoutError') return
+    stopRestartWatch()
     restartState.value = { error: (err as Error).message }
   }
 }
