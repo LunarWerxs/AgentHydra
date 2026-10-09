@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { ChangelogSection } from '@shared/changelog'
-import { isNewerVersion, markerFor, whatsNewSince } from '../../src/lib/whats-new'
+import { checkWhatsNew, isNewerVersion, markerFor, readMarker, rememberForUpdate, whatsNew, whatsNewSince } from '../../src/lib/whats-new'
 
 const entry = (headline: string) => ({ headline, detail: '' })
 
@@ -88,5 +88,69 @@ describe('markerFor', () => {
 
   test('is version-only when the changelog could not be read', () => {
     expect(markerFor('2.0.4', null, NOW)).toEqual({ version: '2.0.4', headlines: null, at: NOW })
+  })
+})
+
+describe('the update click and the restarted copy', () => {
+  const realFetch = globalThis.fetch
+  const g = globalThis as { localStorage?: Storage }
+  let kept: Map<string, string>
+
+  beforeEach(() => {
+    kept = new Map()
+    g.localStorage = {
+      getItem: (k: string) => kept.get(k) ?? null,
+      setItem: (k: string, v: string) => void kept.set(k, v),
+      removeItem: (k: string) => void kept.delete(k),
+    } as unknown as Storage
+  })
+
+  afterEach(() => {
+    globalThis.fetch = realFetch
+    delete g.localStorage
+    whatsNew.value = null
+  })
+
+  const serving = (version: string | null, sections: ChangelogSection[] | null) => {
+    globalThis.fetch = (async (url: string) =>
+      new Response(JSON.stringify(url === '/api/health' ? { version } : { sections }), { status: 200 })) as typeof fetch
+  }
+
+  const silent = () => {
+    globalThis.fetch = ((_: string, init?: RequestInit) =>
+      new Promise<Response>((_, reject) =>
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('timed out', 'TimeoutError'))))) as typeof fetch
+  }
+
+  test('a click before anything was read still writes a version-only marker from the version kept', async () => {
+    kept.set('hydra-desk.whatsNew.seenVersion', '2.0.3')
+    silent()
+    const click = rememberForUpdate()
+    expect(readMarker()).toEqual({ version: '2.0.3', headlines: null, at: expect.any(Number) })
+    await click
+  })
+
+  test('a click with a server that never answers writes the marker at once, from what was read', async () => {
+    serving('2.0.3', sections(['Chats load faster']))
+    await checkWhatsNew()
+    silent()
+    const click = rememberForUpdate()
+    expect(readMarker()).toEqual({ version: '2.0.3', headlines: ['Chats load faster', 'Plain bullet'], at: expect.any(Number) })
+    await click
+    expect(readMarker()?.version).toBe('2.0.3')
+  })
+
+  test('a restarted copy shows What\'s new after a click the slow server never answered', async () => {
+    serving('2.0.3', sections(['Chats load faster']))
+    await checkWhatsNew()
+    silent()
+    await rememberForUpdate()
+    serving('2.0.4', sections(['Chats load faster', 'Dialog shows the changes']))
+    await checkWhatsNew()
+    expect(whatsNew.value?.updated).toBe(true)
+    expect(whatsNew.value?.groups.map((g) => [g.version, g.entries.map((e) => e.headline)])).toEqual([
+      [null, ['Dialog shows the changes']],
+      ['2.0.4', ['Row restarts onto an update']],
+    ])
   })
 })

@@ -7,6 +7,8 @@ import type { ServerUpdate } from '@shared/protocol'
 
 const LOOK_EVERY_MS = 60_000
 const SEEN_KEY = 'hydra-desk.menu.updateSeen'
+const ASK_MS = 4_000
+const RESTART_MS = 4_000
 const storage = typeof localStorage === 'undefined' ? null : localStorage
 
 export const serverUpdate = ref<ServerUpdate | null>(null)
@@ -48,7 +50,7 @@ function setServerUpdate(update: ServerUpdate): void {
 /** The window asks the server, which says whether its code is older than the files. */
 export async function checkServerUpdate(): Promise<void> {
   try {
-    const res = await fetch('/api/server/update', { cache: 'no-store' })
+    const res = await fetch('/api/server/update', { cache: 'no-store', signal: AbortSignal.timeout(ASK_MS) })
     // A server older than this route is older than this window: it needs a restart it cannot do itself.
     if (res.status === 404) setServerUpdate({ stale: true, restartable: false })
     else if (res.ok) setServerUpdate((await res.json()) as ServerUpdate)
@@ -88,11 +90,17 @@ export function watchServerUpdate(): () => void {
 export async function restartServer(): Promise<void> {
   restartState.value = { restarting: true }
   try {
-    const res = await fetch('/api/server/restart', { method: 'POST', headers: { 'X-Desk-Caller': 'window' } })
+    const res = await fetch('/api/server/restart', {
+      method: 'POST',
+      headers: { 'X-Desk-Caller': 'window' },
+      signal: AbortSignal.timeout(RESTART_MS),
+    })
     if (res.ok) return
     const error = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error
     restartState.value = { error: typeof error === 'string' && error ? error : `${res.status} ${res.statusText}` }
   } catch (err) {
+    // A server that is already restarting may not answer in time: the next hello ends the restarting state.
+    if ((err as Error).name === 'TimeoutError') return
     restartState.value = { error: (err as Error).message }
   }
 }

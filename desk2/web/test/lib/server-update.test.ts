@@ -58,6 +58,14 @@ describe('Restart to update', () => {
     expect(updateOffer.value?.error).toBe('run desk2/launcher/restart.ps1')
   })
 
+  test('a restart whose answer times out stays restarting, not an error', async () => {
+    globalThis.fetch = (async (): Promise<Response> => {
+      throw new DOMException('timed out', 'TimeoutError')
+    }) as unknown as typeof fetch
+    await restartServer()
+    expect(restartState.value).toEqual({ restarting: true })
+  })
+
   test('a route the running server lacks reads as an old server, not a bare 404', () => {
     expect(refusalText(404, 'no route POST /api/chats/c1/send-now')).toBe("This window's server is older than the window: Menu > Restart to update")
     expect(refusalText(404, 'no such chat')).toBe('no such chat')

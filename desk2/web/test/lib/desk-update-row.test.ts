@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'bun:test'
-import { footerUpdate, runUpdateSteps, type ReleaseWaiting } from '../../src/lib/desk-update-row'
-import type { UpdateOffer } from '../../src/lib/server-update'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { clickUpdate, footerUpdate, runUpdateSteps, updateClicking, type ReleaseWaiting } from '../../src/lib/desk-update-row'
+import { checkServerUpdate, restartServer, updateOffer, type UpdateOffer } from '../../src/lib/server-update'
+import { rememberForUpdate } from '../../src/lib/whats-new'
 
 const stale: UpdateOffer = { restartable: true, restarting: false, error: null }
 const waiting = (over: Partial<ReleaseWaiting> = {}): ReleaseWaiting => ({
@@ -110,5 +111,40 @@ describe('the row click', () => {
       restartIfStale: async () => void failed.push('restart'),
     })
     expect(failed).toEqual(['apply'])
+  })
+})
+
+describe('the row click with a server that never answers', () => {
+  const realFetch = globalThis.fetch
+  afterEach(() => {
+    globalThis.fetch = realFetch
+    updateClicking.value = false
+  })
+
+  test('the row says Restarting at once, and a second click does nothing', async () => {
+    globalThis.fetch = ((_: string, init?: RequestInit) =>
+      new Promise<Response>((_, reject) =>
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('timed out', 'TimeoutError'))))) as typeof fetch
+    const deps = {
+      remember: rememberForUpdate,
+      apply: async () => true,
+      restartIfStale: async () => {
+        await checkServerUpdate()
+        if (updateOffer.value?.restartable) await restartServer()
+      },
+    }
+    const first = clickUpdate(['apply', 'restart'], deps)
+    expect(updateClicking.value).toBe(true)
+    expect(footerUpdate({ release: waiting({ latestVersion: '0.33.1' }), server: null, ...idle, clicking: updateClicking.value })).toEqual({
+      label: 'Restarting…',
+      steps: [],
+      clickable: false,
+      busy: true,
+      error: null,
+    })
+    let second = 0
+    await clickUpdate(['restart'], { ...deps, remember: async () => void second++, restartIfStale: async () => void second++ })
+    expect(second).toBe(0)
+    void first
   })
 })

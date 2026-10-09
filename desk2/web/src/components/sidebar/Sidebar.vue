@@ -26,7 +26,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } 
 import { ChevronRight, EyeOff } from '@lucide/vue'
 import { usePaneApi } from '@/components/panes/api'
 import { applyWaitingRelease, releaseApplying, releaseApplyError, releaseWaiting } from '@/lib/ah-release'
-import { footerUpdate, runUpdateSteps } from '@/lib/desk-update-row'
+import { clickUpdate, footerUpdate, updateClicking } from '@/lib/desk-update-row'
 import { rememberForUpdate } from '@/lib/whats-new'
 import { checkServerUpdate, restartServer, updateOffer } from '@/lib/server-update'
 import TaskRows from './TaskRows.vue'
@@ -702,13 +702,19 @@ const face = computed(() => accountFace(src.settings.value?.defaultAccountId ?? 
 
 const paneApi = usePaneApi()
 const updateRow = computed(() =>
-  footerUpdate({ release: releaseWaiting.value, server: updateOffer.value, applying: releaseApplying.value, applyError: releaseApplyError.value })
+  footerUpdate({
+    release: releaseWaiting.value,
+    server: updateOffer.value,
+    applying: releaseApplying.value,
+    applyError: releaseApplyError.value,
+    clicking: updateClicking.value,
+  })
 )
 async function clickUpdateRow() {
   const row = updateRow.value
   if (!row?.clickable) return
-  await rememberForUpdate()
-  await runUpdateSteps(row.steps, {
+  await clickUpdate(row.steps, {
+    remember: rememberForUpdate,
     apply: () => applyWaitingRelease(paneApi),
     restartIfStale: async () => {
       await checkServerUpdate()
