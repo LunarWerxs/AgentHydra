@@ -93,6 +93,11 @@ async function attachOrLaunch(dir: string, opts: EnsureOptions): Promise<Browser
       if (launched) writeMarker(dir, headless)
       return { ...up, launched, headless }
     }
+    // Chrome hands a launch on a folder it already holds to that Chrome and exits; a plain window has no port to answer with.
+    if (child.exitCode !== null)
+      throw new LaunchError(
+        `Chrome exited at once on ${dir}: a Chrome without a debugging port (a plain window) already holds this profile. Close that window, then retry.`,
+      )
     await sleep(POLL_MS)
   }
   throw new LaunchError('Chrome did not announce its debugging port within 15 seconds')
