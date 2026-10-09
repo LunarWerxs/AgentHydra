@@ -15,6 +15,7 @@ import { listProfiles } from '../store'
 import type { ToolCaller, ToolName } from './contract'
 import { ToolInputError } from './errors'
 import { navigate } from './navigate'
+import { READ_TOOLS } from './reads'
 
 export { ToolInputError }
 
@@ -140,6 +141,7 @@ async function cdpOnce(
 }
 
 export const TOOL_DEFS: ToolDef[] = [
+  ...READ_TOOLS,
   {
     name: 'browser_profiles',
     description:

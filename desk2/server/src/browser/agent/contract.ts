@@ -10,6 +10,9 @@ export interface ToolParams {
   browser_profile_note: { profile: string; note?: string; title?: string }
   browser_profile_claim: { profile: string; from?: string }
   browser_navigate: { url: string; headed?: boolean; waitMs?: number; attachPort?: number; profile?: string }
+  browser_snapshot: { mode?: string; maxLines?: number; attachPort?: number; profile?: string }
+  browser_get_text: { attachPort?: number; profile?: string }
+  browser_read: { selector: string; attr?: string; attachPort?: number; profile?: string }
 }
 
 export type ToolName = keyof ToolParams

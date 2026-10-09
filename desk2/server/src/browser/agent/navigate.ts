@@ -18,7 +18,7 @@ const CDP_TIMEOUT_MS = 30_000
 
 type Params = Record<string, unknown>
 
-interface Browser {
+export interface Browser {
   key: string
   port: number
   browserWs: string
@@ -119,7 +119,7 @@ async function drive(port: number, targetId: string, url: string, waitMs: number
   }
 }
 
-function connect(url: string): Promise<Link> {
+export function connect(url: string): Promise<Link> {
   return new Promise<Link>((resolve, reject) => {
     const ws = new WebSocket(url)
     const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
@@ -151,13 +151,18 @@ function connect(url: string): Promise<Link> {
   })
 }
 
+export async function callerPage(params: Params, caller: ToolCaller): Promise<{ browser: Browser; targetId: string }> {
+  const browser = await resolveBrowser(params, caller)
+  const targetId = await pageFor(browser, `${browser.key}|${callerKey(caller)}`)
+  if (browser.dir) ownPage(browser.dir, targetId, caller.session)
+  return { browser, targetId }
+}
+
 export async function navigate(params: Params, caller: ToolCaller): Promise<string> {
   const url = stringParam(params.url)
   if (!url) throw new ToolInputError('url is required')
   const waitMs = Number(params.waitMs) > 0 ? Number(params.waitMs) : DEFAULT_WAIT_MS
-  const browser = await resolveBrowser(params, caller)
-  const targetId = await pageFor(browser, `${browser.key}|${callerKey(caller)}`)
-  if (browser.dir) ownPage(browser.dir, targetId, caller.session)
+  const { browser, targetId } = await callerPage(params, caller)
   const page = await drive(browser.port, targetId, url, waitMs)
   return `navigated → ${JSON.stringify(page)}  (browser: ${browser.exe})`
 }
