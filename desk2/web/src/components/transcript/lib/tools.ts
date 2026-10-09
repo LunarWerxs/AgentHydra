@@ -65,14 +65,30 @@ export function isCliMayteTool(name: string): boolean {
   return name.startsWith('mcp__agenthydra__climayte_')
 }
 
-/** The AI's browser: a Connections MCP call (any server prefix) that runs a local browser_* tool. */
-export function isBrowserCall(name: string, input: Record<string, unknown>): boolean {
-  return (
+const DIRECT_BROWSER = /^mcp__browser__(browser_[a-z0-9_]+)$/
+
+/** The browser tool a call runs ('browser_navigate'): the browser MCP's own tool, or a Connections call that runs a local one. */
+export function browserToolOf(name: string, input: Record<string, unknown>): string | null {
+  const direct = DIRECT_BROWSER.exec(name)
+  if (direct) return direct[1]
+  if (
     /^mcp__.+__connections_execute$/.test(name) &&
     input.local === true &&
     typeof input.tool_name === 'string' &&
     input.tool_name.startsWith('browser_')
   )
+    return input.tool_name
+  return null
+}
+
+/** The AI's browser: the browser MCP's own tool, or a Connections MCP call that runs a local browser_* tool. */
+export function isBrowserCall(name: string, input: Record<string, unknown>): boolean {
+  return browserToolOf(name, input) !== null
+}
+
+/** A direct browser call's input is its params; a Connections call nests them under params. */
+export function browserParams(name: string, input: Record<string, unknown>): Record<string, unknown> {
+  return DIRECT_BROWSER.test(name) ? input : paramsOf(input)
 }
 
 const BROWSER_VERBS: Record<string, string> = {
@@ -119,17 +135,18 @@ function liveVerb(params: Record<string, unknown>): string {
 }
 
 /**
- * What a Browser card shows. `name` is the browser tool ("browser_navigate") or the whole MCP call name (then the
- * tool is input.tool_name). The url is params.url, else the first http(s) address in the result; the profile is
- * params.profile (or its aliases profile_id / profileId), else the default browser.
+ * What a Browser card shows. `name` is the browser tool ("browser_navigate"), the browser MCP's call name
+ * (mcp__browser__browser_navigate), or a Connections call (then the tool is input.tool_name). The url is params.url,
+ * else the first http(s) address in the result; the profile is params.profile (or its aliases profile_id / profileId),
+ * else the default browser.
  */
 export function parseBrowserCall(
   name: string,
   input: Record<string, unknown>,
   resultText?: string,
 ): { verb: string; url: string; profile: string } {
-  const tool = (name.startsWith('mcp__') ? str(input.tool_name) : name).replace(/^browser_/, '')
-  const params = paramsOf(input)
+  const tool = (browserToolOf(name, input) ?? (name.startsWith('mcp__') ? str(input.tool_name) : name)).replace(/^browser_/, '')
+  const params = browserParams(name, input)
   const verb = tool === 'live' ? liveVerb(params) : (BROWSER_VERBS[tool] ?? (tool ? tool.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : 'Browser'))
   const fromResult = resultText ? (/https?:\/\/[^\s"'<>)\]}\\]+/.exec(resultText)?.[0] ?? '') : ''
   const live = tool === 'live' ? liveResultUrl(resultText) : ''
@@ -238,9 +255,9 @@ export function lastBrowserRequest(items: TranscriptItem[]): BrowserOpenRequest 
   return null
 }
 
-/** The Connections browser_live tool: the person's own Chrome window (no profile, never the default browser). */
+/** The browser_live tool: the person's own Chrome window (no profile, never the default browser). */
 export function isOwnChromeCall(name: string, input: Record<string, unknown>): boolean {
-  return isBrowserCall(name, input) && input.tool_name === 'browser_live'
+  return browserToolOf(name, input) === 'browser_live'
 }
 
 /** The first JSON object in a result's text; a note after it (a trailing line that is not JSON) is ignored. */
@@ -285,8 +302,8 @@ export function callErrorCode(c: CallLike): string | null {
 }
 
 /** The AI's last browser_live action in words, e.g. Clicked 'Continue'. Typed text is never shown. */
-export function ownChromeAction(input: Record<string, unknown>): string {
-  const params = paramsOf(input)
+export function ownChromeAction(name: string, input: Record<string, unknown>): string {
+  const params = browserParams(name, input)
   const verb = liveVerb(params)
   const action = str(params.action)
   const target = action === 'steps' ? '' : action === 'open' || action === 'navigate' ? str(params.url) : str(params.name) || str(params.find)
@@ -300,7 +317,7 @@ export function ownChromeClosed(calls: readonly CallLike[]): boolean {
   const newest = own[own.length - 1]
   if (!newest) return false
   const code = callErrorCode(newest)
-  return code === null ? str(paramsOf(newest.input).action) === 'close' : code === 'browser_live_person_switched'
+  return code === null ? str(browserParams(newest.name, newest.input).action) === 'close' : code === 'browser_live_person_switched'
 }
 
 // A failure that names only its code, in words. Any other bare code reads as the generic line.

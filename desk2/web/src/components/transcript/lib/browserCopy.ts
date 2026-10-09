@@ -1,5 +1,6 @@
 // The Browser card's "copy the calls": a run of browser calls as plain text, for pasting into a chat or a bug report.
 import type { TranscriptItem } from '@shared/protocol'
+import { browserParams, browserToolOf } from './tools'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
 
@@ -23,8 +24,7 @@ export function resultText(result: ToolItem['result'], max = COPY_RESULT_MAX): s
 export function browserCallsText(calls: readonly ToolItem[]): string {
   return calls
     .map((c) => {
-      const params = c.input.params && typeof c.input.params === 'object' ? c.input.params : {}
-      const lines = [str(c.input.tool_name) || c.name, JSON.stringify(params, null, 2)]
+      const lines = [browserToolOf(c.name, c.input) ?? (str(c.input.tool_name) || c.name), JSON.stringify(browserParams(c.name, c.input), null, 2)]
       const result = resultText(c.result)
       lines.push(result ? `Result: ${result}` : c.status === 'running' ? 'Result: (running)' : 'Result: (none)')
       return lines.join('\n')

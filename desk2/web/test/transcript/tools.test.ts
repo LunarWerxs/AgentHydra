@@ -1,8 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import {
   bashExit,
+  DEFAULT_BROWSER,
   formatElapsed,
+  isBrowserCall,
+  isOwnChromeCall,
   keyArgument,
+  ownChromeAction,
+  parseBrowserCall,
   parseCliMayte,
   parseMcpName,
   shortPath,
@@ -132,5 +137,37 @@ describe('formatElapsed', () => {
     expect(formatElapsed(125_000)).toBe('2m 05s')
     expect(formatElapsed(3_780_000)).toBe('1h 03m')
     expect(formatElapsed(-5)).toBe('0ms')
+  })
+})
+
+describe('browser cards: direct browser MCP calls', () => {
+  test('a direct navigate is a browser card with its url and profile in the input', () => {
+    const name = 'mcp__browser__browser_navigate'
+    const input = { profile: 'example-stores', url: 'https://shop.example.test/cart' }
+    expect(isBrowserCall(name, input)).toBe(true)
+    expect(toolFamily(name, input)).toBe('browser')
+    expect(parseBrowserCall(name, input)).toEqual({ verb: 'Opened', url: 'https://shop.example.test/cart', profile: 'example-stores' })
+  })
+
+  test('a Connections browser call still reads its nested params', () => {
+    const name = 'mcp__connections__connections_execute'
+    const input = { local: true, tool_name: 'browser_navigate', params: { profile: 'example-stores', url: 'https://shop.example.test/cart' } }
+    expect(isBrowserCall(name, input)).toBe(true)
+    expect(parseBrowserCall(name, input)).toEqual({ verb: 'Opened', url: 'https://shop.example.test/cart', profile: 'example-stores' })
+  })
+
+  test('a direct browser_live action is the person\'s own Chrome, named by its verb', () => {
+    const name = 'mcp__browser__browser_live'
+    const input = { action: 'click', name: 'Continue' }
+    expect(isOwnChromeCall(name, input)).toBe(true)
+    expect(ownChromeAction(name, input)).toBe("Clicked 'Continue'")
+    expect(parseBrowserCall(name, input).verb).toBe('Clicked')
+    expect(parseBrowserCall(name, input).profile).toBe(DEFAULT_BROWSER)
+  })
+
+  test('another MCP server\'s browser_* tools are not browser cards', () => {
+    const input = { url: 'https://shop.example.test/cart' }
+    expect(isBrowserCall('mcp__playwright__browser_navigate', input)).toBe(false)
+    expect(toolFamily('mcp__playwright__browser_navigate', input)).toBe('mcp')
   })
 })

@@ -48,7 +48,7 @@ const error = computed(() => {
   return text ? browserErrorSummary(text) : { headline: 'Failed', hint: '' }
 })
 const ownChrome = computed(() => isOwnChromeCall(props.item.name, props.item.input))
-const ownAction = computed(() => ownChromeAction(props.item.input))
+const ownAction = computed(() => ownChromeAction(props.item.name, props.item.input))
 // The run's latest screenshot picture, if any call carried one.
 const shot = computed(() => {
   for (let i = calls.value.length - 1; i >= 0; i--) {

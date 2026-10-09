@@ -241,6 +241,17 @@ export const transcriptStates: TranscriptItem[] = [
     endedAt: t(500) + 400,
   },
   {
+    id: 'br4',
+    ts: t(499),
+    kind: 'tool_use',
+    name: 'mcp__browser__browser_navigate',
+    input: { profile: 'example-stores', url: 'https://shop.example.test/cart' },
+    status: 'done',
+    result: { text: 'Navigated to https://shop.example.test/cart', isError: false },
+    startedAt: t(499),
+    endedAt: t(499) + 1200,
+  },
+  {
     id: 'cm1',
     ts: t(500),
     kind: 'tool_use',

@@ -36,10 +36,10 @@ describe('browser_live verbs', () => {
   })
 
   test('the action reads as a short phrase; typed text is never shown', () => {
-    expect(ownChromeAction({ local: true, tool_name: 'browser_live', params: { action: 'click', name: 'Continue' } })).toBe("Clicked 'Continue'")
-    expect(ownChromeAction({ local: true, tool_name: 'browser_live', params: { action: 'type', text: 'secret' } })).toBe('Typed into')
-    expect(ownChromeAction({ local: true, tool_name: 'browser_live', params: { action: 'open', url: 'https://app.example.com/' } })).toBe("Opened 'https://app.example.com/'")
-    expect(ownChromeAction({ local: true, tool_name: 'browser_live', params: { action: 'steps', steps: [{ click: '#a' }] } })).toBe('Ran 1 step')
+    expect(ownChromeAction(A, { local: true, tool_name: 'browser_live', params: { action: 'click', name: 'Continue' } })).toBe("Clicked 'Continue'")
+    expect(ownChromeAction(A, { local: true, tool_name: 'browser_live', params: { action: 'type', text: 'secret' } })).toBe('Typed into')
+    expect(ownChromeAction(A, { local: true, tool_name: 'browser_live', params: { action: 'open', url: 'https://app.example.com/' } })).toBe("Opened 'https://app.example.com/'")
+    expect(ownChromeAction(A, { local: true, tool_name: 'browser_live', params: { action: 'steps', steps: [{ click: '#a' }] } })).toBe('Ran 1 step')
   })
 })
 
