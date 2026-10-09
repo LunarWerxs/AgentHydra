@@ -194,6 +194,33 @@ class BatchDriverTest(_MigrateBatchTest):
         assert code == migrate_batch.EXIT_PARTIAL, "partial must not share an exit code with clean"
         assert "two" in out["report"] and "live engine" in out["report"]
 
+    def test_a_chat_still_running_down_its_quiet_window_waits_behind_the_ready_ones(self):
+        """⛔ The 2026-10-08 drain: the busiest chat led the queue and its --idle-wait held every
+        idle chat behind it for minutes. Every chat is tried first with no wait; one refused
+        only because it has not been quiet long enough goes again after the rest, with the
+        batch's own wait. A chat refused for anything else (here, still WORKING) is not retried."""
+        self.stub_phases()
+        self.patch(migrate_batch, "_full_source", lambda query, survey=None: None)
+        calls: list[tuple[str, str]] = []
+
+        def fake_move_only(argv):
+            wait = [argv[i + 1] for i, t in enumerate(argv[:-1]) if t == "--idle-wait"][-1]
+            calls.append((argv[0], wait))
+            reason = {"busy": migrate_batch.enginelib.R_TOO_SOON if wait == "0" else None,
+                      "working": migrate_batch.enginelib.R_WORKING}.get(argv[0])
+            if reason:
+                return migrate_chat._MoveOutcome(
+                    payload=_payload(argv[0], False, stopReason=reason, report="REFUSED: live engine"), code=4)
+            return migrate_chat._MoveOutcome(landing=_StubLanding(_payload(argv[0], True)))
+
+        self.patch(migrate_chat, "move_only", fake_move_only)
+        code, out = _run(["--chat", "busy", "--chat", "working", "--chat", "idle", "--to", "8",
+                          "--stop-idle", "--idle-wait", "360"])
+
+        assert calls == [("busy", "0"), ("working", "0"), ("idle", "0"), ("busy", "360")]
+        assert out["moved"] == 2 and out["refused"] == 1
+        assert code == migrate_batch.EXIT_PARTIAL
+
     def test_a_bystander_archived_while_the_batch_ran_is_named_and_fails_the_batch(self):
         """⛔ The 2026-09-16 incident: every chat in the batch landed and settled, and chats
         OUTSIDE it went archived in the same minutes - one in an account the batch never named.

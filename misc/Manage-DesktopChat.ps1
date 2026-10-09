@@ -338,8 +338,8 @@ function MenuItemFor($cond, $action) {
 # Only DELETE carries the danger palette (menu-danger, text-danger, bg-fill-danger); every other
 # item is text-primary. The two submenu items (Open in, Move to group) are the only ones carrying
 # a popup-open class. So Delete is identified POSITIVELY in any language - which removes the exact
-# hazard that made guessing unsafe ("Delete sits next to Archive") - and once it is excluded, every
-# remaining item is non-destructive and Archive is the last of them.
+# hazard that made guessing unsafe ("Delete sits next to Archive") - and Archive is the plain item
+# directly above it (StructuralPick).
 function MenuEntries($cond) {
   $out = @()
   $mic = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $MENUITEM)
@@ -356,27 +356,45 @@ function MenuEntries($cond) {
 function IsDangerItem($c) { return ($c -match 'menu-danger|text-danger|bg-fill-danger') }
 function IsSubmenuItem($c) { return ($c -match 'data-\[popup-open\]') }
 
+# ⛔ ARCHIVE IS THE ITEM DIRECTLY ABOVE DELETE, OR NOTHING (2026-10-08). The pick used to be "the
+# last non-destructive, non-submenu item", which reaches further up the menu whenever the item
+# above Delete is skipped (an unreadable name, a submenu class): archiving the chat open in a
+# Korean app's primary pane made a '<title> (fork)' chat one second before the archive landed,
+# and Fork sits two above Archive. Now Delete must be the LAST entry, and the entry right above it
+# must be a plain item; any other shape refuses.
+#
+# Decides from @{ Name; Class } entries only, with no UI Automation, so the test
+# (test_actuator_structural_pick.py) runs this very text. Returns @{ Index; Why }; Index -1 refuses.
+function StructuralPick($entries, $action) {
+  $all = @($entries | Where-Object { $_ })
+  $danger = @(for ($i = 0; $i -lt $all.Count; $i++) { if (IsDangerItem $all[$i].Class) { $i } })
+  # EXACTLY ONE danger item is the proof that this menu has the shape described above. Zero means
+  # the palette changed and the exclusion is worthless; more than one means it is ambiguous. Either
+  # way, refuse rather than guess - that is the whole point of this function.
+  if ($danger.Count -ne 1) { return @{ Index = -1; Why = "$($danger.Count) items carry the danger palette, not exactly one" } }
+  $d = $danger[0]
+  if ($action -eq 'Delete') {
+    return @{ Index = $d; Why = "the only item carrying the danger palette ('" + $all[$d].Name + "')" }
+  }
+  if ($action -eq 'Archive') {
+    if ($d -ne $all.Count - 1) { return @{ Index = -1; Why = "the danger item ('" + $all[$d].Name + "') is not the last entry" } }
+    if ($d -lt 1) { return @{ Index = -1; Why = 'nothing sits above the danger item' } }
+    $above = $all[$d - 1]
+    if (IsSubmenuItem $above.Class) { return @{ Index = -1; Why = "the item above the danger item ('" + $above.Name + "') opens a submenu" } }
+    return @{ Index = $d - 1; Why = ("the item directly above the danger item ('" + $above.Name +
+      "'), with the danger item ('" + $all[$d].Name + "') positively identified by its CSS palette as the last entry") }
+  }
+  return @{ Index = -1; Why = "'$action' has no structural signature" }
+}
+
 # Returns @{ Item; Why } or @{ Item = $null }. Only Archive and Delete are resolvable this way:
 # Rename/Unarchive have no structural signature and keep requiring a known label.
 function StructuralMenuItem($cond, $action) {
   $all = @(MenuEntries $cond)
   if ($all.Count -eq 0) { return @{ Item = $null } }
-  $danger = @($all | Where-Object { IsDangerItem $_.Class })
-  # EXACTLY ONE danger item is the proof that this menu has the shape described above. Zero means
-  # the palette changed and the exclusion is worthless; more than one means it is ambiguous. Either
-  # way, refuse rather than guess - that is the whole point of this function.
-  if ($danger.Count -ne 1) { return @{ Item = $null } }
-  if ($action -eq 'Delete') {
-    return @{ Item = $danger[0].El; Why = "the only item carrying the danger palette ('" + $danger[0].Name + "')" }
-  }
-  if ($action -eq 'Archive') {
-    $safe = @($all | Where-Object { -not (IsDangerItem $_.Class) -and -not (IsSubmenuItem $_.Class) })
-    if ($safe.Count -lt 1) { return @{ Item = $null } }
-    $pick = $safe[$safe.Count - 1]
-    return @{ Item = $pick.El; Why = ("the last non-destructive, non-submenu item ('" + $pick.Name +
-      "'), with the danger item ('" + $danger[0].Name + "') positively excluded by its CSS palette") }
-  }
-  return @{ Item = $null }
+  $pick = StructuralPick $all $action
+  if ($pick.Index -lt 0) { return @{ Item = $null; Why = $pick.Why } }
+  return @{ Item = $all[$pick.Index].El; Why = $pick.Why }
 }
 
 # AMBIGUITY IS A REFUSAL: a suffix match means 'Notes' also matches the row for 'My Notes',
@@ -914,8 +932,8 @@ foreach ($m in $mains) {
   if (-not $item) {
     [void](CloseRowMenu $hwndWin $rowKey $aimKey $ec)
     Write-Output ("FAIL: menu opened but no '$Action' item matched a known label, and the " +
-      "locale-independent CSS-palette fallback could not identify it either. Menu showed: " +
-      ($found.Seen -join ' | ') +
+      "locale-independent CSS-palette fallback could not identify it either (" + $struct.Why +
+      "). Menu showed: " + ($found.Seen -join ' | ') +
       ". Refusing rather than guessing by position, because Delete sits next to Archive.")
     exit 1
   }

@@ -270,6 +270,40 @@ class ArchiveChatTest(unittest.TestCase):
         self.assertEqual(self.archive_chat.main(["local_old", "--force", "--no-preserve"]), 0)
         self.assertTrue(self.acted())
 
+    def test_instance_archives_that_accounts_copy_alone(self):
+        # 2026-10-08: a killed move left copies of one chat on two accounts, neither app running.
+        # Without a scope the daemon refuses a session two accounts carry; --instance names the
+        # copy, and the closed-app write must carry that account's folder, never the other's.
+        self.wire()
+        stub = self.stub
+        stub.routes["/api/fleet"] = {"instances": [
+            {"num": 1, "name": "src", "dir": "C:/Users/me/AppData/Roaming/Claude-src", "isRunning": False},
+            {"num": 2, "name": "dst", "dir": "C:/Users/me/AppData/Roaming/Claude-dst", "isRunning": False},
+        ]}
+
+        def dossier_route(method, path, query, body):
+            posted = any(p[0].endswith("/desktop-archive") for p in stub.posts)
+            src = {"instance": "src", "chatId": "local_old", "cliSessionId": SID, "lineageIds": [SID],
+                   "title": "T", "archived": posted, "lastActivityAt": "T1", "live": None}
+            dst = {"instance": "dst", "chatId": "local_new", "cliSessionId": SID, "lineageIds": [SID],
+                   "title": "T", "archived": False, "lastActivityAt": "T9", "live": None}
+            return {"matches": [src, dst] if dossier_query(query) in (SID, "T") else []}
+
+        stub.routes["/api/chats/dossier"] = dossier_route
+        self.assertEqual(self.archive_chat.main([SID, "--instance", "1", "--force", "--no-preserve"]), 0)
+        bodies = [b for p, b in stub.posts if p.endswith("/desktop-archive")]
+        self.assertEqual(bodies, [{"archived": True, "instance_ref": "desktop:C:/Users/me/AppData/Roaming/Claude-src"}])
+
+    def test_instance_naming_no_account_or_no_copy_is_deterministic(self):
+        self.wire()
+        self.stub.routes["/api/fleet"] = {"instances": [
+            {"num": 1, "name": "temp1", "dir": "C:/Users/me/AppData/Roaming/Claude-temp1", "isRunning": False},
+            {"num": 2, "name": "other", "dir": "C:/Users/me/AppData/Roaming/Claude-other", "isRunning": False},
+        ]}
+        self.assertEqual(self.archive_chat.main([SID, "--instance", "nobody", "--force"]), 3)
+        self.assertEqual(self.archive_chat.main([SID, "--instance", "other", "--force"]), 3)
+        self.assertFalse(self.acted())
+
     def test_ambiguous_title_is_deterministic_and_recorded(self):
         self.stub.routes["/api/chats/dossier"] = {
             "matches": [

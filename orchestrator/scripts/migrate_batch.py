@@ -637,6 +637,48 @@ def _move_one(query: str, passthrough: list[str], terminate_live: bool = False,
     return item
 
 
+def _idle_wait_of(passthrough: list[str]) -> int:
+    """The batch's --idle-wait in seconds, 0 without one. The last one wins, as in
+    migrate_chat's own parser."""
+    wait = 0
+    for i, tok in enumerate(passthrough[:-1]):
+        if tok == "--idle-wait":
+            try:
+                wait = int(passthrough[i + 1])
+            except ValueError:
+                pass
+    return wait
+
+
+def _phase_one(parsed: _BatchArgs) -> list[_Item]:
+    """PHASE ONE across every chat: each chat that can move NOW first, then the ones still
+    running down their quiet window.
+
+    ⛔ A NOT-YET-IDLE CHAT NEVER BLOCKS THE LINE (2026-10-08). `--all-unarchived` orders by
+    last activity, so the busiest chats lead, and on a 9-chat drain nothing landed for about
+    18 minutes while three of them each spent the batch's --idle-wait at the head of the
+    queue and six idle chats (seconds each) waited behind them. So a batch that carries an
+    --idle-wait tries every chat first with --idle-wait 0, and a chat refused ONLY because
+    its engine has not been quiet long enough (code 4 with R_TOO_SOON, the one refusal time
+    cures) is tried again after all the others, with the batch's own arguments, wait
+    included. Every other outcome of the first try is final, as before. That refusal comes
+    before migrate_chat notes an attempt, so the second try costs the breaker nothing.
+    A dry run plans once, and --terminate-live already skips the wait (_move_one)."""
+    def move(idx: int, extra: tuple[str, ...] = ()) -> _Item:
+        title = parsed.chat_titles[idx] if idx < len(parsed.chat_titles) else None
+        return _move_one(parsed.chats[idx], [*parsed.passthrough, *extra],
+                         terminate_live=parsed.terminate_live, chat_title=title)
+
+    if parsed.dry_run or parsed.terminate_live or _idle_wait_of(parsed.passthrough) <= 0:
+        return [move(idx) for idx in range(len(parsed.chats))]
+    items = [move(idx, ("--idle-wait", "0")) for idx in range(len(parsed.chats))]
+    for idx, item in enumerate(items):
+        if (item.landing is None and item.payload.get("exitCode") == _EXIT_LIVE_ENGINE
+                and item.payload.get("stopReason") == enginelib.R_TOO_SOON):
+            items[idx] = move(idx)
+    return items
+
+
 def _resume_window(match: dict) -> int:
     """The gate's quiet window for delivering a landed chat's resume, in seconds.
 
@@ -1738,9 +1780,7 @@ def main(argv: list[str]) -> int:
     # 2026-09-16 bystander in another account went archived during PHASE ONE, not the settle.
     before = None if parsed.dry_run else archivewatchlib.snapshot()
     # PHASE ONE across every chat, then the finishing phases across every chat (_run_phases).
-    items = [_move_one(q, parsed.passthrough, terminate_live=parsed.terminate_live,
-                        chat_title=parsed.chat_titles[idx] if idx < len(parsed.chat_titles) else None)
-             for idx, q in enumerate(parsed.chats)]
+    items = _phase_one(parsed)
     moved_ids = _batch_ids(items)
     _run_phases(items)
     # A landed chat's payload was just rebuilt by the finishing phases; put the terminate

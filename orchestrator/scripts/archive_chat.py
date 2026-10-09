@@ -33,8 +33,11 @@ A dormant chat that never runs the turn is archived anyway after a grace window 
 cannot update docs). `--no-preserve` skips the whole step (retries of an already-archived
 chat, drills, and unarchive never re-preserve).
 
-Usage: python archive_chat.py <title fragment | session id> [--unarchive] [--force]
-       [--no-preserve] [--json]
+Usage: python archive_chat.py <title fragment | session id> [--instance X] [--unarchive]
+       [--force] [--no-preserve] [--json]
+       --instance X  the copy on THIS account (num, name, label, email or profile folder):
+                     after a move both accounts carry the chat, and without it a copy on each
+                     is refused as ambiguous rather than guessed.
 Exit:  0 changed and verified (or genuinely nothing to do) - 2 refused by gate or by movement
        between deciding and acting - 3 deterministic refusal (no match / ambiguous / no id;
        recorded, stops after one) - 4 live writer - 5 breaker - 6 the chat is HELD (a person's
@@ -177,13 +180,32 @@ def _instance_app_running(instance_name) -> bool:
     )
 
 
-def _resolve_match(query: str, verb: str, as_json: bool) -> tuple[dict | None, int | None]:
+def _scoped_match(query: str, instance: str) -> dict:
+    """The one copy of the chat on the account `instance` names, as migrate_chat --from does it
+    (2026-10-08: a killed move left copies on both accounts, and no tool could archive the
+    source's alone). The match carries `scopeRef`, so the closed-app write names that account
+    too; resolved without --instance it carries none, and the daemon still refuses a session
+    two accounts hold rather than archive the real chat with its leftover."""
+    row = hydralib.resolve_instance(hydralib.fleet(), instance)
+    if row is None or not row.get("dir"):
+        raise hydralib.ChatNotFound(f"{query} - --instance names no account ({instance!r})")
+    name = str(row.get("name") or "")
+    all_matches = hydralib.dossier(query)
+    matches = [m for m in all_matches if str(m.get("instance") or "").lower() == name.lower()]
+    if not matches and all_matches:
+        elsewhere = sorted({str(m.get("instance")) for m in all_matches})
+        raise hydralib.ChatNotFound(f"{query} - no copy on {name}; copies are on {', '.join(elsewhere)}")
+    return {**hydralib.choose_match(query, matches), "scopeRef": f"desktop:{row['dir']}"}
+
+
+def _resolve_match(query: str, verb: str, as_json: bool,
+                   instance: str | None = None) -> tuple[dict | None, int | None]:
     """Resolve the query to one dossier row. Returns (match, None) to continue, or
     (None, stop_code) when the caller should return stop_code immediately - the resolve
     itself is deterministic (rule 3: no match / ambiguous / no id all count and stop after
     one), so every failure branch here is recorded before it reports."""
     try:
-        match = hydralib.resolve_one(query)
+        match = _scoped_match(query, instance) if instance else hydralib.resolve_one(query)
     except hydralib.ChatNotFound as err:
         return None, out({"changed": False, "report": f"REFUSED (deterministic): {err}"}, as_json, 3)
     except hydralib.AmbiguousChat as err:
@@ -578,11 +600,16 @@ def _verify_native_archive(session_id: str, title: str, native: dict, as_json: b
                            f"'{title}' ({session_id}).")}, as_json, 0)
 
 
-def _archive_via_disk_flag(session_id: str, desired: bool, verb: str, as_json: bool) -> tuple[dict | None, int | None]:
+def _archive_via_disk_flag(session_id: str, desired: bool, verb: str, as_json: bool,
+                           scope_ref: str | None = None) -> tuple[dict | None, int | None]:
     """App closed: the disk flag is durable and cheaper - no UI to fight. Returns (result,
-    None) to continue to verification, or (None, stop_code) when the write did not land."""
+    None) to continue to verification, or (None, stop_code) when the write did not land.
+    `scope_ref` ('desktop:<dir>', from --instance) writes that account's copy only."""
+    body: dict = {"archived": desired}
+    if scope_ref:
+        body["instance_ref"] = scope_ref
     try:
-        result = hydralib.api_post(f"/api/sessions/{session_id}/desktop-archive", {"archived": desired})
+        result = hydralib.api_post(f"/api/sessions/{session_id}/desktop-archive", body)
     except hydralib.DaemonError as err:
         return None, out({"changed": False, "report": f"{verb} FAILED: {err} (attempt recorded)"}, as_json, 1)
     if not (isinstance(result, dict) and result.get("ok")):
@@ -708,7 +735,7 @@ def _act_and_verify(session_id: str, match: dict, unarchive: bool, desired: bool
     if app_running:
         result, stop = _archive_via_running_app(session_id, match.get("instance"), title, unarchive, verb, as_json)
     else:
-        result, stop = _archive_via_disk_flag(session_id, desired, verb, as_json)
+        result, stop = _archive_via_disk_flag(session_id, desired, verb, as_json, match.get("scopeRef"))
     if stop is not None:
         return stop
 
@@ -772,7 +799,20 @@ def main(argv: list[str]) -> int:
     force = "--force" in argv
     unarchive = "--unarchive" in argv
     no_preserve = "--no-preserve" in argv
-    args = [a for a in argv if not a.startswith("--")]
+    instance = None
+    args: list[str] = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--instance":
+            if i + 1 >= len(argv):
+                print(__doc__.strip(), file=sys.stderr)
+                return 3
+            instance = argv[i + 1]
+            i += 2
+            continue
+        if not argv[i].startswith("--"):
+            args.append(argv[i])
+        i += 1
     if len(args) != 1:
         print(__doc__.strip(), file=sys.stderr)
         return 3
@@ -794,7 +834,7 @@ def main(argv: list[str]) -> int:
 
     # -- resolve: zero or many matches is deterministic - record it so unattended callers
     #    stop after one, and say which chats collided.
-    match, stop = _resolve_match(query, verb, as_json)
+    match, stop = _resolve_match(query, verb, as_json, instance)
     if stop is not None:
         return stop
     session_id = match.get("cliSessionId") or ""
