@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
 import { createMediaCache, type MediaCache } from '../../src/media/cache'
 import { tailToItems } from '../../src/bridge/external'
@@ -363,6 +363,15 @@ describe('notes and picture lines', () => {
     expect(u.images![0].url).toStartWith('/api/media/')
     const plain = user('nothing to change')
     expect(userTurn(plain, media)).toBe(plain)
+  })
+
+  test('a file line becomes a file card; an image line naming that file stays text', () => {
+    const { media, file } = png()
+    const pdf = join(dirname(file), 'spec.pdf')
+    writeFileSync(pdf, '%PDF-1.4 test')
+    const turn = userTurn(user(`read this\n[File: source: ${pdf}]\n[Image: source: ${pdf}]`), media) as Extract<TranscriptItem, { kind: 'user' }>
+    expect(turn.text).toBe(`read this\n[Image: source: ${pdf}]`)
+    expect(turn.images).toEqual([{ mediaType: 'application/pdf', name: 'spec.pdf', bytes: 13, path: pdf }])
   })
 
   test('history and the tail show a ping as a note and the person\'s message as theirs', () => {

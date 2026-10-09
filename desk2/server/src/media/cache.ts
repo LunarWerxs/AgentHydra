@@ -54,6 +54,24 @@ const CARD_TYPE: Record<string, string> = {
   m4v: 'video/mp4',
   mov: 'video/quicktime',
   webm: 'video/webm',
+  eml: 'message/rfc822',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  log: 'text/plain',
+  xml: 'application/xml',
+  yaml: 'application/yaml',
+  yml: 'application/yaml',
+  '7z': 'application/x-7z-compressed',
+  tar: 'application/x-tar',
+  gz: 'application/gzip',
+  rar: 'application/vnd.rar',
+}
+
+/** The media type a file card gives a file by its name: the known type, else an image type for a picture, else octet-stream. */
+export function cardTypeOf(name: string): string {
+  const ext = extname(name).slice(1).toLowerCase()
+  return CARD_TYPE[ext] ?? (RENDERABLE.test(name) ? `image/${ext === 'jpg' ? 'jpeg' : ext}` : 'application/octet-stream')
 }
 
 /** The picture type from its first bytes; null when they are not a png, jpeg, gif or webp. */
@@ -225,8 +243,7 @@ export function createMediaCache(dir: string): MediaCache {
   }
 
   function cardRef(name: string, size: number): ImageRef {
-    const ext = extname(name).slice(1).toLowerCase()
-    return { mediaType: CARD_TYPE[ext] ?? (RENDERABLE.test(name) ? `image/${ext === 'jpg' ? 'jpeg' : ext}` : 'application/octet-stream'), name, bytes: size }
+    return { mediaType: cardTypeOf(name), name, bytes: size }
   }
 }
 

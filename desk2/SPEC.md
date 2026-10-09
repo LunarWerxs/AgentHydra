@@ -619,7 +619,12 @@ session): exactly like the reference: a strip above the box with folder name and
 `+added -removed` (green/red) on the right (click opens the Diff pane); the rounded box with placeholder
 "Type / for commands", Enter sends, Shift+Enter new line, auto-grows to 40% of the window; inside on the
 right a send arrow, which becomes a stop button (circle with a square) while the chat is working and
-the box is empty. Below the box: `+` (attach images; paste and drag-drop work too, previews as chips),
+the box is empty. Below the box: `+` (attach files or pictures; paste works too, and a file dropped anywhere on
+the chat, its transcript included, attaches to the box). A PNG, JPEG, GIF or WebP up to 5 MB goes inline as a
+picture (a thumbnail); any other file (a PDF, a note, an email, a zip, a bigger or other picture, up to 100 MB) is
+uploaded to `POST /api/attachments`, kept under `<home>/attachments/<hash>/<name>`, shown as a chip, and sent as a
+line `[File: source: <path>]` the model opens with Read (that folder is in the chat's additionalDirectories); the
+transcript shows each such line as a file card. Then
 the permission mode menu (Ask permissions / Accept edits / Plan mode / Bypass permissions), and on the
 right the model menu (from `/api/models`), the effort menu, and a small context ring (contextPct). Typing
 `/` opens the slash command menu (from `/api/chats/:id/commands`). Ctrl+Enter queues the message instead of
@@ -645,7 +650,7 @@ chat asks, in the box's place (the composer hides while one is open).
 - Question: options per question (single or multiple) with Other, Skip. With several questions the card
   shows one at a time under "Question N of M" (a dot per question), with Next / Back; answers are kept while
   moving, Enter goes to the next step, and the last step's Answer submits them all together. A single
-  question has no step header. The "Other" box takes pictures by Ctrl+V or drop (composer rules: PNG, JPEG,
+  question has no step header. The "Other" box takes pictures by Ctrl+V or drop (PNG, JPEG,
   GIF, WebP, 5 MB each) as thumbnails with a remove x; on submit they travel as `images` (see canUseTool). Plan: Approve plan (back to the
   mode the chat had before plan mode, so a Bypass chat stays Bypass), Approve, review each edit (mode
   `default`), Keep planning with feedback.

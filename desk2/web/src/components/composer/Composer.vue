@@ -44,7 +44,10 @@ import {
   shownSuggestion,
   slashQuery,
   splitModels,
+  formatBytes,
+  validateAttachment,
   validateImage,
+  withFileLines,
   dismissTip,
   draftSlot,
   modelTriggerLabel,
@@ -89,6 +92,14 @@ const X = icons.dismiss
 const FolderIcon = icons.folder
 
 type PendingImage = DraftImage
+/** A file the composer attaches by path: uploaded on attach, sent as a `[File: source: …]` line. */
+interface PendingFile {
+  id: string
+  name: string
+  bytes: number
+  mediaType: string
+  path?: string
+}
 
 type MenuName = 'plus' | 'dictation' | 'mode' | 'model' | 'effort'
 
@@ -118,6 +129,9 @@ const storage = typeof localStorage === 'undefined' ? null : localStorage
 const text = ref('')
 // Shallow: the pictures hold large base64 strings, so they are replaced, never changed in place, and never walked.
 const images = shallowRef<PendingImage[]>([])
+const files = shallowRef<PendingFile[]>([])
+const fileDrafts = new Map<string | null, PendingFile[]>()
+const uploading = computed(() => files.value.some((f) => !f.path))
 const notice = ref<string | null>(null)
 const sending = ref(false)
 const dragging = ref(false)
@@ -177,7 +191,7 @@ provideTranscript({
 
 const BUSY: ChatStatus[] = ['working', 'starting', 'needs_you']
 const busy = computed(() => !!props.chat && BUSY.includes(props.chat.status))
-const hasContent = computed(() => text.value.trim().length > 0 || images.value.length > 0)
+const hasContent = computed(() => text.value.trim().length > 0 || images.value.length > 0 || files.value.length > 0)
 const showStop = computed(() => busy.value && !hasContent.value)
 
 // The managed send queue (SPEC "Send queue"), once the server reports one; the server sends from it. The
@@ -498,17 +512,21 @@ watch(
       if (draftTimer) clearTimeout(draftTimer)
       saveDraft(storage, old, text.value)
       saveDraftImages(old, images.value)
+      fileDrafts.set(old, files.value)
     }
     // A new session's first folder arrives after typing began: what is in the box moves to that folder.
     if (old === null && s?.startsWith('new:') && !loadDraft(storage, s) && !draftImages(s).length) {
       saveDraft(storage, s, text.value)
       saveDraftImages(s, images.value)
+      fileDrafts.set(s, files.value)
+      fileDrafts.delete(null)
       saveDraft(storage, null, '')
       saveDraftImages(null, [])
       return
     }
     text.value = loadDraft(storage, s)
     images.value = draftImages(s)
+    files.value = fileDrafts.get(s) ?? []
     void draftImagesReady.then(() => {
       if (slot.value === s && !images.value.length) images.value = draftImages(s)
     })
@@ -546,11 +564,14 @@ function moveDraft(path: string) {
   const to = draftSlot(null, path)
   saveDraft(storage, to, joinDrafts(loadDraft(storage, to), text.value))
   saveDraftImages(to, [...draftImages(to), ...images.value])
+  fileDrafts.set(to, [...(fileDrafts.get(to) ?? []), ...files.value])
   if (draftTimer) clearTimeout(draftTimer)
   text.value = ''
   images.value = []
+  files.value = []
   saveDraft(storage, slot.value, '')
   saveDraftImages(slot.value, [])
+  fileDrafts.delete(slot.value)
   shell.select({ kind: 'new', cwd: path })
 }
 
@@ -727,12 +748,37 @@ function showNotice(msg: string, info = false) {
   noticeTimer = setTimeout(() => (notice.value = null), 8000)
 }
 
-function addFiles(files: File[]) {
+function patchFile(id: string, patch: Partial<PendingFile>) {
+  const apply = (list: PendingFile[]) => list.map((f) => (f.id === id ? { ...f, ...patch } : f))
+  files.value = apply(files.value)
+  for (const [key, list] of fileDrafts) fileDrafts.set(key, apply(list))
+}
+
+async function attachFile(file: File) {
+  const err = validateAttachment(file)
+  if (err) return showNotice(err)
+  const id = crypto.randomUUID()
+  // A pasted file has no name: its type gives the extension Read goes by.
+  const name = file.name || `Pasted file${file.type.startsWith('image/') ? `.${file.type.slice(6).replace('jpeg', 'jpg').replace(/\+.*/, '')}` : ''}`
+  files.value = [...files.value, { id, name, bytes: file.size, mediaType: file.type || 'application/octet-stream' }]
+  try {
+    const res = await fetch(`/api/attachments?name=${encodeURIComponent(name)}`, { method: 'POST', body: file })
+    const body = (await res.json().catch(() => ({}))) as { error?: string; path?: string; mediaType?: string }
+    if (!res.ok || !body.path) throw new Error(body.error ?? `upload failed (${res.status})`)
+    patchFile(id, { path: body.path, mediaType: body.mediaType ?? file.type })
+  } catch (e) {
+    files.value = files.value.filter((f) => f.id !== id)
+    showNotice(`Could not attach ${name}: ${errText(e)}`)
+  }
+}
+
+function addFiles(list: File[]) {
   if (props.into) return showNotice(props.into.why)
-  for (const file of files) {
-    const err = validateImage(file)
-    if (err) {
-      showNotice(err)
+  for (const file of list) {
+    // A PNG, JPEG, GIF or WebP up to 5 MB goes inline as a picture; anything else (a PDF, an email, a zip, a BMP or
+    // SVG, a bigger picture) is kept as a file the model opens by its path.
+    if (validateImage(file)) {
+      void attachFile(file)
       continue
     }
     const reader = new FileReader()
@@ -761,13 +807,13 @@ function onPaste(e: ClipboardEvent) {
     addFiles(copied.map((url, i) => dataUrlToFile(url, `Pasted image ${i + 1}`)))
     return
   }
-  const files = Array.from(e.clipboardData?.items ?? [])
-    .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+  const pasted = Array.from(e.clipboardData?.items ?? [])
+    .filter((it) => it.kind === 'file')
     .map((it) => it.getAsFile())
     .filter((f): f is File => !!f)
-  if (files.length) {
+  if (pasted.length) {
     e.preventDefault()
-    addFiles(files)
+    addFiles(pasted)
   }
 }
 
@@ -775,6 +821,34 @@ function onDrop(e: DragEvent) {
   dragging.value = false
   const files = Array.from(e.dataTransfer?.files ?? [])
   if (files.length) addFiles(files)
+}
+
+// Files dropped anywhere on the chat (the transcript too, `data-file-drop` in DeskFrame) attach here, not only on
+// the box. A file dropped anywhere else is refused, never opened by the window in place of Desk. A drop a handler
+// took already (this box, a question's Other box) is left alone; a sidebar row's drag carries no Files.
+const box = ref<HTMLElement | null>(null)
+let dragOffTimer: ReturnType<typeof setTimeout> | null = null
+const draggingFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files')
+function onPane(e: DragEvent): boolean {
+  const pane = box.value?.closest('[data-file-drop]')
+  return !!pane && e.target instanceof Node && pane.contains(e.target)
+}
+function onWindowDragOver(e: DragEvent) {
+  if (!draggingFiles(e)) return
+  e.preventDefault()
+  const here = onPane(e)
+  if (e.dataTransfer) e.dataTransfer.dropEffect = here ? 'copy' : 'none'
+  dragging.value = here
+  // dragover repeats while the pointer is over the window: when it stops, the drag left or ended.
+  if (dragOffTimer) clearTimeout(dragOffTimer)
+  dragOffTimer = setTimeout(() => (dragging.value = false), 250)
+}
+function onWindowDrop(e: DragEvent) {
+  if (!draggingFiles(e)) return
+  const taken = e.defaultPrevented
+  e.preventDefault()
+  dragging.value = false
+  if (!taken && onPane(e)) onDrop(e)
 }
 
 function onFilePicked(e: Event) {
@@ -785,6 +859,10 @@ function onFilePicked(e: Event) {
 
 function removeImage(id: string) {
   images.value = images.value.filter((i) => i.id !== id)
+}
+
+function removeFile(id: string) {
+  files.value = files.value.filter((f) => f.id !== id)
 }
 
 // Plus menu
@@ -920,16 +998,19 @@ async function submit(ctrl = false) {
   if (sending.value) return
   // Nothing to send. Never a Stop: only the Stop button and Esc stop a turn (stop()).
   if (showStop.value || !hasContent.value) return
+  if (uploading.value) return showNotice('Wait for the file to finish attaching.')
   sentAt = Date.now()
   const enqueue = sendDecision(ctrl) === 'enqueue'
-  const body = text.value.trim()
+  const body = withFileLines(text.value, files.value.map((f) => f.path ?? ''))
   const refs: ImageRef[] = images.value.map((i) => ({ mediaType: i.mediaType, dataBase64: i.dataBase64, name: i.name }))
   const keptText = text.value
   const keptImages = images.value
+  const keptFiles = files.value
   const sentSlot = slot.value
   sending.value = true
   text.value = ''
   images.value = []
+  files.value = []
   // Enter brings the chat to its bottom at once, even scrolled up, and the reply is followed from there.
   if (props.chat) window.dispatchEvent(new CustomEvent<ChatSentDetail>(CHAT_SENT_EVENT, { detail: { chatId: props.chat.id, sessionId: props.chat.sessionId ?? null } }))
   try {
@@ -938,10 +1019,12 @@ async function submit(ctrl = false) {
     if (slot.value === sentSlot) {
       text.value = keptText
       images.value = keptImages
+      files.value = keptFiles
     } else {
       // The user moved to another chat meanwhile: the failed text goes back to its own draft, not over this one.
       saveDraft(storage, sentSlot, keptText)
       saveDraftImages(sentSlot, keptImages)
+      fileDrafts.set(sentSlot, keptFiles)
     }
     showNotice(`Not sent: ${errText(e)}`)
   } finally {
@@ -991,6 +1074,8 @@ onMounted(async () => {
   window.addEventListener('resize', autoGrow)
   window.addEventListener(PUT_BACK_EVENT, onPutBack)
   window.addEventListener(ANNOTATED_EVENT, onAnnotated)
+  window.addEventListener('dragover', onWindowDragOver)
+  window.addEventListener('drop', onWindowDrop)
   loadNewSessionDefaults()
   try {
     models.value = await api.models()
@@ -1018,6 +1103,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', autoGrow)
   window.removeEventListener(PUT_BACK_EVENT, onPutBack)
   window.removeEventListener(ANNOTATED_EVENT, onAnnotated)
+  window.removeEventListener('dragover', onWindowDragOver)
+  window.removeEventListener('drop', onWindowDrop)
+  if (dragOffTimer) clearTimeout(dragOffTimer)
   cancelAnimationFrame(growFrame)
 })
 </script>
@@ -1091,6 +1179,7 @@ onBeforeUnmount(() => {
       <!-- The box -->
       <div
         v-show="!request"
+        ref="box"
         class="group/box relative z-1 rounded-(--radius-12) bg-(--bg-popover) p-2 transition-[box-shadow,background-color] duration-200 ease-(--ease-composer)"
         :class="
           dragging
@@ -1199,6 +1288,21 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <div v-if="files.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
+          <div v-for="f in files" :key="f.id" class="group relative flex items-center gap-2 rounded-(--radius-8) bg-(--bg-picture) px-2.5 py-2 text-[13px] shadow-(--shadow-picture-light)">
+            <span class="max-w-52 truncate text-(--text)">{{ f.name }}</span>
+            <span class="shrink-0 text-(--text-muted)">{{ f.path ? formatBytes(f.bytes) : 'Attaching…' }}</span>
+            <button
+              type="button"
+              class="flex size-5 shrink-0 items-center justify-center rounded-full text-(--text-2) hover:text-(--text)"
+              :aria-label="`Remove ${f.name}`"
+              @click="removeFile(f.id)"
+            >
+              <X class="size-3" />
+            </button>
+          </div>
+        </div>
+
         <div class="flex items-end gap-2">
           <textarea
             ref="textarea"
@@ -1217,7 +1321,7 @@ onBeforeUnmount(() => {
           <SendSplit
             v-model:open="queueOpen"
             :show-stop="showStop"
-            :can-send="hasContent && !sending"
+            :can-send="hasContent && !sending && !uploading"
             :suggested="!!shown"
             :send-label="sendText.label"
             :send-tip="sendText.tip"
@@ -1264,7 +1368,7 @@ onBeforeUnmount(() => {
             <McpSubmenu :api="api" :cwd="cwd" :chat-id="chatId" :config-dir="mcpConfigDir" @error="showNotice" />
           </DropdownMenuContent>
         </DropdownMenu>
-        <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple class="hidden" @change="onFilePicked" />
+        <input ref="fileInput" type="file" multiple class="hidden" @change="onFilePicked" />
 
         <Tip :label="into ? into.why : SpeechRecognition ? 'Press and hold to record' : 'Dictation is not available in this browser'" side="top">
           <button

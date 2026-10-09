@@ -227,8 +227,8 @@ const NOTE = /^\s*\[([^\]\n]{1,80})\]\s+Not from the user\.?[ \t]*\n?/
 const SENT_NOW = /^\s*\[Sent now: [^\]\n]*\]\s*\n/
 /** AgentHydra's preface of an urgent message (its URGENT_PREFIX): Send now through an AgentHydra without deliver-now. */
 const URGENT = /^\s*AgentHydra stopped your previous turn mid-step to deliver this message from the orchestrator\.[^\n]*\n\n/
-/** A picture named by its file, the form Claude Code (and a Desk worker's message) uses. */
-const PICTURE_LINE = /^[ \t]*\[Image: source: ([^\]\n]+)\][ \t]*(?:\r?\n|$)/gm
+/** A picture named by its file, the form Claude Code (and a Desk worker's message) uses; a File line names any other file. */
+const NAMED_LINE = /^[ \t]*\[(Image|File): source: ([^\]\n]+)\][ \t]*(?:\r?\n|$)/gm
 
 /** Who sent a note and what it says; null when the text is the person's. */
 export function noteOf(text: string): { from: string; text: string } | null {
@@ -293,9 +293,8 @@ const SENT_BACK = /^The orchestrator checked your result and it did not pass\. W
 /**
  * A user item as the transcript shows it, or null when it is not shown: a note when a program sent it; a
  * handoff's continuation as the messages it carries, or one muted line when it carries none; CliMayte's
- * resume prompts as a muted line, or nothing after a move; else the person's, each
- * `[Image: source: <path>]` line whose file is a picture shown as that picture instead of the line.
- * A line naming a missing file or a non-picture stays as text.
+ * resume prompts as a muted line, or nothing after a move; else the person's, with its named-file lines shown
+ * as withNamedFiles does.
  */
 export function userTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem | SystemItem | null {
   const plain = raw.text.trim()
@@ -323,16 +322,30 @@ export function userTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | nul
     const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = item
     return { ...rest, kind: 'note', from: note.from, text: note.text }
   }
-  if (!media || !item.text.includes('[Image: source: ')) return item
+  return withNamedFiles(item, media)
+}
+
+/**
+ * The item with each `[Image: source: <path>]` line shown as its picture and each `[File: source: <path>]` line as a
+ * file card, both in its images. A line naming a missing file stays as text, and an Image line naming a non-picture too.
+ */
+export function withNamedFiles<T extends UserItem>(item: T, media: Pick<MediaCache, 'fileRef'> | null): T {
+  if (!media || !/\[(?:Image|File): source: /.test(item.text)) return item
   const images: ImageRef[] = [...(item.images ?? [])]
-  const text = item.text.replace(PICTURE_LINE, (line, path: string) => {
+  const text = item.text.replace(NAMED_LINE, (line, kind: string, path: string) => {
     const ref = media.fileRef(path.trim())
-    if (!ref?.url) return line
-    if (!images.some((i) => i.url === ref.url)) images.push(ref)
+    if (!ref || (kind === 'Image' && !ref.url)) return line
+    const key = ref.url ?? ref.path
+    if (!images.some((i) => (i.url ?? i.path) === key)) images.push(ref)
     return ''
   })
   if (images.length === (item.images?.length ?? 0) && text === item.text) return item
   return { ...item, text: text.trim(), ...(images.length ? { images } : {}) }
+}
+
+/** The text with its named-file lines taken out: what the person typed, as a worker echoes it back with the files as cards. */
+export function withoutNamedLines(text: string): string {
+  return text.replace(NAMED_LINE, '').trim()
 }
 
 /**

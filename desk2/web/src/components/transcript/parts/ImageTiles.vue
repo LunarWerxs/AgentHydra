@@ -4,8 +4,8 @@
 // viewer on click or Space; the viewer steps through this message's pictures. A ref with nothing to load
 // (history without bytes) is a name chip.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ImageIcon } from '@lucide/vue'
 import type { ImageRef } from '@shared/protocol'
+import FileCard from './FileCard.vue'
 import { aspectOf, galleryLayout } from '../lib/gallery'
 import { imageSrc, openLightbox, tileKey } from '../lib/media'
 
@@ -67,9 +67,7 @@ onBeforeUnmount(() => observer?.disconnect())
       >
         <img :src="imageSrc(img)!" :alt="img.name || 'picture'" loading="lazy" @load="onLoad(i, $event)" />
       </button>
-      <span v-else class="inline-flex h-6 items-center gap-1 rounded-6 bg-fill-5 px-2 text-[12px] text-text-muted">
-        <ImageIcon class="size-4" />{{ img.name || 'image' }}
-      </span>
+      <FileCard v-else :file="img" />
     </template>
   </div>
 </template>

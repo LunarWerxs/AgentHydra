@@ -55,6 +55,7 @@ import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
 import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
 import { mediaCache, toStoredImage } from '../media/cache'
+import { withNamedFiles, withoutNamedLines } from './system-text'
 import { SessionMetaStore } from './session-meta'
 import { ChatStore, fromStored, type StoredChat } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
@@ -230,7 +231,7 @@ const squash = (s: string): string => s.replace(/\s+/g, ' ').trim()
 /** The stand-in a worker's own copy of a sent message replaces: the one with its text, else the oldest sent before it. */
 function standInFor(sent: UserItem[], real: UserItem): number {
   const text = squash(real.text)
-  const same = sent.findIndex((s) => text.includes(squash(s.text)))
+  const same = sent.findIndex((s) => text.includes(squash(withoutNamedLines(s.text))))
   return same >= 0 ? same : sent.findIndex((s) => s.ts <= real.ts + 60_000)
 }
 
@@ -377,7 +378,7 @@ export class ChatManager {
         else if (item.status === 'running' && !isLongLived(item)) (e.bgTasks ??= new Set()).add(item.taskId)
       }
     }
-    return e.sent?.length ? [...items, ...e.sent] : items
+    return e.sent?.length ? [...items, ...e.sent.map((s) => withNamedFiles(s, mediaCache(this.store.home)))] : items
   }
 
   /**
@@ -699,7 +700,7 @@ export class ChatManager {
     const ts = this.now()
     const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text: said, ...(shown ? { images: shown } : {}), ...(queued ? { queued } : {}) }
     ;(e.sent ??= []).push(standIn)
-    this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: standIn })
+    this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: withNamedFiles(standIn, mediaCache(this.store.home)) })
     const sentAt = this.now()
     let sent: { urgent: boolean; stoppedFor: boolean }
     try {

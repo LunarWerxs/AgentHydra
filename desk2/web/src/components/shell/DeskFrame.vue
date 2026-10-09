@@ -890,7 +890,8 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             :class="tasksSlide && ['will-change-transform', tasksSlide.at === 'to' && SLIDE_EASE]"
             :style="tasksSlide ? { transform: `translateX(${tasksOut ? tasksAt / 2 : 0}px)` } : undefined"
           >
-            <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col">
+            <!-- data-file-drop: a file dropped anywhere on the chat attaches to its composer -->
+            <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col" data-file-drop>
               <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
               <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
                 <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" />

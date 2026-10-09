@@ -382,6 +382,8 @@ export class ChatRuntime {
       permissionMode: chat.permissionMode,
       includePartialMessages: true,
       settingSources: ['user', 'project', 'local'],
+      // Files dropped in the composer are kept there (plugins/36-attachments.ts): Read opens them without asking.
+      additionalDirectories: [join(this.store.home, 'attachments')],
       systemPrompt: { type: 'preset', preset: 'claude_code', append: addOns.append },
       canUseTool: this.canUseTool,
       // Without it the SDK declines every MCP form, sign-in link or other request for input unseen.
@@ -1276,7 +1278,7 @@ ${swap.real}` }
     }
     // A user turn goes out as the transcript reads it back (store.ts): a program's ping is its note from the first
     // moment, never the person's bubble until a reload. 2026-10-08, owner: "Did you not apply any of these fixes here?"
-    for (const shown of item.kind === 'user' ? userTurns(item, null) : [item]) this.emitEvent({ type: 'item.upsert', chatId: this.chat.id, item: shown })
+    for (const shown of item.kind === 'user' ? userTurns(item, mediaCache(this.store.home)) : [item]) this.emitEvent({ type: 'item.upsert', chatId: this.chat.id, item: shown })
     if ((item.kind === 'assistant_text' || item.kind === 'thinking') && item.streaming) return
     if (item.kind === 'tool_use' && item.status === 'running') {
       if (this.storedRunning.has(item.id)) return

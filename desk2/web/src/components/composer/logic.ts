@@ -105,6 +105,23 @@ export function dataUrlToBase64(dataUrl: string): string {
   return i >= 0 ? dataUrl.slice(i + 1) : dataUrl
 }
 
+// Files
+
+export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+
+/** null when any file can be attached, else the message to show. */
+export function validateAttachment(file: { name: string; size: number }): string | null {
+  const name = file.name || 'File'
+  if (file.size === 0) return `${name} is empty.`
+  if (file.size > MAX_ATTACHMENT_BYTES) return `${name} is ${formatBytes(file.size)}; files are limited to 100 MB each.`
+  return null
+}
+
+/** The text a sent message carries for each attached file: the path the model opens with Read. */
+export function withFileLines(text: string, paths: string[]): string {
+  return [text.trim(), ...paths.map((p) => `[File: source: ${p}]`)].filter(Boolean).join('\n')
+}
+
 // Labels
 
 /**

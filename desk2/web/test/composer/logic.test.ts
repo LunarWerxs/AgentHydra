@@ -19,7 +19,9 @@ import {
   prAsk,
   saveDraft,
   slashQuery,
+  validateAttachment,
   validateImage,
+  withFileLines,
   type DraftStorage
 } from '@/components/composer/logic'
 
@@ -127,6 +129,24 @@ describe('images', () => {
 
   it('strips the data URL prefix', () => {
     expect(dataUrlToBase64('data:image/png;base64,QUJD')).toBe('QUJD')
+  })
+})
+
+describe('files', () => {
+  it('accepts a PDF of any type up to 100 MB', () => {
+    expect(validateAttachment({ name: 'spec.pdf', size: 1024 })).toBeNull()
+  })
+
+  it('refuses an empty file and one over 100 MB', () => {
+    expect(validateAttachment({ name: 'nothing.md', size: 0 })).toContain('empty')
+    expect(validateAttachment({ name: 'big.zip', size: 100 * 1024 * 1024 + 1 })).toContain('limited to 100 MB')
+  })
+
+  it('appends one file line per path after the text', () => {
+    expect(withFileLines(' read this ', ['C:/a/spec.pdf', 'C:/a/mail.eml'])).toBe(
+      'read this\n[File: source: C:/a/spec.pdf]\n[File: source: C:/a/mail.eml]'
+    )
+    expect(withFileLines('', ['C:/a/notes.md'])).toBe('[File: source: C:/a/notes.md]')
   })
 })
 
