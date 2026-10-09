@@ -3,10 +3,12 @@
 
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { logRestartAsk } from '../../src/caller'
+import { HOST_PROTOCOL } from '../../src/host/protocol'
 import { codeStamp, startedByLauncher, type CodeStamp, type UpdateDeps } from '../../src/plugins/60-update'
 import { createServer, type DeskServer } from '../../src/index'
 
@@ -99,6 +101,30 @@ test('a restart and a shutdown are still answered when restart.log cannot be wri
   expect(await res.json()).toEqual({ ok: true, chats: false })
   await new Promise((r) => setTimeout(r, 100))
   expect(shutdowns).toBe(1)
+})
+
+test('a plain shutdown is answered while a chat host that never answers is still being taken over', async () => {
+  const home = temp('desk-update-home-')
+  const sockets: net.Socket[] = []
+  const mute = net.createServer((s) => void sockets.push(s))
+  await new Promise<void>((r) => mute.listen(0, '127.0.0.1', r))
+  stops.push(() => {
+    for (const s of sockets) s.destroy()
+    mute.close()
+  })
+  mkdirSync(join(home, 'hosts'), { recursive: true })
+  const port = (mute.address() as net.AddressInfo).port
+  writeFileSync(join(home, 'hosts', 'chat-mute.json'), JSON.stringify({ protocol: HOST_PROTOCOL, chatId: 'chat-mute', pid: process.pid, port, token: 'x', startedAt: 1 }))
+
+  const engine = temp('desk-update-engine-')
+  writeFileSync(join(engine, '20-engine.ts'), `export { default } from ${JSON.stringify(pathToFileURL(ENGINE_PLUGIN).href)}\n`)
+  let shutdowns = 0
+  const desk = await createServer({ port: 0, home, pluginsDir: engine, deps: { shutdown: () => void shutdowns++ } })
+  stops.push(() => desk.stop())
+  const began = Date.now()
+  const res = await fetch(`${desk.url}/api/server/shutdown`, { method: 'POST', headers: { 'X-Desk-Caller': 'launcher', 'Content-Type': 'application/json' }, body: '{}' })
+  expect(res.status).toBe(200)
+  expect(Date.now() - began).toBeLessThan(2_000)
 })
 
 test('an agent or script asking for a restart is refused with the owner message, and its ask is logged', async () => {

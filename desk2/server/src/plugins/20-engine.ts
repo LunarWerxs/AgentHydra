@@ -230,7 +230,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     await hosts
     await next()
   }
-  for (const path of ['/api/chats', '/api/chats/*', '/api/sessions/*', '/api/queue', '/api/queue/*', '/api/server/shutdown']) app.use(path, afterHosts)
+  for (const path of ['/api/chats', '/api/chats/*', '/api/sessions/*', '/api/queue', '/api/queue/*']) app.use(path, afterHosts)
   // The browser plugin (65) reads a chat's session ids here: which browser pages are the chat's own.
   ctx.deps.chatSessions = (chatId: string): string[] => manager.browserSessions(chatId)
   // The headless audio plugin (67) names the chat that owns a Claude Code session.
@@ -481,7 +481,8 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   app.get('/api/claude-code', (c) => answer(c, () => claudeCodeBinaryFor(ctx.home).status()))
 
   // The launcher's stop and restart (SPEC "Launcher"): the server stops the way SIGTERM stops it, the chats running
-  // on in their hosts for the next server; `chats: true` ends them first.
+  // on in their hosts for the next server; `chats: true` ends them first, once they are taken over. A plain stop
+  // answers without waiting on the takeover, which a host that never answers holds up for its whole connect timeout.
   const shutdown = (deps.shutdown as (() => void) | undefined) ?? (() => void process.emit('SIGTERM'))
   app.post('/api/server/shutdown', (c) => {
     const refused = callerKind(c.req.raw.headers) === 'other'
@@ -489,7 +490,10 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     if (refused) return c.json({ error: OWNER_ONLY_RESTART }, 409)
     return answer(c, async () => {
       const chats = ((await c.req.json().catch(() => null)) as { chats?: unknown } | null)?.chats === true
-      if (chats) await manager.closeAll({ chats: true })
+      if (chats) {
+        await hosts
+        await manager.closeAll({ chats: true })
+      }
       // After this answer has left.
       setTimeout(shutdown, 50)
       return { ok: true, chats }
