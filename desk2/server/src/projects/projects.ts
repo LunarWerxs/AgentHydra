@@ -14,7 +14,7 @@
 // (Claude Desktop, the CLI). One started in a folder that holds projects (D:\NEWProjects) is placed by what it did
 // (attribute.ts) and filed once into that project's sidebar group; a group the user picks is never changed.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { ExternalSession, ProjectChoices, ProjectEntry, ProjectGit, ProjectSource, ProjectsResponse } from '@shared/protocol'
@@ -25,7 +25,7 @@ import { type PlacedBy, SpotIndex } from './attribute'
 import { checkoutOf, folderKey, isDir, subfolders } from './choices'
 import type { HydraLocation, HydraProject, HydraRead } from './hydra'
 import { iconVersion } from './icon-cache'
-import { writeFlushed } from '../write-flushed'
+import { renameOver, writeFlushed } from '../write-flushed'
 
 export interface GitFacts {
   git: ProjectGit
@@ -293,7 +293,7 @@ export class ProjectList {
       mkdirSync(dirname(file), { recursive: true })
       const tmp = `${file}.tmp`
       writeFlushed(tmp, JSON.stringify(snapshot))
-      renameSync(tmp, file)
+      renameOver(tmp, file)
     } catch {
       // floor-ok: without the snapshot the next start waits for Project Hydra once, as it did before
     }

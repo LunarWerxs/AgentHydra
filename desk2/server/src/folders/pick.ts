@@ -3,7 +3,8 @@
 // use with the .NET Framework's csc.exe into <home>/bin/pick-folder-<hash of its source>.exe.
 
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { renameOver } from '../write-flushed'
 import { join } from 'node:path'
 
 /** Opens the dialog, in `start` while Windows remembers no folder of its own for it; the folder chosen, null when cancelled. */
@@ -73,7 +74,7 @@ async function compile(dir: string, exe: string): Promise<string> {
     rmSync(tmp, { force: true })
     throw new PickError(`could not build the folder dialog: ${(stdout + stderr).trim() || `csc exited ${code}`}`)
   }
-  renameSync(tmp, exe)
+  renameOver(tmp, exe)
   for (const name of readdirSync(dir)) {
     if (!/^pick-folder-.+\.exe$/.test(name) || join(dir, name) === exe) continue
     try {

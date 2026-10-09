@@ -12,6 +12,7 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { renameOver } from '../write-flushed'
 import { tmpdir, uptime } from 'node:os'
 import { join, resolve } from 'node:path'
 import { type Context, Hono } from 'hono'
@@ -54,7 +55,7 @@ function writeJsonAtomic(path: string, value: unknown): void {
   mkdirSync(join(path, '..'), { recursive: true })
   const tmp = `${path}.${process.pid}.tmp`
   writeFileSync(tmp, JSON.stringify(value))
-  renameSync(tmp, path)
+  renameOver(tmp, path)
 }
 
 const sameToken = (given: string, token: string): boolean => {

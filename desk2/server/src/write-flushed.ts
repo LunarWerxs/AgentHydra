@@ -1,5 +1,5 @@
 // A write that has reached the disk before the rename that publishes it.
-import { closeSync, fsyncSync, openSync, writeFileSync } from 'node:fs'
+import { closeSync, fsyncSync, openSync, renameSync, writeFileSync } from 'node:fs'
 
 /**
  * writeFileSync, then a flush to the disk. A temp file renamed over the real one without the flush can have its rename
@@ -24,5 +24,27 @@ export function flushFile(path: string): void {
     fsyncSync(fd)
   } finally {
     closeSync(fd)
+  }
+}
+
+const RENAME_LOCKED = new Set(['EPERM', 'EACCES', 'EBUSY'])
+const RENAME_WINDOW_MS = 2000
+
+/**
+ * renameSync over a file another program holds open. On Windows that fails while the holder (an antivirus scan, the
+ * search indexer, a reader) has it open without delete sharing, so this waits the holder out for up to two seconds and
+ * then throws the last error.
+ */
+export function renameOver(from: string, to: string): void {
+  const deadline = Date.now() + RENAME_WINDOW_MS
+  for (;;) {
+    try {
+      renameSync(from, to)
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (!code || !RENAME_LOCKED.has(code) || Date.now() >= deadline) throw err
+      Bun.sleepSync(20)
+    }
   }
 }

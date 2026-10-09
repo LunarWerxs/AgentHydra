@@ -2,12 +2,12 @@
 // written atomically (temp file + rename) and debounced; <home>/chats/<chatId>.jsonl holds one
 // TranscriptItem per line, append-only, where the last line for an id wins on load.
 
-import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, closeSync, renameSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, closeSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { userTurns } from './system-text'
 import { mediaCache } from '../media/cache'
-import { writeFlushed } from '../write-flushed'
+import { renameOver, writeFlushed } from '../write-flushed'
 
 /** Live-only fields: never saved, reset on load (every chat starts 'closed'). */
 const VOLATILE = ['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive'] as const
@@ -31,11 +31,14 @@ export function fromStored(stored: StoredChat): ChatSummary {
 export interface ChatStoreOptions {
   /** Debounce for chats.json writes, ms. */
   debounceMs?: number
+  /** Wait before a scheduled write that failed is tried again, ms. */
+  retryMs?: number
 }
 
 export class ChatStore {
   readonly home: string
   private readonly debounceMs: number
+  private readonly retryMs: number
   private timer: ReturnType<typeof setTimeout> | null = null
   private pendingChats: ChatSummary[] | null = null
   /** Item files whose tail was checked for a torn last line this process. */
@@ -48,6 +51,7 @@ export class ChatStore {
   constructor(home: string, opts: ChatStoreOptions = {}) {
     this.home = home
     this.debounceMs = opts.debounceMs ?? 250
+    this.retryMs = opts.retryMs ?? 3000
     mkdirSync(join(home, 'chats'), { recursive: true })
   }
 
@@ -81,13 +85,10 @@ export class ChatStore {
   saveChats(chats: ChatSummary[]): void {
     this.pendingChats = chats
     if (this.timer) return
-    this.timer = setTimeout(() => {
-      this.timer = null
-      this.flush()
-    }, this.debounceMs)
+    this.arm(this.debounceMs)
   }
 
-  /** Writes a scheduled save now (server shutdown, tests). */
+  /** Writes a scheduled save now (server shutdown, tests); a failed write throws and keeps the list pending. */
   flush(): void {
     if (this.timer) {
       clearTimeout(this.timer)
@@ -96,12 +97,30 @@ export class ChatStore {
     const chats = this.pendingChats
     if (!chats) return
     this.pendingChats = null
-    const text = JSON.stringify(chats.map(toStored))
-    if (text === this.lastSaved && existsSync(this.chatsFile)) return
-    const tmp = `${this.chatsFile}.${process.pid}.tmp`
-    writeFlushed(tmp, text)
-    renameSync(tmp, this.chatsFile)
-    this.lastSaved = text
+    try {
+      const text = JSON.stringify(chats.map(toStored))
+      if (text === this.lastSaved && existsSync(this.chatsFile)) return
+      const tmp = `${this.chatsFile}.${process.pid}.tmp`
+      writeFlushed(tmp, text)
+      renameOver(tmp, this.chatsFile)
+      this.lastSaved = text
+    } catch (err) {
+      if (!this.pendingChats) this.pendingChats = chats
+      throw err
+    }
+  }
+
+  /** A timer's save never throws out of the timer: a failed one is logged and tried again. */
+  private arm(ms: number): void {
+    this.timer = setTimeout(() => {
+      this.timer = null
+      try {
+        this.flush()
+      } catch (err) {
+        console.error(`[store] ${this.chatsFile} could not be saved, trying again: ${(err as Error).stack ?? err}`)
+        this.arm(this.retryMs)
+      }
+    }, ms)
   }
 
   /** Appends one finished item. A torn last line left by a crash is closed off first. */
@@ -184,7 +203,7 @@ export class ChatStore {
     addLines(lines, text)
     const tmp = `${file}.${process.pid}.tmp`
     writeFlushed(tmp, [...lines].flatMap(([id, line]) => (keep.has(id) ? [line + '\n'] : [])).join(''))
-    renameSync(tmp, file)
+    renameOver(tmp, file)
     this.checkedTails.add(file)
     this.lineCache.delete(file)
     return [...lines.keys()].filter((id) => !keep.has(id))

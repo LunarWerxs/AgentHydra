@@ -301,4 +301,6 @@ if (import.meta.main) {
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
+  process.on('uncaughtException', (err) => console.error(`[desk] uncaught: ${err?.stack ?? err}`))
+  process.on('unhandledRejection', (err) => console.error(`[desk] unhandled rejection: ${(err as Error)?.stack ?? err}`))
 }

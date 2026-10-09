@@ -3,12 +3,12 @@
 // response names its path: the chat sends the path, and the model opens it with Read.
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import type { Hono } from 'hono'
 import type { ServerContext } from '../context'
 import { cardTypeOf } from '../media/cache'
-import { writeFlushed } from '../write-flushed'
+import { renameOver, writeFlushed } from '../write-flushed'
 
 export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 
@@ -42,7 +42,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       mkdirSync(dir, { recursive: true })
       const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
       writeFlushed(tmp, bytes)
-      renameSync(tmp, file)
+      renameOver(tmp, file)
     }
     return c.json({ path: file, name, bytes: bytes.length, mediaType: cardTypeOf(name) })
   })

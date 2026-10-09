@@ -3,10 +3,10 @@
 // back once it is used again: opened or chosen in the menu, or a new chat started in it. Folders that are
 // gone from disk are left out. <home>/folders.json keeps what the chats do not say.
 
-import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { isRemotePath } from '../engine/reveal'
-import { writeFlushed } from '../write-flushed'
+import { renameOver, writeFlushed } from '../write-flushed'
 
 export const RECENT_FOLDERS_MAX = 20
 /** Marks kept per list in the file. */
@@ -119,6 +119,6 @@ export class RecentFolders {
     mkdirSync(dirname(this.file), { recursive: true })
     const tmp = `${this.file}.tmp`
     writeFlushed(tmp, `${JSON.stringify(this.saved, null, 2)}\n`)
-    renameSync(tmp, this.file)
+    renameOver(tmp, this.file)
   }
 }

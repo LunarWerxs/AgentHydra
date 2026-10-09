@@ -4,7 +4,7 @@ import { isAbsolute, join } from 'node:path'
 import { FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeDeleted, type FreeInstance, type FreeProvider, type FreeSettings, type FreeThread } from '@shared/free-instances'
 import { seedStats, type StatsData, validStats } from './stats'
 import { type TokenLedger, validLedger } from './tokens'
-import { writeFlushed } from '../write-flushed'
+import { renameOver, writeFlushed } from '../write-flushed'
 
 /** accounts.json.bak is rewritten at most this often (and on the first save after load). */
 const BACKUP_EVERY_MS = 10 * 60_000
@@ -104,11 +104,11 @@ export class FreeStorage {
     mkdirSync(join(this.home, 'free'), { recursive: true })
     const json = JSON.stringify(this.data)
     writeFlushed(`${this.file}.tmp`, json, { mode: 0o600 })
-    renameSync(`${this.file}.tmp`, this.file)
+    renameOver(`${this.file}.tmp`, this.file)
     if (Date.now() - this.backedUpAt < BACKUP_EVERY_MS) return
     const backup = `${this.file}.bak`
     writeFlushed(`${backup}.tmp`, json, { mode: 0o600 })
-    renameSync(`${backup}.tmp`, backup)
+    renameOver(`${backup}.tmp`, backup)
     this.backedUpAt = Date.now()
   }
   /** Restores accounts.json from its last-good backup, setting the damaged file aside (never deleted). False if there is no usable backup. */

@@ -3,10 +3,10 @@
 // rename). They live here because the sessions' own files belong to Claude Desktop or the CLI and are
 // never written. The bridge applies them to every external list it answers.
 
-import { readFileSync, renameSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ExternalSession, SessionMeta, SessionMetaPatch } from '@shared/protocol'
-import { writeFlushed } from '../write-flushed'
+import { renameOver, writeFlushed } from '../write-flushed'
 
 const UNMARKED: SessionMeta = { title: null, pinned: false, archived: false, unread: false, group: null }
 
@@ -77,6 +77,6 @@ export class SessionMetaStore {
   private save(): void {
     const tmp = `${this.file}.${process.pid}.tmp`
     writeFlushed(tmp, JSON.stringify(Object.fromEntries(this.byId), null, 2))
-    renameSync(tmp, this.file)
+    renameOver(tmp, this.file)
   }
 }

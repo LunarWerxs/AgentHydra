@@ -9,10 +9,10 @@
 // the spec file (the host deletes it once read). Elsewhere a detached spawn is a real detach.
 
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { HostFile, HostSpec } from './protocol'
-import { writeFlushed } from '../write-flushed'
+import { renameOver, writeFlushed } from '../write-flushed'
 
 /** The host program. */
 export const HOST_ENTRY = join(import.meta.dir, 'chat-host.ts')
@@ -96,7 +96,7 @@ export function writeHostFile(dir: string, file: HostFile): void {
   const path = hostFilePath(dir, file.chatId)
   const tmp = `${path}.${process.pid}.tmp`
   writeFlushed(tmp, JSON.stringify(file))
-  renameSync(tmp, path)
+  renameOver(tmp, path)
 }
 
 /** Every host file in dir (live or left behind by a host that died). */
@@ -145,7 +145,7 @@ export async function launchHost(spec: HostSpec, o: LaunchOptions = {}): Promise
   const specPath = join(spec.dir, `${spec.chatId}.spec.json`)
   const tmp = `${specPath}.${process.pid}.tmp`
   writeFlushed(tmp, JSON.stringify(spec))
-  renameSync(tmp, specPath)
+  renameOver(tmp, specPath)
   const plan = detachedCommand(o.platform ?? process.platform, [o.bun ?? process.execPath, HOST_ENTRY, '--spec', specPath])
   try {
     // The powershell itself is a console program: hidden. It exits once WMI has started the host.

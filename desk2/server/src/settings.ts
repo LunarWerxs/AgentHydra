@@ -1,10 +1,10 @@
 // ~/.hydra-desk-2/settings.json: the DeskSettings with SPEC.md's defaults underneath.
 
-import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DeskSettings, Effort, PermissionMode } from '@shared/protocol'
 import { isOrchestratorModel } from '@shared/orchestrator'
-import { writeFlushed } from './write-flushed'
+import { renameOver, writeFlushed } from './write-flushed'
 
 export const DEFAULT_SETTINGS: DeskSettings = {
   defaultModel: null,
@@ -86,7 +86,7 @@ export function saveSettings(home: string, settings: DeskSettings): void {
   const file = settingsPath(home)
   const tmp = `${file}.tmp`
   writeFlushed(tmp, `${JSON.stringify(settings, null, 2)}\n`)
-  renameSync(tmp, file)
+  renameOver(tmp, file)
 }
 
 export interface SettingsStore {

@@ -4,7 +4,8 @@
 
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { renameOver } from '../write-flushed'
 import { dirname, join } from 'node:path'
 
 const SUMS_NAME = 'SHA256SUMS.txt'
@@ -101,7 +102,7 @@ export async function installFromRelease(o: InstallOptions): Promise<Installed> 
     throw new Error(`${o.asset} failed its checksum (got ${sha256.slice(0, 12)}…, ${SUMS_NAME} says ${expected.slice(0, 12)}…); removed it`)
   }
   rmSync(file, { force: true })
-  renameSync(partial, file)
+  renameOver(partial, file)
   const version = rel.tag_name ?? 'unknown'
   writeFileSync(join(o.dest, 'installed.json'), JSON.stringify({ version, asset: o.asset, sha256, installedAt: new Date().toISOString() }, null, 2))
   say(`Installed ${version}`)

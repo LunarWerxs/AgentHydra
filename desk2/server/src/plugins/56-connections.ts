@@ -12,7 +12,7 @@
 // these POST routes ("no action switch") first.
 // ctx.deps may carry `connections` (a ConnectionsClient over a fake loader) and `mainClaudeJson` (the config to read).
 
-import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context, Hono } from 'hono'
 import {
@@ -31,7 +31,7 @@ import { notOwnPage } from '../own-page'
 import { ConnectionsClient, type CallTarget, ConnectionsError, jsonAnswer } from '../connectors/connections-client'
 import type { ServerContext } from '../context'
 import { mainConfigFile } from '../engine/chat-runtime'
-import { writeFlushed } from '../write-flushed'
+import { renameOver, writeFlushed } from '../write-flushed'
 
 export const CACHE_MS = 30_000
 
@@ -110,7 +110,7 @@ export class DefaultsStore {
     mkdirSync(join(this.file, '..'), { recursive: true })
     const tmp = `${this.file}.tmp`
     writeFlushed(tmp, `${JSON.stringify(this.data, null, 2)}\n`)
-    renameSync(tmp, this.file)
+    renameOver(tmp, this.file)
   }
 }
 

@@ -7,11 +7,11 @@
 // after checking its extension, its size and its first bytes.
 
 import { createHash } from 'node:crypto'
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync } from 'node:fs'
 import { basename, extname, join, resolve } from 'node:path'
 import type { ImageRef } from '@shared/protocol'
 import { ctx } from '../context'
-import { flushFile, writeFlushed } from '../write-flushed'
+import { flushFile, renameOver, writeFlushed } from '../write-flushed'
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 /** GIFs (screen recordings, demos) may be bigger than other pictures. */
@@ -121,7 +121,7 @@ export function createMediaCache(dir: string): MediaCache {
       mkdirSync(dir, { recursive: true })
       const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
       writeFlushed(tmp, bytes)
-      renameSync(tmp, file)
+      renameOver(tmp, file)
     }
     const ref: ImageRef = { mediaType: CONTENT_TYPE[ext], url: MEDIA_ROUTE + id, bytes: bytes.length }
     if (name) ref.name = name
@@ -157,7 +157,7 @@ export function createMediaCache(dir: string): MediaCache {
         return null
       }
       flushFile(tmp)
-      renameSync(tmp, file)
+      renameOver(tmp, file)
     }
     return { mediaType: CONTENT_TYPE[ext], url: MEDIA_ROUTE + id, bytes: size, name }
   }
