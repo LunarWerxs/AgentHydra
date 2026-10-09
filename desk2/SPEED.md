@@ -36,7 +36,10 @@ infinite CSS animations (`animate-spin` / `animate-pulse` on running rows, the d
 spinners) kept the compositor drawing 60 frames a second whether or not the window was focused. Now
 `src/lib/pause-motion.ts` puts `motion-paused` on `<html>` while the page is unfocused or hidden and
 `style.css` pauses every animation under it (they resume where they stopped); `prefers-reduced-motion` drops
-the pulses and slows the spinners.
+the pulses and slows the spinners. Since 2026-10-08 the working mark (`.wm`) is the one exception: it keeps moving
+while the window is on screen but unfocused (owner: "the animation, seems to pause when I click out of it"), and
+holds still with the rest once the window is hidden or minimized (`motion-hidden`). It is a few small dots on
+transform and opacity, so the compositor's cost stays small.
 
 Measured in headless chrome-headless-shell against an isolated server (port 7911, temp data folder), one
 spinner, one pulsing dot and one `.run-pulse` dot on screen, 10 s idle, compositor frames counted by a CDP

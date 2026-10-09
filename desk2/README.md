@@ -359,7 +359,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   place, the muted "1 running task · 2 finished" line under the last message; the agents chip that
   repeated it above the composer is gone. A workflow that finished before the latest turn began (a
   finished background task starts a turn of its own) folds into one muted line, as in the real app,
-  instead of keeping its card.
+  instead of keeping its card. The panel slides in from the right and back out, opens narrow, and its
+  left edge drags it wider or narrower, a width the window keeps (`tasksPanelWidth` in
+  `web/src/components/shell/logic.ts`); what a task was told is a tooltip on its name, not a paragraph in
+  its card (owner, 2026-10-08: "the sidebar ... should be resizeable, and probably open narrower").
 - **Stop a background task, or all of them.** Every running row in the Background tasks panel has a
   Stop square, and the Running header has **Stop all** (owner, 2026-10-05: three background commands
   listed running for hours with no way to stop them). Both ask first. A Desk chat's command is stopped
@@ -623,7 +626,12 @@ repo in `~/.hydra-desk-2/free/runtime`. Instance state lives in `free/instances/
 in `free/accounts.json`. A previous `free-instances.json` connection is imported once, copying its
 encrypted login and registry without removing the original files. Nothing of a login is ever kept in
 the repo: the bundled harness keeps its state in the profile even when run by hand, and `*.dpapi` is
-ignored.
+ignored. A `free/accounts.json` an unclean shutdown left all NUL bytes or empty (2026-10-08) is renamed
+`accounts.json.unwritten-<ms>`, never deleted, and rebuilt from the account folders (a root `session.dpapi`
+is Claude, `chatgpt/session.dpapi` ChatGPT) under plain names that each account's first sign-in check
+replaces; a store that fails to load any other way stops Free alone, never the window
+(`server/src/free-instances/storage.ts`, `service.ts`). Every temp-then-rename save in `server/` flushes
+the temp file to disk before the rename (`server/src/write-flushed.ts`).
 
 **The logins reach the other PCs** through AgentHydra's Login sync (owner, 2026-10-06), when it is set
 up and on: the same store, key and token, read from the AgentHydra daemon on this PC, in the store's own

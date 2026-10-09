@@ -265,7 +265,10 @@ copy, so an active destination does not make a stopped source appear busy.
 Python archive and migration-source paths. An explicit unavailable/not-sent
 response permits their existing guarded fallback only when routing policy allows it;
 `native-only` returns a terminal result instead. A native refusal, malformed
-response, or lost mutation reply is terminal: no retry through disk or UI.
+response, or lost mutation reply is terminal: no retry through disk or UI. Since
+2026-10-08 the busy refusal names the flags that held it, as in `session has live,
+pending, or transitioning work (parked, moveInFlight)`, so a person can tell real
+work from leftover bookkeeping; it still ends the attempt.
 
 A migration source row filed under a previous login of its profile (`staleLogin`)
 is outside native control's reach: the running app loads only its signed-in

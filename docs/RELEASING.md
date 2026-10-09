@@ -6,7 +6,8 @@
   1.x path of Agent Hydra? ... when Agent Hydra became the new Hydra Desk UI, it was Agent Hydra
   2.0"). Every release ships Desk 2 (`desk2/`) as AgentHydra's window
   ([AGENTHYDRA-2-CUTOVER.md](AGENTHYDRA-2-CUTOVER.md)); the first one published is 2.0.1 (2.0.0's
-  tag build stopped before publishing, step 6 below). A tag below 2.0.0 is refused by the pre-push
+  tag build stopped before publishing, step 6 below), as a pre-release, and the first full release,
+  the one installed copies update to, is 2.0.2 (2026-10-08). A tag below 2.0.0 is refused by the pre-push
   hook and by `release.yml`, and a tag build whose Windows zip has no `desk2/` does not publish.
 - **The release page reads like SageThumbs'** (owner, same day: "We always need to do it like Sage
   does. You have a TL;DR, bullet points ... then you have the details in, like, a read more").

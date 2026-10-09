@@ -87,6 +87,15 @@ an undo, so read the fleet afterwards to see what had already landed - and since
 `python migrate_reconcile.py` is how you see it, because a killed batch leaves half-moves that no
 fleet read names (below).
 
+**Ready chats move first** (2026-10-08). `all_unarchived` orders chats by last activity, so the
+busiest lead, and a batch used to sit out each one's quiet window in turn: on a 9-chat drain
+nothing landed for about 18 minutes while three chats each spent their wait and six idle ones
+waited behind them. Now a batch that carries a wait tries every chat with no wait first, and a
+chat refused only because it has not been quiet long enough (`R_TOO_SOON`) is tried again after
+all the others, with the batch's own wait. Every other refusal is final on the first try, a dry
+run plans once, and `terminate_live` already skips the wait. The first refusal comes before an
+attempt is counted, so the second try costs the breaker nothing.
+
 **"Kill it and move it" is now one call, and a refused call keeps its resume** (2026-09-14). A
 patient move sitting out its `wait_secs` used to refuse the SAME move with `terminate_live` as
 `409 busy` - the route is keyed by script name - and the only way through was `taskkill` by hand.
@@ -169,12 +178,16 @@ tray icon and the fair share first), then reading two working chats' pids out of
   it had not saved. The transcript survives; a tool result still in flight does not, so say so
   in `resume`. `force` never implies it: `force` overrides a hold, nothing more. A hold or the
   breaker is never killed through.
-- **A detached batch's report does not survive a daemon RESTART** (2026-09-12). Operation
-  records live in the daemon process that ran them, while the batch's child process outlives
-  a restart and finishes its work orphaned - so the chats move and the report vanishes. A
-  poll now answers `reason: 'daemon-restarted'` and names when the daemon started. ⛔ On that
-  answer do NOT re-fire the move: read the toolbox's ledger and check `list_chats` for what
-  actually landed.
+- **A detached batch's report does not survive a daemon RESTART, and the batch may not either.**
+  Operation records live in the daemon process that ran them. On 2026-09-12 a batch's child
+  outlived a restart and finished orphaned, so the chats moved and the report vanished; on
+  2026-10-08 one died with the daemon 23 minutes into a 9-chat drain, leaving two chats on both
+  accounts and seven never tried. A poll answers `reason: 'daemon-restarted'` and names when the
+  daemon started. ⛔ On that answer do NOT re-fire the move: run `migrate_reconcile` (below) and
+  `migrate_reconcile --finish <id>` for each half-move it lists, then check `list_chats`. Since
+  2026-10-08 `POST /api/daemon/restart` answers 409 while a `migrate_batch` or `migrate_chat`
+  runs through the toolbox, naming it; `force: true` restarts past it, and then the reconcile is
+  yours to run.
 - **Check the account first with `list_chats`**, not `list_sessions` (which missed one of
   Martin's four chats behind its 7-day default) and not a dry-run move. If `list_chats` answers
   with an HTML-instead-of-JSON error, the running daemon is older than the tool: rebuild and
