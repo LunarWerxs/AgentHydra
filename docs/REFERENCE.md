@@ -37,13 +37,16 @@ start**, pointing at the port it actually bound (`server/src/mcp-register.ts`):
 ```
 
 It is on by default and lives in **Settings → MCP server → Register with Claude Code**, which also
-shows what the config file actually says. Turning it off removes the entry. It touches that one key
+shows what the config file actually says. Turning it off removes the entry. It touches those keys
 and nothing else, and it refuses to write a [`~/.claude.json`](CLAUDE-CONFIG-LAYOUT.md) it could not parse rather than
 replacing state it cannot read. `CLAUDE_CONFIG_DIR` is honoured; `AGENTHYDRA_MCP_CONFIG` names the
 file outright.
 
 Re-registering on every boot is the point: the URL carries the bound port, so a hop off a busy 7787
-would otherwise leave an entry pointing at nothing.
+would otherwise leave an entry pointing at nothing. The same setting also keeps a `browser` entry beside
+it, `{ "type": "http", "url": "http://127.0.0.1:7798/mcp/browser" }`, so every Claude Code session on
+the PC gets Desk's browser tools; a `browser` entry that is not AgentHydra's is left alone and reported
+as a conflict.
 
 **A session already open when it is registered will not see the new tools**: a client fixes its
 tool list at startup. Start a new one. `claude mcp list` should say `✔ Connected`.

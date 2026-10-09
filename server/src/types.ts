@@ -1008,6 +1008,14 @@ export interface McpRegistrationSettings {
   mcpUrl: string
   /** Why the last attempt could not be completed; null when there is nothing wrong. */
   mcpRegisterError: string | null
+  /** Desk's browser tools under the `browser` key, with the same fields as the agenthydra entry. */
+  mcpBrowser: {
+    registered: boolean
+    url: string
+    /** Set when another server holds the `browser` key; it is left as it is. */
+    conflict: string | null
+    error: string | null
+  }
   /**
    * Is the Python toolbox installed beside the executable?
    *

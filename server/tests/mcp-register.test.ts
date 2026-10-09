@@ -21,6 +21,8 @@ import {
   claudeCodeConfigPath,
   createMcpReasserter,
   desiredEntry,
+  deskBrowserMcpUrl,
+  MCP_BROWSER_KEY,
   MCP_SERVER_KEY,
   mcpRegistrationStatus,
   resetMcpRegisterMemory,
@@ -46,7 +48,10 @@ test('a missing config file is created with only our entry in it', () => {
   expect(res.registered).toBe(true)
   expect(res.error).toBeNull()
   expect(read(configPath)).toEqual({
-    mcpServers: { [MCP_SERVER_KEY]: { type: 'http', url: `${URL_}/api/mcp` } },
+    mcpServers: {
+      [MCP_SERVER_KEY]: { type: 'http', url: `${URL_}/api/mcp` },
+      [MCP_BROWSER_KEY]: { type: 'http', url: deskBrowserMcpUrl() },
+    },
   })
 })
 
@@ -278,7 +283,10 @@ test('a side-run with its own AGENTHYDRA_MCP_CONFIG still registers into that fi
   })
   expect(res.action).toBe('added')
   expect(read(configPath)).toEqual({
-    mcpServers: { [MCP_SERVER_KEY]: { type: 'http', url: 'http://127.0.0.1:7801/api/mcp' } },
+    mcpServers: {
+      [MCP_SERVER_KEY]: { type: 'http', url: 'http://127.0.0.1:7801/api/mcp' },
+      [MCP_BROWSER_KEY]: { type: 'http', url: DESK },
+    },
   })
 })
 
@@ -298,6 +306,107 @@ test('a relocated AGENTHYDRA_HOME never writes into an inherited CLAUDE_CONFIG_D
   })
   expect(res.action).toBe('side-run')
   expect(existsSync(configPath)).toBe(false)
+})
+
+const DESK = 'http://127.0.0.1:7798/mcp/browser'
+const FOREIGN_BROWSER = { type: 'stdio', command: 'example-browser', args: ['--serve'] }
+const OUR_AGENTHYDRA = { type: 'http', url: `${URL_}/api/mcp` }
+
+test('the browser entry is added beside the agenthydra entry, and a second run changes nothing', () => {
+  const configPath = join(scratch(), '.claude.json')
+  const first = syncMcpRegistration({ daemonUrl: URL_, deskUrl: DESK, enabled: true, configPath })
+  expect(first.browser.action).toBe('added')
+  expect(first.browser.registered).toBe(true)
+  expect(first.browser.conflict).toBeNull()
+  const before = readFileSync(configPath, 'utf8')
+  const second = syncMcpRegistration({ daemonUrl: URL_, deskUrl: DESK, enabled: true, configPath })
+  expect(second.action).toBe('unchanged')
+  expect(second.browser.action).toBe('unchanged')
+  expect(readFileSync(configPath, 'utf8')).toBe(before)
+})
+
+test('a desk port change rewrites the browser URL', () => {
+  const configPath = join(scratch(), '.claude.json')
+  syncMcpRegistration({ daemonUrl: URL_, deskUrl: DESK, enabled: true, configPath })
+  const res = syncMcpRegistration({
+    daemonUrl: URL_,
+    deskUrl: 'http://127.0.0.1:7800/mcp/browser',
+    enabled: true,
+    configPath,
+  })
+  expect(res.browser.action).toBe('updated')
+  const servers = read(configPath).mcpServers as Record<string, unknown>
+  expect(servers[MCP_BROWSER_KEY]).toEqual({
+    type: 'http',
+    url: 'http://127.0.0.1:7800/mcp/browser',
+  })
+})
+
+test('a foreign browser server is kept byte for byte and reported as a conflict', () => {
+  const configPath = join(scratch(), '.claude.json')
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      mcpServers: { [MCP_SERVER_KEY]: OUR_AGENTHYDRA, [MCP_BROWSER_KEY]: FOREIGN_BROWSER },
+    }),
+  )
+  const before = readFileSync(configPath, 'utf8')
+  const res = syncMcpRegistration({ daemonUrl: URL_, deskUrl: DESK, enabled: true, configPath })
+  expect(res.browser.action).toBe('conflict')
+  expect(res.browser.registered).toBe(false)
+  expect(res.browser.conflict).not.toBeNull()
+  expect(res.browser.error).toBeNull()
+  expect(readFileSync(configPath, 'utf8')).toBe(before)
+})
+
+test('a foreign browser server does not stop the agenthydra entry from being added', () => {
+  const configPath = join(scratch(), '.claude.json')
+  writeFileSync(configPath, JSON.stringify({ mcpServers: { [MCP_BROWSER_KEY]: FOREIGN_BROWSER } }))
+  const res = syncMcpRegistration({ daemonUrl: URL_, deskUrl: DESK, enabled: true, configPath })
+  expect(res.action).toBe('added')
+  expect(res.browser.action).toBe('conflict')
+  const servers = read(configPath).mcpServers as Record<string, unknown>
+  expect(servers[MCP_SERVER_KEY]).toEqual(OUR_AGENTHYDRA)
+  expect(servers[MCP_BROWSER_KEY]).toEqual(FOREIGN_BROWSER)
+})
+
+test('turning it off removes our browser entry and keeps the other servers', () => {
+  const configPath = join(scratch(), '.claude.json')
+  writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { type: 'stdio' } } }))
+  syncMcpRegistration({ daemonUrl: URL_, deskUrl: DESK, enabled: true, configPath })
+  const res = syncMcpRegistration({ daemonUrl: URL_, deskUrl: DESK, enabled: false, configPath })
+  expect(res.browser.action).toBe('removed')
+  expect(res.browser.registered).toBe(false)
+  const servers = read(configPath).mcpServers as Record<string, unknown>
+  expect(servers[MCP_BROWSER_KEY]).toBeUndefined()
+  expect(servers[MCP_SERVER_KEY]).toBeUndefined()
+  expect(servers.other).toEqual({ type: 'stdio' })
+})
+
+test('turning it off keeps a foreign browser server', () => {
+  const configPath = join(scratch(), '.claude.json')
+  writeFileSync(configPath, JSON.stringify({ mcpServers: { [MCP_BROWSER_KEY]: FOREIGN_BROWSER } }))
+  syncMcpRegistration({ daemonUrl: URL_, deskUrl: DESK, enabled: true, configPath })
+  syncMcpRegistration({ daemonUrl: URL_, deskUrl: DESK, enabled: false, configPath })
+  const servers = read(configPath).mcpServers as Record<string, unknown>
+  expect(servers[MCP_SERVER_KEY]).toBeUndefined()
+  expect(servers[MCP_BROWSER_KEY]).toEqual(FOREIGN_BROWSER)
+})
+
+test('a side-run sync writes nothing to the machine config, browser entry included', () => {
+  const configPath = join(scratch(), '.claude.json')
+  const before = `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`
+  writeFileSync(configPath, before)
+  const res = syncMcpRegistration({
+    daemonUrl: 'http://127.0.0.1:7801',
+    deskUrl: DESK,
+    enabled: true,
+    configPath,
+    primary: false,
+    env: {},
+  })
+  expect(res.action).toBe('side-run')
+  expect(readFileSync(configPath, 'utf8')).toBe(before)
 })
 
 test('a relocated AGENTHYDRA_HOME with its own AGENTHYDRA_MCP_CONFIG still registers there', () => {

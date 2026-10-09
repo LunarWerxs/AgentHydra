@@ -78,4 +78,55 @@ describe('the browser tools in a worker config', () => {
     expect(servers.browser).toBeUndefined()
     expect(servers['climayte-worker']).toBeDefined()
   })
+
+  test("the owner's generic Desk browser entry is replaced by the worker's own", () => {
+    writeFileSync(
+      join(scratch, 'home', '.claude.json'),
+      JSON.stringify({
+        mcpServers: { browser: { type: 'http', url: 'http://127.0.0.1:7798/mcp/browser' } },
+      }),
+    )
+    const reply = climayteRun({
+      group: 'browser-mcp-test',
+      model: 'sonnet',
+      effort: 'medium',
+      ownerWords: 'fixed',
+      tasks: [{ prompt: 'Look at the page', cwd: WORK }],
+    })
+    const w = workers.get(reply.workers[0]?.id ?? '')
+    if (!w) throw new Error('no worker made')
+    const file = writeWorkerMcp(w)
+    if (!file) throw new Error('no config written')
+    const servers = (
+      JSON.parse(readFileSync(file, 'utf8')) as { mcpServers: Record<string, { url: string }> }
+    ).mcpServers
+    expect(servers.browser?.url).toBe(
+      `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}/mcp/browser?worker=${encodeURIComponent(w.id)}&cwd=${encodeURIComponent(w.cwd)}`,
+    )
+    rmSync(join(scratch, 'home', '.claude.json'), { force: true })
+  })
+
+  test("a foreign browser server of the owner's is kept over the worker's", () => {
+    const foreign = { type: 'stdio', command: 'example-browser', args: ['--serve'] }
+    writeFileSync(
+      join(scratch, 'home', '.claude.json'),
+      JSON.stringify({ mcpServers: { browser: foreign } }),
+    )
+    const reply = climayteRun({
+      group: 'browser-mcp-test',
+      model: 'sonnet',
+      effort: 'medium',
+      ownerWords: 'fixed',
+      tasks: [{ prompt: 'Look at the page', cwd: WORK }],
+    })
+    const w = workers.get(reply.workers[0]?.id ?? '')
+    if (!w) throw new Error('no worker made')
+    const file = writeWorkerMcp(w)
+    if (!file) throw new Error('no config written')
+    const servers = (
+      JSON.parse(readFileSync(file, 'utf8')) as { mcpServers: Record<string, unknown> }
+    ).mcpServers
+    expect(servers.browser).toEqual(foreign)
+    rmSync(join(scratch, 'home', '.claude.json'), { force: true })
+  })
 })

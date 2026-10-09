@@ -602,6 +602,12 @@ const appSettings = () => ({
       mcpConfigPath: st.configPath,
       mcpUrl: st.desired.url,
       mcpRegisterError: st.error,
+      mcpBrowser: {
+        registered: st.browser.registered,
+        url: st.browser.desired.url,
+        conflict: st.browser.conflict,
+        error: st.browser.error,
+      },
       // Not an error: a side-run never touches the machine-wide Claude Code config.
       mcpRegisterSkipped: st.action === 'side-run' ? 'side-run' : null,
     }

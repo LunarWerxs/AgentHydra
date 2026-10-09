@@ -12,19 +12,21 @@
  * ~/.claude.json at all, alongside three other MCP servers that had been registered by their own
  * installers.
  *
- * WHAT IT REGISTERS. The HTTP transport (`POST /api/mcp`), never the stdio one. Stdio is one
- * server process per client, and each is a relay whose entire job is to forward JSON-RPC to this
- * daemon - the cost f87dd06 removed. An HTTP entry costs nothing per client and, because the URL
- * carries the port this daemon ACTUALLY bound, it survives a port hop as long as this runs again
- * on the next boot. Which it does: syncing at boot is what keeps a stale URL from outliving the
- * hop that invalidated it.
+ * WHAT IT REGISTERS. Two keys, both HTTP. `agenthydra` is this daemon's transport (`POST /api/mcp`),
+ * never the stdio one. Stdio is one server process per client, each a relay whose entire job is to
+ * forward JSON-RPC to this daemon - the cost f87dd06 removed. `browser` is Desk's browser tools
+ * (`/mcp/browser` on the Desk port), so every Claude Code session on this PC has them without the
+ * Connections MCP. Both URLs carry the port they are actually served on, and both survive a port
+ * hop as long as this runs again on the next boot. Which it does: syncing at boot is what keeps a
+ * stale URL from outliving the hop that invalidated it.
  *
  * WHAT IT WILL NOT DO. ~/.claude.json is not ours - it holds the user's logins, their project
  * history and every other MCP server they have. So: a file that does not parse is never written
  * (it is reported instead, because overwriting it would destroy real state to fix a convenience);
- * only the single `mcpServers.agenthydra` key is ever touched; the write is a temp file and a
- * rename, so a crash mid-write cannot leave a truncated config; and nothing is written at all
- * when the entry is already what it should be.
+ * only the two keys above are ever touched, and a `browser` entry that is not AgentHydra's own
+ * generic one (a stdio server, or an http url elsewhere) is kept and reported as a conflict; the
+ * write is a temp file and a rename, so a crash mid-write cannot leave a truncated config; and
+ * nothing is written at all when the entries are already what they should be.
  */
 
 import {
@@ -47,6 +49,25 @@ export const MCP_REGISTER_SETTING = 'mcp_register_claude_code'
 
 /** The name the entry goes under. Also the name every tool description and doc already uses. */
 export const MCP_SERVER_KEY = 'agenthydra'
+
+/** The name Desk's browser tools go under. Only ever written when the key is free or already ours. */
+export const MCP_BROWSER_KEY = 'browser'
+
+const DESK_PORT_DEFAULT = 7798
+const DESK_BROWSER_PATH = '/mcp/browser'
+const GENERIC_DESK_BROWSER_URL = /^http:\/\/127\.0\.0\.1:\d+\/mcp\/browser$/
+
+/** Desk's browser MCP endpoint on this machine. HYDRA_DESK_PORT overrides the default port. */
+export function deskBrowserMcpUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return `http://127.0.0.1:${Number(env.HYDRA_DESK_PORT) || DESK_PORT_DEFAULT}${DESK_BROWSER_PATH}`
+}
+
+/** Is this AgentHydra's generic Desk browser entry (any port, no worker or cwd query)? */
+export function isAgenthydraBrowserEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== 'object') return false
+  const e = entry as Record<string, unknown>
+  return e.type === 'http' && typeof e.url === 'string' && GENERIC_DESK_BROWSER_URL.test(e.url)
+}
 
 export function mcpRegisterEnabled(): boolean {
   return getSetting(MCP_REGISTER_SETTING) !== '0'
@@ -128,9 +149,24 @@ export type McpRegisterAction =
   | 'removed'
   | 'absent'
   | 'disabled'
+  /** The key holds another server that is not ours: it is left exactly as it is. */
+  | 'conflict'
   /** Not attempted, and not an error: this daemon is a side-run (see registrationBarred). */
   | 'side-run'
   | 'failed'
+
+export interface McpBrowserStatus {
+  /** Is a `browser` entry present and pointing at Desk's browser endpoint right now? */
+  registered: boolean
+  /** What the `browser` key says now, whoever wrote it. */
+  entry: unknown
+  desired: McpHttpEntry
+  action: McpRegisterAction
+  /** Set when a foreign `browser` server is kept; says what it is and that it was left alone. */
+  conflict: string | null
+  /** Why the write could not be done. Null on every success. */
+  error: string | null
+}
 
 export interface McpRegisterStatus {
   /** The setting, not the outcome: true means "keep this registered". */
@@ -144,6 +180,7 @@ export interface McpRegisterStatus {
   action: McpRegisterAction
   /** Why it could not be done. Null on every success, INCLUDING 'disabled' and 'absent'. */
   error: string | null
+  browser: McpBrowserStatus
 }
 
 /** Parse the config, distinguishing "no file yet" (fine, we create it) from "unreadable" (never
@@ -247,8 +284,8 @@ const sameEntry = (a: unknown, b: McpHttpEntry): boolean =>
  * instead is refuse to write ACROSS a change it can see. It stamps the file (size + mtime), builds
  * the new contents from that exact snapshot, and re-checks the stamp immediately before renaming.
  * A moved stamp means another writer got there first, so the snapshot is discarded and the whole
- * thing restarts from THEIR file - which is the merge actually wanted, since our change is one
- * key. The window is not closed (nothing short of a shared lock could close it), but it shrinks
+ * thing restarts from THEIR file - which is the merge actually wanted, since our change is two
+ * keys. The window is not closed (nothing short of a shared lock could close it), but it shrinks
  * from the whole read-compute-write to the width of a single rename.
  *
  * Bounded at three tries, and losing all three is not worth recording as a fault: nothing is wrong
@@ -269,30 +306,28 @@ export interface McpRegisterDeps {
 const WRITE_ATTEMPTS = 3
 
 /**
- * The last write failure, remembered so the READ-ONLY status can report it.
+ * The last write failure per key, remembered so the READ-ONLY status can report it.
  *
  * Without this a failed write was unreportable by construction: mcpRegistrationStatus only ever
  * reads, so its `error` could only ever describe an unreadable file - and a read-only
  * ~/.claude.json reads perfectly. The panel therefore showed a bare "Not registered yet." with no
  * reason, in exactly the case the DTO field documents itself as existing for.
  */
-let lastWriteError: { configPath: string; error: string } | null = null
+const lastWriteErrors = new Map<string, { configPath: string; error: string }>()
 
 /** Test seam: the failure memory is module state, so a test asserting on it needs a known start. */
 export function resetMcpRegisterMemory(): void {
-  lastWriteError = null
+  lastWriteErrors.clear()
+}
+
+const rememberedWriteError = (configPath: string, key: string): string | null => {
+  const remembered = lastWriteErrors.get(key)
+  return remembered?.configPath === configPath ? remembered.error : null
 }
 
 const writeFailure = (configPath: string, e: unknown): string =>
   `could not write ${configPath}: ${e instanceof Error ? e.message : e}`
 
-/**
- * Bring the registration in line with the setting. Called at boot (once the bound port is known)
- * and again whenever the setting is flipped in Settings.
- *
- * NEVER THROWS. A daemon must boot whether or not another program's config file cooperates, so
- * every failure comes back as `action: 'failed'` with a reason a human can act on.
- */
 /** `config.mcpServers`, coerced to a plain record — an absent or malformed value reads as empty. */
 function mcpServersRecord(config: Record<string, unknown>): Record<string, unknown> {
   return config.mcpServers &&
@@ -302,97 +337,127 @@ function mcpServersRecord(config: Record<string, unknown>): Record<string, unkno
     : {}
 }
 
-type SyncBase = { enabled: boolean; configPath: string; desired: McpHttpEntry }
-
-/**
- * A status for one of the two nothing-to-do cases, or `null` when a write is actually needed.
- * Returned BEFORE any stamp check: not writing cannot lose anyone's work, so a concurrent writer
- * is none of our business here.
- */
-function nothingToDoStatus(base: SyncBase, current: unknown): McpRegisterStatus | null {
-  if (!base.enabled && current === undefined) {
-    return { ...base, registered: false, entry: null, action: 'absent', error: null }
-  }
-  if (base.enabled && sameEntry(current, base.desired)) {
-    return { ...base, registered: true, entry: current, action: 'unchanged', error: null }
-  }
-  return null
+/** One key we keep in ~/.claude.json: the entry we want there, and whether an existing entry is ours. */
+interface KeySpec {
+  key: string
+  desired: McpHttpEntry
+  ours: (entry: unknown) => boolean
 }
 
-/** One write attempt's outcome: `done: true` is final (return it); `done: false` is a race that
- *  the caller's retry loop should absorb and try again. */
-type McpWriteAttempt = { done: boolean; status: McpRegisterStatus }
+function keySpecs(daemonUrl: string, deskUrl: string): [KeySpec, KeySpec] {
+  return [
+    { key: MCP_SERVER_KEY, desired: desiredEntry(daemonUrl), ours: () => true },
+    {
+      key: MCP_BROWSER_KEY,
+      desired: { type: 'http', url: deskUrl },
+      ours: isAgenthydraBrowserEntry,
+    },
+  ]
+}
+
+const foreignMessage = (configPath: string, key: string): string =>
+  `"${key}" in ${configPath} is another server, not AgentHydra's entry; it is left as it is`
+
+/** What one key does on this sync. `write` false means nothing to persist for it. */
+interface KeyPlan {
+  spec: KeySpec
+  current: unknown
+  action: McpRegisterAction
+  conflict: string | null
+  write: boolean
+  /** What the key becomes when `write` is set; null deletes it. */
+  next: McpHttpEntry | null
+}
+
+/** One key's result, as the status reports it. */
+interface KeyOutcome {
+  registered: boolean
+  entry: unknown
+  action: McpRegisterAction
+  error: string | null
+  conflict: string | null
+}
 
 /**
- * Apply the enable/disable change to `config.mcpServers` and try to persist it, re-checking the
- * file's stamp immediately before writing so a concurrent writer is detected rather than clobbered
- * (see the module-level note on the race window above `McpRegisterDeps`).
+ * Decide one key's fate. Off has to mean gone, not merely "stops being refreshed": a stale entry
+ * left behind would keep answering after the user asked for it not to. A foreign entry under the
+ * key is never touched in either direction.
  */
-function attemptMcpConfigWrite(
-  configPath: string,
-  before: string | null,
-  config: Record<string, unknown>,
-  servers: Record<string, unknown>,
-  current: unknown,
-  base: SyncBase,
-  writeConfig: (path: string, config: Record<string, unknown>) => void,
-): McpWriteAttempt {
-  // Turned off: take OUR entry out and leave every other server alone. Off has to mean gone, not
-  // merely "stops being refreshed" - a stale entry left behind would keep answering after the
-  // user asked for it not to.
-  const action: McpRegisterAction = !base.enabled
-    ? 'removed'
-    : current === undefined
-      ? 'added'
-      : 'updated'
-  if (base.enabled) servers[MCP_SERVER_KEY] = base.desired
-  else delete servers[MCP_SERVER_KEY]
-  config.mcpServers = servers
+function planKey(spec: KeySpec, enabled: boolean, current: unknown, configPath: string): KeyPlan {
+  const plan = (
+    action: McpRegisterAction,
+    write: boolean,
+    next: McpHttpEntry | null,
+    conflict: string | null = null,
+  ): KeyPlan => ({ spec, current, action, conflict, write, next })
+  const present = current !== undefined && current !== null
+  if (present && !spec.ours(current))
+    return plan('conflict', false, null, foreignMessage(configPath, spec.key))
+  if (!enabled) return present ? plan('removed', true, null) : plan('absent', false, null)
+  if (!present) return plan('added', true, spec.desired)
+  if (sameEntry(current, spec.desired)) return plan('unchanged', false, null)
+  return plan('updated', true, spec.desired)
+}
 
-  if (stamp(configPath) !== before) {
+/** A key's outcome once the write has been attempted: a failure only for a key we tried to write. */
+function settle(plan: KeyPlan, enabled: boolean, failure: string | null): KeyOutcome {
+  if (plan.write && failure)
     return {
-      done: false,
-      status: {
-        ...base,
-        registered: !base.enabled && current !== undefined,
-        entry: current ?? null,
-        action: 'failed',
-        error: `${configPath} was written by another process while this update was being prepared`,
-      },
+      registered: !enabled && plan.current !== undefined,
+      entry: plan.current ?? null,
+      action: 'failed',
+      error: failure,
+      conflict: plan.conflict,
     }
-  }
-
-  try {
-    writeConfig(configPath, config)
-  } catch (e) {
-    lastWriteError = { configPath, error: writeFailure(configPath, e) }
-    return {
-      done: true,
-      status: {
-        ...base,
-        registered: !base.enabled && current !== undefined,
-        entry: current ?? null,
-        action: 'failed',
-        error: lastWriteError.error,
-      },
-    }
-  }
-  lastWriteError = null
+  const entry = plan.write ? plan.next : (plan.current ?? null)
   return {
-    done: true,
-    status: {
-      ...base,
-      registered: base.enabled,
-      entry: base.enabled ? base.desired : null,
-      action,
-      error: null,
+    registered: entry !== null && sameEntry(entry, plan.spec.desired),
+    entry,
+    action: plan.action,
+    error: null,
+    conflict: plan.conflict,
+  }
+}
+
+function assemble(
+  enabled: boolean,
+  configPath: string,
+  specs: [KeySpec, KeySpec],
+  [agent, browser]: [KeyOutcome, KeyOutcome],
+): McpRegisterStatus {
+  return {
+    enabled,
+    configPath,
+    registered: agent.registered,
+    entry: agent.entry,
+    desired: specs[0].desired,
+    action: agent.action,
+    error: agent.error,
+    browser: {
+      registered: browser.registered,
+      entry: browser.entry,
+      desired: specs[1].desired,
+      action: browser.action,
+      conflict: browser.conflict,
+      error: browser.error,
     },
   }
 }
 
+const allKeys = (outcome: KeyOutcome): [KeyOutcome, KeyOutcome] => [outcome, outcome]
+
+/**
+ * Bring the registration in line with the setting. Called at boot (once the bound port is known)
+ * and again whenever the setting is flipped in Settings.
+ *
+ * NEVER THROWS. A daemon must boot whether or not another program's config file cooperates, so
+ * every failure comes back as `action: 'failed'` with a reason a human can act on.
+ */
 export function syncMcpRegistration(
   opts: {
     daemonUrl: string
+    /** Desk's browser endpoint; defaults to the port Desk serves on (HYDRA_DESK_PORT or 7798). */
+    deskUrl?: string
     enabled?: boolean
     configPath?: string
     /** Seams for the test: production reads IS_PRIMARY_INSTALL and process.env. */
@@ -403,13 +468,17 @@ export function syncMcpRegistration(
 ): McpRegisterStatus {
   const enabled = opts.enabled ?? mcpRegisterEnabled()
   const configPath = opts.configPath ?? claudeCodeConfigPath(opts.env)
-  const desired = desiredEntry(opts.daemonUrl)
-  const base: SyncBase = { enabled, configPath, desired }
+  const specs = keySpecs(opts.daemonUrl, opts.deskUrl ?? deskBrowserMcpUrl(opts.env))
   // Before the file is even read: a barred daemon touches nothing, whatever the file holds.
   if (registrationBarred(opts.primary, opts.env, !!opts.configPath))
-    return { ...base, registered: false, entry: null, action: 'side-run', error: null }
+    return assemble(
+      enabled,
+      configPath,
+      specs,
+      allKeys({ registered: false, entry: null, action: 'side-run', error: null, conflict: null }),
+    )
   const writeConfig = deps.writeConfig ?? writeConfigAtomic
-  let raced: McpRegisterStatus | null = null
+  let raced: [KeyOutcome, KeyOutcome] | null = null
 
   for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt++) {
     const before = stamp(configPath)
@@ -417,38 +486,81 @@ export function syncMcpRegistration(
     // The point in the sequence where a concurrent writer's rename lands in the real world. A test
     // stands in for Claude Code here; in production this is undefined and costs nothing.
     deps.afterRead?.(configPath)
-    if (!config) return { ...base, registered: false, entry: null, action: 'failed', error }
+    if (!config)
+      return assemble(
+        enabled,
+        configPath,
+        specs,
+        allKeys({ registered: false, entry: null, action: 'failed', error, conflict: null }),
+      )
 
     const servers = mcpServersRecord(config)
-    const current = servers[MCP_SERVER_KEY]
-
-    const noop = nothingToDoStatus(base, current)
-    if (noop) {
-      lastWriteError = null
-      return noop
+    const plans = specs.map((s) => planKey(s, enabled, servers[s.key] ?? null, configPath)) as [
+      KeyPlan,
+      KeyPlan,
+    ]
+    // Nothing to write is not a race, so it returns before the stamp check: not writing cannot lose
+    // anyone's work, and a concurrent writer is none of our business here.
+    if (!plans.some((p) => p.write)) {
+      for (const p of plans) lastWriteErrors.delete(p.spec.key)
+      return assemble(
+        enabled,
+        configPath,
+        specs,
+        plans.map((p) => settle(p, enabled, null)) as [KeyOutcome, KeyOutcome],
+      )
     }
 
-    const result = attemptMcpConfigWrite(
+    for (const p of plans) {
+      if (!p.write) continue
+      if (p.next) servers[p.spec.key] = p.next
+      else delete servers[p.spec.key]
+    }
+    config.mcpServers = servers
+
+    if (stamp(configPath) !== before) {
+      const raceError = `${configPath} was written by another process while this update was being prepared`
+      raced = plans.map((p) => settle(p, enabled, p.write ? raceError : null)) as [
+        KeyOutcome,
+        KeyOutcome,
+      ]
+      continue
+    }
+
+    try {
+      writeConfig(configPath, config)
+    } catch (e) {
+      const failure = writeFailure(configPath, e)
+      for (const p of plans)
+        if (p.write) lastWriteErrors.set(p.spec.key, { configPath, error: failure })
+      return assemble(
+        enabled,
+        configPath,
+        specs,
+        plans.map((p) => settle(p, enabled, p.write ? failure : null)) as [KeyOutcome, KeyOutcome],
+      )
+    }
+    for (const p of plans) lastWriteErrors.delete(p.spec.key)
+    return assemble(
+      enabled,
       configPath,
-      before,
-      config,
-      servers,
-      current,
-      base,
-      writeConfig,
+      specs,
+      plans.map((p) => settle(p, enabled, null)) as [KeyOutcome, KeyOutcome],
     )
-    if (result.done) return result.status
-    raced = result.status
   }
 
-  return (
-    raced ?? {
-      ...base,
-      registered: false,
-      entry: null,
-      action: 'failed',
-      error: `${configPath} is being written by another process`,
-    }
+  return assemble(
+    enabled,
+    configPath,
+    specs,
+    raced ??
+      allKeys({
+        registered: false,
+        entry: null,
+        action: 'failed',
+        error: `${configPath} is being written by another process`,
+        conflict: null,
+      }),
   )
 }
 
@@ -461,7 +573,7 @@ export function syncMcpRegistration(
  * rewrites the whole file from its own in-memory copy. A client already open when the daemon wrote
  * the entry quietly reverts it on its next save, and a sync that only ran at boot never looked
  * again, so the symptom surfaced hours later in a DIFFERENT session as an MCP server with no tools
- * and nothing pointing at AgentHydra. The sync writes only when the entry differs and detects a
+ * and nothing pointing at AgentHydra. The sync writes only when an entry differs and detects a
  * concurrent writer, so re-running it against an unchanged file costs one read. `run` never throws:
  * it is called from a repeating timer, where a throw would end the daemon.
  */
@@ -474,11 +586,13 @@ export function createMcpReasserter(opts: {
 }): { run: (enabled?: boolean) => McpRegisterStatus | null; last: () => McpRegisterStatus | null } {
   let last: McpRegisterStatus | null = null
   const log = opts.log ?? { info: console.log, warn: console.warn }
+  const issueOf = (s: McpRegisterStatus | null) =>
+    s?.error ?? s?.browser.error ?? s?.browser.conflict ?? null
   return {
     last: () => last,
     run(enabled) {
       try {
-        const previous = last
+        const previousIssue = issueOf(last)
         const reg = syncMcpRegistration({
           daemonUrl: opts.daemonUrl(),
           enabled,
@@ -487,10 +601,19 @@ export function createMcpReasserter(opts: {
           env: opts.env,
         })
         last = reg
-        if (reg.error) {
-          if (reg.error !== previous?.error) log.warn(`[agenthydra] MCP registration: ${reg.error}`)
-        } else if (reg.action === 'added' || reg.action === 'updated' || reg.action === 'removed') {
-          log.info(`[agenthydra] MCP registration ${reg.action} in ${reg.configPath}`)
+        const issue = issueOf(reg)
+        if (issue) {
+          if (issue !== previousIssue) log.warn(`[agenthydra] MCP registration: ${issue}`)
+        } else {
+          const changed = new Set(
+            [reg.action, reg.browser.action].filter(
+              (a) => a === 'added' || a === 'updated' || a === 'removed',
+            ),
+          )
+          if (changed.size > 0)
+            log.info(
+              `[agenthydra] MCP registration ${[...changed].join(', ')} in ${reg.configPath}`,
+            )
         }
         return reg
       } catch (error) {
@@ -503,50 +626,29 @@ export function createMcpReasserter(opts: {
   }
 }
 
-/** Read-only: what the config says right now, for the Settings panel. Writes nothing. */
-export function mcpRegistrationStatus(opts: {
-  daemonUrl: string
-  configPath?: string
-}): McpRegisterStatus {
-  const enabled = mcpRegisterEnabled()
-  const configPath = opts.configPath ?? claudeCodeConfigPath()
-  const desired = desiredEntry(opts.daemonUrl)
-  if (registrationBarred(undefined, undefined, !!opts.configPath))
+/** One key's state as the read-only status reports it: what the file says, plus any remembered failure. */
+function viewOf(
+  spec: KeySpec,
+  enabled: boolean,
+  configPath: string,
+  servers: Record<string, unknown>,
+): KeyOutcome {
+  const current = servers[spec.key] ?? null
+  if (current !== null && !spec.ours(current))
     return {
-      enabled,
-      configPath,
       registered: false,
-      entry: null,
-      desired,
-      action: 'side-run',
+      entry: current,
+      action: 'conflict',
       error: null,
+      conflict: foreignMessage(configPath, spec.key),
     }
-  const { config, error } = readConfig(configPath)
+  const registered = sameEntry(current, spec.desired)
   // A remembered WRITE failure outranks a clean read. A read-only ~/.claude.json reads perfectly,
   // so without this the panel reports "not registered" and cannot say why.
-  const writeError = lastWriteError?.configPath === configPath ? lastWriteError.error : null
-  if (!config)
-    return {
-      enabled,
-      configPath,
-      registered: false,
-      entry: null,
-      desired,
-      action: 'failed',
-      error: error ?? writeError,
-    }
-  const servers =
-    config.mcpServers && typeof config.mcpServers === 'object' && !Array.isArray(config.mcpServers)
-      ? (config.mcpServers as Record<string, unknown>)
-      : {}
-  const current = servers[MCP_SERVER_KEY] ?? null
-  const registered = sameEntry(current, desired)
+  const writeError = rememberedWriteError(configPath, spec.key)
   return {
-    enabled,
-    configPath,
     registered,
     entry: current,
-    desired,
     action:
       writeError && !registered
         ? 'failed'
@@ -556,5 +658,45 @@ export function mcpRegistrationStatus(opts: {
             : 'unchanged'
           : 'disabled',
     error: registered ? null : writeError,
+    conflict: null,
   }
+}
+
+/** Read-only: what the config says right now, for the Settings panel. Writes nothing. */
+export function mcpRegistrationStatus(opts: {
+  daemonUrl: string
+  deskUrl?: string
+  configPath?: string
+}): McpRegisterStatus {
+  const enabled = mcpRegisterEnabled()
+  const configPath = opts.configPath ?? claudeCodeConfigPath()
+  const specs = keySpecs(opts.daemonUrl, opts.deskUrl ?? deskBrowserMcpUrl())
+  if (registrationBarred(undefined, undefined, !!opts.configPath))
+    return assemble(
+      enabled,
+      configPath,
+      specs,
+      allKeys({ registered: false, entry: null, action: 'side-run', error: null, conflict: null }),
+    )
+  const { config, error } = readConfig(configPath)
+  if (!config)
+    return assemble(
+      enabled,
+      configPath,
+      specs,
+      specs.map((s) => ({
+        registered: false,
+        entry: null,
+        action: 'failed' as const,
+        error: error ?? rememberedWriteError(configPath, s.key),
+        conflict: null,
+      })) as [KeyOutcome, KeyOutcome],
+    )
+  const servers = mcpServersRecord(config)
+  return assemble(
+    enabled,
+    configPath,
+    specs,
+    specs.map((s) => viewOf(s, enabled, configPath, servers)) as [KeyOutcome, KeyOutcome],
+  )
 }

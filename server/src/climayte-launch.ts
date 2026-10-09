@@ -60,7 +60,12 @@ import { workerHooks } from './climayte-signal'
 import { readWave, waveStateText } from './climayte-wave'
 import { PORT } from './config'
 import { OLD_HAIKU } from './core/haiku-pin'
-import { MCP_PATH, MCP_SERVER_KEY } from './mcp-register'
+import {
+  deskBrowserMcpUrl,
+  isAgenthydraBrowserEntry,
+  MCP_PATH,
+  MCP_SERVER_KEY,
+} from './mcp-register'
 import { getOrchestratorDaemonUrl } from './orchestrator'
 
 /** The most processes one worker's tree may have alive at once, the runner included (Windows leaves
@@ -425,13 +430,17 @@ export function writeWorkerMcp(w: CliMayteWorker): string | null {
   if (ownerClaudeDir)
     servers['climayte-worker'] = { type: 'http', url: `${base}/api/corch/ask/${w.id}` }
 
-  // A worker that is not a chat gets Desk's browser tools for its folder (desk2 serves /mcp/browser); the owner's own
-  // `browser` server of that name wins, as desk2's connector servers do.
-  if (ownerClaudeDir && !w.chat && !('browser' in servers)) {
-    const deskPort = Number(process.env.HYDRA_DESK_PORT) || 7798
+  // A worker that is not a chat gets Desk's browser tools for its folder. The owner's generic Desk
+  // entry (mcp-register puts it in ~/.claude.json) is replaced by this one; any other `browser`
+  // server of the owner's wins, as desk2's connector servers do.
+  if (
+    ownerClaudeDir &&
+    !w.chat &&
+    (!('browser' in servers) || isAgenthydraBrowserEntry(servers.browser))
+  ) {
     servers.browser = {
       type: 'http',
-      url: `http://127.0.0.1:${deskPort}/mcp/browser?worker=${encodeURIComponent(w.id)}&cwd=${encodeURIComponent(w.cwd)}`,
+      url: `${deskBrowserMcpUrl()}?worker=${encodeURIComponent(w.id)}&cwd=${encodeURIComponent(w.cwd)}`,
     }
   }
 
