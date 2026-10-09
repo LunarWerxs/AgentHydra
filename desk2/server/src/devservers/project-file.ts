@@ -4,11 +4,12 @@
 // state.json overrides and the pane's remembered ids carry over), and the atomic writes every file here goes through.
 
 import { createHash } from 'node:crypto'
-import { readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
 import type { AnswerRule } from './answers'
 import { readRules } from './answers'
 import type { ComposeSpec } from './compose'
+import { writeFlushed } from '../write-flushed'
 
 export const ID_RE = /^[a-zA-Z0-9._-]+$/
 const MAX_READINESS_MS = 10 * 60_000
@@ -244,7 +245,7 @@ export function writeFileAtomic(filePath: string, contents: string): void {
   if (sameContents(target, contents)) return
   const tmp =`${target}.${process.pid}.${Date.now()}.tmp`
   try {
-    writeFileSync(tmp, contents)
+    writeFlushed(tmp, contents)
     renameSync(tmp, target)
   } catch (e) {
     try {

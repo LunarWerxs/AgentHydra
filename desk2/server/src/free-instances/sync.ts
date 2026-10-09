@@ -19,11 +19,12 @@
 // test's or a probe's folder never syncs.
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { FREE_PROVIDERS, type FreeInstance, type FreeProvider } from '@shared/free-instances'
 import { dpapiProtect, dpapiUnprotect } from './dpapi'
+import { writeFlushed } from '../write-flushed'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // The harness's session files: claudfree/state.py and claudfree/chatgpt/state.py.
@@ -107,7 +108,7 @@ export function writeLogin(file: string, provider: FreeProvider, cookies: Cookie
   if (!sealed) return false
   mkdirSync(dirname(file), { recursive: true })
   const temporary = `${file}.sync-${process.pid}`
-  writeFileSync(temporary, Buffer.concat([MAGIC[provider], Buffer.from(sealed)]), { mode: 0o600 })
+  writeFlushed(temporary, Buffer.concat([MAGIC[provider], Buffer.from(sealed)]), { mode: 0o600 })
   renameSync(temporary, file)
   return true
 }
@@ -387,7 +388,7 @@ export class FreeSync {
     const json = JSON.stringify({ rows: this.agreed })
     if (json === this.saved && existsSync(this.file)) return
     mkdirSync(dirname(this.file), { recursive: true })
-    writeFileSync(`${this.file}.tmp`, json, { mode: 0o600 })
+    writeFlushed(`${this.file}.tmp`, json, { mode: 0o600 })
     renameSync(`${this.file}.tmp`, this.file)
     this.saved = json
   }

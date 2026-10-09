@@ -7,7 +7,7 @@
 // until queue.json says it is being sent.
 
 import { randomUUID } from 'node:crypto'
-import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
@@ -27,6 +27,7 @@ import type {
 } from '@shared/protocol'
 import { createMediaCache, MAX_MEDIA_BYTES, type MediaCache, MEDIA_ROUTE } from '../media/cache'
 import { ChatBusyError, ChatError, type ChatManager, checkCwd, type Json, LIVE, obj, optBool, optString, parseCreate } from './chat-manager'
+import { writeFlushed } from '../write-flushed'
 
 /** What the queue needs of the chat manager (tests fake it). */
 export type QueueChats = Pick<ChatManager, 'list' | 'get' | 'listItems' | 'send' | 'createFromQueue'>
@@ -658,7 +659,7 @@ export class QueueManager {
     const data: QueueFile = { ...state, items: this.items, wasLive: [...this.wasLive] }
     const tmp = `${this.file}.${process.pid}.tmp`
     try {
-      writeFileSync(tmp, JSON.stringify(data))
+      writeFlushed(tmp, JSON.stringify(data))
       renameSync(tmp, this.file)
       return true
     } catch (err) {

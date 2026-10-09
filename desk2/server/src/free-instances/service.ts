@@ -64,9 +64,9 @@ export class FreeInstances {
   private forgetting = new Set<string>()
   private stopping = false
   /** Keep windows running: a first pass a minute after start, then every NUDGE_EVERY_MS. */
-  private keeper: ReturnType<typeof setTimeout> = setTimeout(() => { this.keepWindows(); this.keeper = setInterval(() => this.keepWindows(), NUDGE_EVERY_MS).unref() }, 60_000).unref()
+  private keeper: ReturnType<typeof setTimeout>
   /** The rolling refresh (refresh.ts): a first read a minute and a half after start, then one each REFRESH_TICK_MS. */
-  private refresher: ReturnType<typeof setTimeout> = setTimeout(() => { this.refreshNext(); this.refresher = setInterval(() => this.refreshNext(), REFRESH_TICK_MS).unref() }, 90_000).unref()
+  private refresher: ReturnType<typeof setTimeout>
   /** When the rolling refresh last started a read on each account: one per USAGE_EVERY_MS at most, so a read that
    *  fails before it records anything (setup, a crash) is not tried again every tick. */
   private refreshed = new Map<string, number>()
@@ -79,6 +79,11 @@ export class FreeInstances {
   constructor(home: string, private runner: FreeRunner = runFree, runtime?: FreeRuntime) {
     this.store = new FreeStorage(home)
     this.runtime = runtime ?? new ManagedFreeRuntime(home)
+    // Armed only once the store has loaded. Armed before (as field initialisers), a store that failed to load left
+    // them running on an instance with no store, and the first pass a minute later took the whole server down
+    // (2026-10-08), where the plugin's failure alone costs only Free.
+    this.keeper = setTimeout(() => { this.keepWindows(); this.keeper = setInterval(() => this.keepWindows(), NUDGE_EVERY_MS).unref() }, 60_000).unref()
+    this.refresher = setTimeout(() => { this.refreshNext(); this.refresher = setInterval(() => this.refreshNext(), REFRESH_TICK_MS).unref() }, 90_000).unref()
   }
   private prune(): void {
     for (const [id, job] of this.jobs) if (job.finishedAt && Date.now() - job.finishedAt > 15 * 60_000) { this.jobs.delete(id); this.fingerprints.delete(id) }

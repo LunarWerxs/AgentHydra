@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeDeleted, type FreeInstance, type FreeProvider, type FreeSettings, type FreeThread } from '@shared/free-instances'
 import { seedStats, type StatsData, validStats } from './stats'
 import { type TokenLedger, validLedger } from './tokens'
+import { writeFlushed } from '../write-flushed'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** A name nobody had to type ("Claude", "ChatGPT 2") follows the account; a deliberate one stays. */
@@ -31,9 +32,9 @@ function validDeleted(value: Data['deleted']): FreeDeleted[] {
   return Array.isArray(value) ? value.filter(d => d && typeof d.id === 'string' && UUID.test(d.id) && FREE_PROVIDERS.includes(d.provider) && Number.isInteger(d.num) && typeof d.name === 'string') : []
 }
 
-/** Reads accounts.json. Fails closed on damaged metadata; never silently replaces someone's stored account list. */
-function load(file: string): Data {
-  const value = JSON.parse(readFileSync(file, 'utf8')) as Data
+/** accounts.json's text. Fails closed on damaged metadata; never silently replaces someone's stored account list. */
+function load(text: string): Data {
+  const value = JSON.parse(text) as Data
   if (!Array.isArray(value.instances) || !Array.isArray(value.threads) || value.instances.some(i => !UUID.test(i.id) || !['claude', 'chatgpt'].includes(i.provider))) throw new Error('Invalid Free account metadata')
   value.settings = validSettings(value.settings as Partial<FreeSettings> | undefined)
   value.tokens = validTokens(value.tokens)
@@ -53,8 +54,10 @@ export class FreeStorage {
   private file: string
   constructor(private home: string) {
     this.file = join(home, 'free', 'accounts.json')
-    if (existsSync(this.file)) this.data = load(this.file)
-    else this.migrate()
+    const bytes = existsSync(this.file) ? readFileSync(this.file) : null
+    if (!bytes) this.migrate()
+    else if (bytes.every(b => b === 0)) this.rebuild()
+    else this.data = load(bytes.toString('utf8'))
   }
   create(provider: FreeProvider, name?: string): FreeInstance {
     const instance: FreeInstance = { id: randomUUID(), num: Math.max(0, ...this.data.instances.map(i => i.num)) + 1, provider, name: name ?? (provider === 'claude' ? 'Claude' : 'ChatGPT'), autoName: name === undefined, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
@@ -92,8 +95,28 @@ export class FreeStorage {
   }
   save(): void {
     mkdirSync(join(this.home, 'free'), { recursive: true })
-    writeFileSync(`${this.file}.tmp`, JSON.stringify(this.data), { mode: 0o600 })
+    writeFlushed(`${this.file}.tmp`, JSON.stringify(this.data), { mode: 0o600 })
     renameSync(`${this.file}.tmp`, this.file)
+  }
+  /**
+   * accounts.json is only NUL bytes (or empty): an unclean shutdown kept its length and lost its data, as on 2026-10-08,
+   * so there is nothing left in it to protect. It is set aside, never deleted, and each account folder holding a login
+   * becomes an account again under a plain name, which its first sign-in check (refresh.ts, first for an account never
+   * checked) replaces with the account's own; that check's chat read brings its chats back.
+   */
+  private rebuild(): void {
+    renameSync(this.file, `${this.file}.unwritten-${Date.now()}`)
+    const root = join(this.home, 'free', 'instances')
+    const folders = existsSync(root) ? readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory() && UUID.test(d.name)) : []
+    const found = folders.flatMap(d => {
+      const dir = join(root, d.name)
+      const provider: FreeProvider | null = existsSync(join(dir, 'session.dpapi')) ? 'claude' : existsSync(join(dir, 'chatgpt', 'session.dpapi')) ? 'chatgpt' : null
+      return provider ? [{ id: d.name, provider, born: statSync(dir).birthtimeMs }] : []
+    }).sort((a, b) => a.born - b.born)
+    const instances = found.map(({ id, provider }, i): FreeInstance => ({ id, num: i + 1, provider, name: provider === 'claude' ? 'Claude' : 'ChatGPT', autoName: true, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }))
+    this.data = { instances, threads: [], settings: { ...FREE_SETTINGS_DEFAULTS }, tokens: {}, stats: {}, forgotten: [], deleted: [] }
+    console.error(`[free] accounts.json held no data (an unclean shutdown): set aside, ${instances.length} account(s) rebuilt from their folders`)
+    this.save()
   }
   private migrate(): void {
     let legacy: { harnessDir?: unknown }

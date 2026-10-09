@@ -9,6 +9,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
+- **A power cut no longer takes the window or the Free accounts down**
 - **The working mark picks its own look for five minutes, and runs at about half speed**
 - **Background tasks slides in and out, opens narrower and drags to any width**
 - **Thinking folds into the tool runs around it in outside chats too**
@@ -31,6 +32,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **Everything in Unreleased**
 
+- **A power cut no longer takes the window or the Free accounts down.** A Free accounts list that a crash left empty
+  is set aside and rebuilt from the accounts' own folders, and each account takes its name back at its next check.
+  Every saved list is now on the disk before it replaces the old one, so a crash leaves the old copy or the new one.
 - **The working mark picks its own look for five minutes, and runs at about half speed.** The Working animation
   picker is gone from Settings -> General -> Appearance: every mark in the window shows the same randomly chosen
   look, swapping for another (never the same twice in a row) every five minutes, and each animation is slowed to

@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { afterEach, describe, expect, jest, test } from 'bun:test'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
@@ -601,6 +601,36 @@ describe('Free jobs and routes', () => {
     expect(existsSync(join(home, 'free', 'instances', claude!.id, 'requests.json'))).toBe(false)
     expect(existsSync(join(legacy, '.state', 'session.dpapi'))).toBe(true)
     expect(new FreeStorage(home).data.instances.map(i => i.id)).toEqual(migrated.data.instances.map(i => i.id))
+  })
+  test('an accounts.json an unclean shutdown left as NUL bytes is kept aside, and each account folder holding a login is an account again, unchecked, under a name its first check replaces', () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-free-unwritten-')); dirs.push(home)
+    const folders = join(home, 'free', 'instances')
+    const claude = 'aaaaaaaa-0000-4000-8000-000000000001', gpt = 'aaaaaaaa-0000-4000-8000-000000000002', noLogin = 'aaaaaaaa-0000-4000-8000-000000000003'
+    mkdirSync(join(folders, claude), { recursive: true })
+    writeFileSync(join(folders, claude, 'session.dpapi'), 'opaque encrypted fixture')
+    mkdirSync(join(folders, gpt, 'chatgpt'), { recursive: true })
+    writeFileSync(join(folders, gpt, 'chatgpt', 'session.dpapi'), 'another encrypted fixture')
+    mkdirSync(join(folders, noLogin), { recursive: true })
+    writeFileSync(join(home, 'free', 'accounts.json'), Buffer.alloc(4096))
+    const store = new FreeStorage(home)
+    const rebuilt = store.data.instances.map(i => [i.id, i.provider, i.name, i.autoName, i.loggedIn, i.checkedAt]).sort()
+    expect(rebuilt).toEqual([[claude, 'claude', 'Claude', true, false, null], [gpt, 'chatgpt', 'ChatGPT', true, false, null]])
+    expect(store.data.instances.map(i => i.num).sort()).toEqual([1, 2])
+    const kept = readdirSync(join(home, 'free')).filter(f => f.startsWith('accounts.json.unwritten-'))
+    expect(kept.map(f => readFileSync(join(home, 'free', f)).length)).toEqual([4096])
+    expect(new FreeStorage(home).data.instances.map(i => i.id).sort()).toEqual([claude, gpt])
+  })
+  test('a store that does not load costs Free alone: the service refuses it and leaves no timer to run on it later', () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-free-damaged-')); dirs.push(home)
+    mkdirSync(join(home, 'free'), { recursive: true })
+    writeFileSync(join(home, 'free', 'accounts.json'), JSON.stringify({ instances: 'damaged', threads: [] }))
+    jest.useFakeTimers()
+    try {
+      expect(() => new FreeInstances(home, async () => output({}))).toThrow('Invalid Free account metadata')
+      expect(() => jest.advanceTimersByTime(10 * 60_000)).not.toThrow()
+    } finally {
+      jest.useRealTimers()
+    }
   })
   test('forgetting a thread removes it from the list and the saved file, keeps it out of a later read of the private chats, keeps the account\'s tokens, is refused while its message runs, and ends once the chat is used again', async () => {
     let release: (value: RunOutput) => void = () => {}

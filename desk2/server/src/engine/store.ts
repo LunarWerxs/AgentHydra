@@ -2,11 +2,12 @@
 // written atomically (temp file + rename) and debounced; <home>/chats/<chatId>.jsonl holds one
 // TranscriptItem per line, append-only, where the last line for an id wins on load.
 
-import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, closeSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, closeSync, renameSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { userTurns } from './system-text'
 import { mediaCache } from '../media/cache'
+import { writeFlushed } from '../write-flushed'
 
 /** Live-only fields: never saved, reset on load (every chat starts 'closed'). */
 const VOLATILE = ['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive'] as const
@@ -98,7 +99,7 @@ export class ChatStore {
     const text = JSON.stringify(chats.map(toStored))
     if (text === this.lastSaved && existsSync(this.chatsFile)) return
     const tmp = `${this.chatsFile}.${process.pid}.tmp`
-    writeFileSync(tmp, text)
+    writeFlushed(tmp, text)
     renameSync(tmp, this.chatsFile)
     this.lastSaved = text
   }
@@ -174,7 +175,7 @@ export class ChatStore {
     const lines = new Map<string, string>()
     addLines(lines, text)
     const tmp = `${file}.${process.pid}.tmp`
-    writeFileSync(tmp, [...lines].flatMap(([id, line]) => (keep.has(id) ? [line + '\n'] : [])).join(''))
+    writeFlushed(tmp, [...lines].flatMap(([id, line]) => (keep.has(id) ? [line + '\n'] : [])).join(''))
     renameSync(tmp, file)
     this.checkedTails.add(file)
     this.lineCache.delete(file)

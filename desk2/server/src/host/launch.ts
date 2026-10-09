@@ -9,9 +9,10 @@
 // the spec file (the host deletes it once read). Elsewhere a detached spawn is a real detach.
 
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { HostFile, HostSpec } from './protocol'
+import { writeFlushed } from '../write-flushed'
 
 /** The host program. */
 export const HOST_ENTRY = join(import.meta.dir, 'chat-host.ts')
@@ -94,7 +95,7 @@ export function writeHostFile(dir: string, file: HostFile): void {
   mkdirSync(dir, { recursive: true })
   const path = hostFilePath(dir, file.chatId)
   const tmp = `${path}.${process.pid}.tmp`
-  writeFileSync(tmp, JSON.stringify(file))
+  writeFlushed(tmp, JSON.stringify(file))
   renameSync(tmp, path)
 }
 
@@ -143,7 +144,7 @@ export async function launchHost(spec: HostSpec, o: LaunchOptions = {}): Promise
   mkdirSync(spec.dir, { recursive: true })
   const specPath = join(spec.dir, `${spec.chatId}.spec.json`)
   const tmp = `${specPath}.${process.pid}.tmp`
-  writeFileSync(tmp, JSON.stringify(spec))
+  writeFlushed(tmp, JSON.stringify(spec))
   renameSync(tmp, specPath)
   const plan = detachedCommand(o.platform ?? process.platform, [o.bun ?? process.execPath, HOST_ENTRY, '--spec', specPath])
   try {
