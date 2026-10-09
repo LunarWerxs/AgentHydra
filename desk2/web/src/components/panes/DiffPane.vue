@@ -4,6 +4,7 @@ import { RefreshCw, CircleCheck, FolderX } from '@lucide/vue'
 import { icons } from '@/lib/icons'
 import type { GitStatus } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
+import { Tip } from '@/components/ui/tooltip'
 import { usePaneApi } from './api'
 import { finishedTurns, parseUnifiedDiff, sameFolder, statusLetter, type ParsedDiff } from './diff'
 
@@ -136,40 +137,39 @@ onMounted(refresh)
   <div class="flex size-full min-w-0 flex-col bg-(--bg-page) text-[13px] leading-[19.5px] text-(--text)">
     <div class="flex h-8 shrink-0 items-center gap-1 ps-3 pe-2">
       <span class="font-medium">Changes</span>
-      <span
-        v-if="status?.isRepo && status.branch"
-        class="ms-1 flex h-5 min-w-0 items-center gap-1 rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 text-(--text-2)"
-        :title="status.branch"
-      >
-        <component :is="icons.branch" class="size-3 shrink-0" />
-        <span class="truncate">{{ status.branch }}</span>
-        <span v-if="status.ahead" class="tnum shrink-0 text-(--text-muted)">↑{{ status.ahead }}</span>
-        <span v-if="status.behind" class="tnum shrink-0 text-(--text-muted)">↓{{ status.behind }}</span>
-      </span>
+      <Tip v-if="status?.isRepo && status.branch" :label="status.branch">
+        <span class="ms-1 flex h-5 min-w-0 items-center gap-1 rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 text-(--text-2)">
+          <component :is="icons.branch" class="size-3 shrink-0" />
+          <span class="truncate">{{ status.branch }}</span>
+          <span v-if="status.ahead" class="tnum shrink-0 text-(--text-muted)">↑{{ status.ahead }}</span>
+          <span v-if="status.behind" class="tnum shrink-0 text-(--text-muted)">↓{{ status.behind }}</span>
+        </span>
+      </Tip>
       <span class="flex-1" />
       <span v-if="status?.isRepo && files.length" class="tnum me-1 flex shrink-0 gap-1 text-[12px] leading-4">
         <span class="text-(--git-add)">+{{ status.added }}</span>
         <span class="text-(--git-del)">-{{ status.removed }}</span>
       </span>
-      <button
-        type="button"
-        class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text) focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
-        title="Refresh"
-        aria-label="Refresh"
-        @click="refresh"
-      >
-        <RefreshCw class="size-4" :class="{ 'animate-spin': loading }" />
-      </button>
-      <button
-        v-if="closable"
-        type="button"
-        class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text) focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
-        title="Close"
-        aria-label="Close changes"
-        @click="emit('close')"
-      >
-        <component :is="icons.dismiss" class="size-4" />
-      </button>
+      <Tip label="Refresh">
+        <button
+          type="button"
+          class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text) focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
+          aria-label="Refresh"
+          @click="refresh"
+        >
+          <RefreshCw class="size-4" :class="{ 'animate-spin': loading }" />
+        </button>
+      </Tip>
+      <Tip v-if="closable" label="Close">
+        <button
+          type="button"
+          class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text) focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
+          aria-label="Close changes"
+          @click="emit('close')"
+        >
+          <component :is="icons.dismiss" class="size-4" />
+        </button>
+      </Tip>
     </div>
 
     <div v-if="error" class="mx-2 mt-1 rounded-(--radius-10) bg-(--danger-bg) px-3 py-2 text-[13px] text-(--danger-text)">
@@ -195,47 +195,47 @@ onMounted(refresh)
         <div class="flex h-8.5 items-end pb-1 ps-1.5 text-[12px] leading-4 text-(--text-muted)">
           {{ files.length === 1 ? '1 file changed' : `${files.length} files changed` }}
         </div>
-        <button
-          v-for="{ f, letter, word, name, dir } in fileRows"
-          :key="f.path"
-          type="button"
-          class="flex h-6.5 w-full items-center gap-1 rounded-(--radius-6) px-0.5 text-start transition-colors duration-60 hover:bg-(--fill-hover) focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
-          :class="{ 'bg-(--fill-selected) hover:bg-(--fill-selected)': f.path === selectedPath }"
-          :aria-pressed="f.path === selectedPath"
-          :title="`${word}: ${f.path}`"
-          @click="open(f.path)"
-        >
-          <span
-            class="flex size-6 shrink-0 items-center justify-center text-[12px] font-semibold leading-4"
-            :style="{ color: letterColor[letter] ?? 'var(--text-muted)' }"
-          >{{ letter }}</span>
-          <span class="min-w-0 flex-1 truncate">
-            <span>{{ name }}</span>
-            <span v-if="dir" class="ms-1.5 text-[12px] text-(--text-muted)">{{ dir }}</span>
-          </span>
-          <span class="tnum flex shrink-0 gap-1 pe-1.5 text-[12px] leading-4">
-            <span v-if="f.added" class="text-(--git-add)">+{{ f.added }}</span>
-            <span v-if="f.removed" class="text-(--git-del)">-{{ f.removed }}</span>
-          </span>
-        </button>
+        <Tip v-for="{ f, letter, word, name, dir } in fileRows" :key="f.path" :label="`${word}: ${f.path}`">
+          <button
+            type="button"
+            class="flex h-6.5 w-full items-center gap-1 rounded-(--radius-6) px-0.5 text-start transition-colors duration-60 hover:bg-(--fill-hover) focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
+            :class="{ 'bg-(--fill-selected) hover:bg-(--fill-selected)': f.path === selectedPath }"
+            :aria-pressed="f.path === selectedPath"
+            @click="open(f.path)"
+          >
+            <span
+              class="flex size-6 shrink-0 items-center justify-center text-[12px] font-semibold leading-4"
+              :style="{ color: letterColor[letter] ?? 'var(--text-muted)' }"
+            >{{ letter }}</span>
+            <span class="min-w-0 flex-1 truncate">
+              <span>{{ name }}</span>
+              <span v-if="dir" class="ms-1.5 text-[12px] text-(--text-muted)">{{ dir }}</span>
+            </span>
+            <span class="tnum flex shrink-0 gap-1 pe-1.5 text-[12px] leading-4">
+              <span v-if="f.added" class="text-(--git-add)">+{{ f.added }}</span>
+              <span v-if="f.removed" class="text-(--git-del)">-{{ f.removed }}</span>
+            </span>
+          </button>
+        </Tip>
       </div>
 
       <div v-if="selectedPath" class="min-h-0 flex-1 overflow-auto border-t border-(--border)">
         <div class="sticky top-0 z-10 flex h-8 items-center gap-1.5 bg-(--bg-page) ps-3 pe-2 shadow-[inset_0_-1px_0_var(--border)]">
-          <span class="min-w-0 flex-1 truncate text-(--text-2)" :title="selectedPath">{{ selectedPath }}</span>
+          <Tip :label="selectedPath"><span class="min-w-0 flex-1 truncate text-(--text-2)">{{ selectedPath }}</span></Tip>
           <span v-if="selectedFile" class="tnum flex shrink-0 gap-1 text-[12px] leading-4">
             <span v-if="selectedFile.added" class="text-(--git-add)">+{{ selectedFile.added }}</span>
             <span v-if="selectedFile.removed" class="text-(--git-del)">-{{ selectedFile.removed }}</span>
           </span>
+          <Tip label="Close diff">
           <button
             type="button"
             class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text)"
-            title="Close diff"
             aria-label="Close diff"
             @click="open(selectedPath)"
           >
             <component :is="icons.dismiss" class="size-4" />
           </button>
+          </Tip>
         </div>
         <div v-if="diffLoading && !diff" class="px-3 py-1.5 text-(--text-muted)">Loading diff…</div>
         <div v-else-if="diffError" class="px-3 py-1.5 text-(--danger-text)">{{ diffError }}</div>

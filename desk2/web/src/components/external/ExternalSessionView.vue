@@ -12,6 +12,7 @@ import RevealStep from '@/components/transcript/parts/RevealStep.vue'
 import { nowDoing, runningFor } from '@/components/transcript/lib/now-doing'
 import { useClock } from '@/lib/clock'
 import Composer from '@/components/composer/Composer.vue'
+import { Tip } from '@/components/ui/tooltip'
 import SessionHeader from '@/components/session-header/SessionHeader.vue'
 import { displayItems, type FindHit } from '@/components/session-header/logic'
 import { displayPrefs } from '@/components/session-header/state'
@@ -250,16 +251,18 @@ onUnmounted(() => {
       <!-- Room below (owner, 2026-10-08: "it's too close" to the composer); above, the transcript's own 20px is the gap, a
            turn's, as between any two rows (owner, 2026-10-08: the last ones had "way too big of gaps"). -->
       <div class="shrink-0 px-8 pb-4 pt-1">
-        <p class="mx-auto flex h-6 w-full max-w-3xl items-center gap-1.25 px-2 text-[14px] leading-5 text-(--text-muted)" role="status" :title="liveWhere">
-          <span class="flex size-6 shrink-0 items-center justify-center">
-            <WorkingMark v-if="working" :label="glyph?.label ?? 'Working'" />
-            <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
-          </span>
-          <span class="min-w-0 truncate" :class="working ? 'tx-shimmer' : 'text-warning-text'">{{ liveText }}</span>
-          <RevealStep v-if="liveStep" @click="revealLive" />
-          <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-[13px]" aria-hidden="true">{{ liveFor }}</span>
-          <span class="sr-only">{{ liveWhere }}</span>
-        </p>
+        <Tip :label="liveWhere">
+          <p class="mx-auto flex h-6 w-full max-w-3xl items-center gap-1.25 px-2 text-[14px] leading-5 text-(--text-muted)" role="status">
+            <span class="flex size-6 shrink-0 items-center justify-center">
+              <WorkingMark v-if="working" :label="glyph?.label ?? 'Working'" />
+              <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
+            </span>
+            <span class="min-w-0 truncate" :class="working ? 'tx-shimmer' : 'text-warning-text'">{{ liveText }}</span>
+            <RevealStep v-if="liveStep" @click="revealLive" />
+            <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-[13px]" aria-hidden="true">{{ liveFor }}</span>
+            <span class="sr-only">{{ liveWhere }}</span>
+          </p>
+        </Tip>
         <ul v-if="queued.length" class="mx-auto flex w-full max-w-3xl flex-col gap-0.5 px-2 pt-1 ps-8 text-[12px] leading-4 text-(--text-muted)" aria-label="Queued messages">
           <li v-for="q in queued" :key="q.id" class="truncate" role="status">Queued, runs when this turn ends: {{ q.text }}</li>
         </ul>
@@ -274,7 +277,7 @@ onUnmounted(() => {
           <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
         </span>
         <template v-if="isWorking">
-          <span class="min-w-0 truncate text-[14px] leading-5" :class="working ? 'tx-shimmer' : 'text-warning-text'" :title="liveWhere">{{ liveText }}</span>
+          <Tip :label="liveWhere"><span class="min-w-0 truncate text-[14px] leading-5" :class="working ? 'tx-shimmer' : 'text-warning-text'">{{ liveText }}</span></Tip>
           <RevealStep v-if="liveStep" @click="revealLive" />
           <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-[13px]" aria-hidden="true">{{ liveFor }}</span>
           <span class="sr-only">{{ liveWhere }}</span>
@@ -298,7 +301,7 @@ onUnmounted(() => {
         </span>
         <RevealStep v-if="liveStep" @click="revealLive" />
         <span v-if="liveFor" class="shrink-0 tabular-nums text-[13px] text-(--text-muted)" aria-hidden="true">{{ liveFor }}</span>
-        <span v-if="error" class="max-w-[40%] shrink truncate text-(--danger-text)" :title="error">{{ error }}</span>
+        <Tip v-if="error" :label="error"><span class="max-w-[40%] shrink truncate text-(--danger-text)">{{ error }}</span></Tip>
       </div>
     </div>
   </div>

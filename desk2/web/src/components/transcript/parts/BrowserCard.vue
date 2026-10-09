@@ -12,6 +12,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check, Copy, Globe, Maximize2, Monitor } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
+import { Tip } from '@/components/ui/tooltip'
 import { BROWSER_CLOSED_EVENT, OPEN_BROWSER_EVENT } from '@shared/browser'
 import { browserErrorSummary, browserOpenRequest, browserRunAddress, DEFAULT_BROWSER, isOwnChromeCall, ownChromeAction, ownChromeClosed, parseBrowserCall, YOUR_CHROME } from '../lib/tools'
 import { imageSrc, openLightbox } from '../lib/media'
@@ -220,12 +221,12 @@ function open() {
   <div ref="root" class="group/card relative w-90 max-w-full">
     <!-- The person's own Chrome and a closed browser are a flat neutral grey: no brand ring, nothing that looks like it is loading. -->
     <div class="tx-card relative overflow-hidden" :class="grey ? '' : 'shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand)_35%,transparent)]'">
+      <Tip :label="tip ?? ''">
       <component
         :is="surface"
         :type="surface === 'button' ? 'button' : undefined"
         class="group/open relative block aspect-16/10 w-full overflow-hidden rounded-[inherit] text-start outline-none focus-visible:ring-2 focus-visible:ring-brand"
         :class="grey ? 'bg-(--bg-picture)' : 'bg-fill-hover'"
-        :title="tip || undefined"
         @click="open"
       >
         <img v-if="picture" :src="picture" alt="" class="size-full rounded-[inherit] object-cover object-left-top" :class="gone ? 'opacity-25 grayscale' : past ? 'opacity-60 grayscale' : ''" draggable="false" />
@@ -245,15 +246,19 @@ function open() {
         </span>
         <span v-if="gone" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">× Closed</span>
         <span v-else-if="past" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">Page closed</span>
+        <Tip :label="`${info.verb}${info.url ? ' ' + info.url : ''}`">
         <span
           class="absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1.5 bg-[linear-gradient(to_top,rgb(0_0_0/0.78),transparent)] px-2.5 pb-1.5 pt-5 text-[12px] text-white opacity-35 transition-opacity duration-120 hover:opacity-100 group-focus-visible/open:opacity-100"
-          :title="`${info.verb}${info.url ? ' ' + info.url : ''}`"
         >
-          <span v-if="live" class="size-1.5 shrink-0 animate-pulse rounded-full bg-success" title="Live" />
+          <Tip v-if="live" label="Live">
+            <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-success" />
+          </Tip>
           <Monitor v-if="ownChrome" class="size-3.5 shrink-0" aria-hidden="true" />
           <Globe v-else class="size-3.5 shrink-0" aria-hidden="true" />
           <span class="min-w-0 truncate">{{ shownUrl && !gone ? shownUrl : ownChrome ? ownAction : info.verb }}</span>
-          <span class="shrink-0 rounded bg-white/20 px-1.5 text-[11px]" :title="ownChrome ? 'Your own Chrome window' : info.profile">{{ chip }}</span>
+          <Tip :label="ownChrome ? 'Your own Chrome window' : info.profile">
+            <span class="shrink-0 rounded bg-white/20 px-1.5 text-[11px]">{{ chip }}</span>
+          </Tip>
           <!-- Room for the count and status drawn over this end: the address truncates before the chip meets them. -->
           <span class="invisible flex shrink-0 items-center gap-1.5 tabular-nums" aria-hidden="true">
             <span class="w-5" />
@@ -261,40 +266,45 @@ function open() {
             <span class="size-3.5" />
           </span>
         </span>
+        </Tip>
       </component>
+      </Tip>
       <!-- Over the caption's right end, not inside its button: the count and status, with Copy the calls on hover. -->
       <span class="pointer-events-none absolute bottom-0 right-0 flex items-center px-2.5 pb-1.5 text-[12px] text-white">
         <span class="group/calls pointer-events-auto flex items-center gap-1.5 tabular-nums opacity-35 transition-opacity duration-120 focus-within:opacity-100 hover:opacity-100">
-          <button
-            type="button"
-            class="grid h-5 place-items-center rounded-6 bg-black/55 px-1 text-white opacity-0 outline-none transition-opacity duration-120 hover:bg-black/75 focus-visible:opacity-100 group-hover/calls:opacity-100"
-            :class="copied ? 'opacity-100!' : ''"
-            :aria-label="count > 1 ? `Copy the ${count} calls` : 'Copy the call'"
-            :title="count > 1 ? `Copy the ${count} calls` : 'Copy the call'"
-            @click="copyCalls"
-          >
-            <span v-if="copied" class="flex items-center gap-1 text-[11px]"><Check class="size-3" aria-hidden="true" />Copied</span>
-            <Copy v-else class="size-3" aria-hidden="true" />
-          </button>
+          <Tip :label="count > 1 ? `Copy the ${count} calls` : 'Copy the call'">
+            <button
+              type="button"
+              class="grid h-5 place-items-center rounded-6 bg-black/55 px-1 text-white opacity-0 outline-none transition-opacity duration-120 hover:bg-black/75 focus-visible:opacity-100 group-hover/calls:opacity-100"
+              :class="copied ? 'opacity-100!' : ''"
+              :aria-label="count > 1 ? `Copy the ${count} calls` : 'Copy the call'"
+              @click="copyCalls"
+            >
+              <span v-if="copied" class="flex items-center gap-1 text-[11px]"><Check class="size-3" aria-hidden="true" />Copied</span>
+              <Copy v-else class="size-3" aria-hidden="true" />
+            </button>
+          </Tip>
           <template v-if="count > 1">{{ count }} calls</template>
           <StatusIcon :status="item.status" />
         </span>
       </span>
     </div>
-    <button
-      v-if="picture"
-      type="button"
-      class="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-6 bg-black/55 text-white opacity-0 outline-none transition-opacity duration-120 hover:bg-black/75 focus-visible:opacity-100 group-hover/card:opacity-100"
-      aria-label="Open full screen"
-      title="Open full screen"
-      @click="openLightbox(picture!, 'Browser')"
-    >
-      <Maximize2 class="size-3.5" aria-hidden="true" />
-    </button>
+    <Tip v-if="picture" label="Open full screen">
+      <button
+        type="button"
+        class="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-6 bg-black/55 text-white opacity-0 outline-none transition-opacity duration-120 hover:bg-black/75 focus-visible:opacity-100 group-hover/card:opacity-100"
+        aria-label="Open full screen"
+        @click="openLightbox(picture!, 'Browser')"
+      >
+        <Maximize2 class="size-3.5" aria-hidden="true" />
+      </button>
+    </Tip>
     <!-- A failure in words, at most two lines: the headline in the danger colour, its hint muted; the full text on hover. -->
-    <p v-if="error" class="mt-1 line-clamp-2 min-w-0 wrap-break-word px-1 text-[12px]" :title="[error.headline, error.hint].filter(Boolean).join(' — ')">
-      <span class="text-danger-text">{{ error.headline }}</span>
-      <span v-if="error.hint" class="text-text-muted"> — {{ error.hint }}</span>
-    </p>
+    <Tip v-if="error" :label="[error.headline, error.hint].filter(Boolean).join(' — ')">
+      <p class="mt-1 line-clamp-2 min-w-0 wrap-break-word px-1 text-[12px]">
+        <span class="text-danger-text">{{ error.headline }}</span>
+        <span v-if="error.hint" class="text-text-muted"> — {{ error.hint }}</span>
+      </p>
+    </Tip>
   </div>
 </template>

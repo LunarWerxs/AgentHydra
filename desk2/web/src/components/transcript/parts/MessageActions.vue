@@ -19,6 +19,7 @@ import type { DraftImage } from '@/components/composer/draft-images'
 import ChangeProjectMenu from '@/components/composer/ChangeProjectMenu.vue'
 import { movedChat } from '@/components/composer/change-project'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
 import { undoCount } from '../lib/undo-count'
@@ -231,20 +232,22 @@ async function branch() {
     :class="[align === 'end' ? 'justify-end' : 'justify-start', (pinned || moreOpen || moveState !== 'idle' || undoState === 'failed' || forkState !== 'idle') && 'tx-actions-pinned']"
   >
     <time v-if="align === 'end'" class="tx-actions-time">{{ time }}</time>
-    <button type="button" class="tx-action" :aria-label="copied ? 'Copied' : 'Copy'" :title="copied ? 'Copied' : 'Copy'" @click="copy">
-      <component :is="copied ? icons.check : icons.copy" class="size-4" />
-    </button>
-    <button
-      v-if="canUndo"
-      type="button"
-      class="tx-action"
-      :aria-label="undoLabel"
-      :title="undoLabel"
-      :disabled="undoState === 'undoing'"
-      @click="askOrUndo"
-    >
-      <component :is="RotateCcw" class="size-4" :class="undoState === 'failed' && 'text-danger-text'" />
-    </button>
+    <Tip :label="copied ? 'Copied' : 'Copy'">
+      <button type="button" class="tx-action" :aria-label="copied ? 'Copied' : 'Copy'" @click="copy">
+        <component :is="copied ? icons.check : icons.copy" class="size-4" />
+      </button>
+    </Tip>
+    <Tip v-if="canUndo" :label="undoLabel">
+      <button
+        type="button"
+        class="tx-action"
+        :aria-label="undoLabel"
+        :disabled="undoState === 'undoing'"
+        @click="askOrUndo"
+      >
+        <component :is="RotateCcw" class="size-4" :class="undoState === 'failed' && 'text-danger-text'" />
+      </button>
+    </Tip>
     <Dialog :open="askUndo" @update:open="(o: boolean) => !o && (askUndo = false)">
       <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
         <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Undo {{ undoTakes?.total }} messages?</DialogTitle>
@@ -259,32 +262,34 @@ async function branch() {
       </DialogContent>
     </Dialog>
     <!-- A reply's row has no Fork button, but its dialog's Fork instead shows its progress or failure here -->
-    <button
-      v-if="canFork || forkState !== 'idle'"
-      type="button"
-      class="tx-action"
-      :aria-label="forkLabel"
-      :title="forkLabel"
-      :disabled="forkState === 'forking'"
-      @click="fork"
-    >
-      <component :is="icons.fork" class="size-4" :class="forkState === 'failed' && 'text-danger-text'" />
-    </button>
-    <button
-      v-if="canBranch"
-      type="button"
-      class="tx-action"
-      :aria-label="branchLabel"
-      :title="branchLabel"
-      :disabled="branchState === 'branching'"
-      @click="branch"
-    >
-      <component :is="icons.fork" class="size-4" :class="branchState === 'failed' && 'text-danger-text'" />
-    </button>
-    <ChangeProjectMenu v-if="canResend" v-model:open="moreOpen" :current="ctx.cwd.value" header="Send it in a new chat in" @choose="moveTo">
-      <button type="button" class="tx-action" :aria-label="moreLabel" :title="moreLabel" :disabled="moveState === 'moving'">
-        <component :is="shellGlyphs.rowMore" class="size-4" :class="moveState === 'failed' && 'text-danger-text'" />
+    <Tip v-if="canFork || forkState !== 'idle'" :label="forkLabel">
+      <button
+        type="button"
+        class="tx-action"
+        :aria-label="forkLabel"
+        :disabled="forkState === 'forking'"
+        @click="fork"
+      >
+        <component :is="icons.fork" class="size-4" :class="forkState === 'failed' && 'text-danger-text'" />
       </button>
+    </Tip>
+    <Tip v-if="canBranch" :label="branchLabel">
+      <button
+        type="button"
+        class="tx-action"
+        :aria-label="branchLabel"
+        :disabled="branchState === 'branching'"
+        @click="branch"
+      >
+        <component :is="icons.fork" class="size-4" :class="branchState === 'failed' && 'text-danger-text'" />
+      </button>
+    </Tip>
+    <ChangeProjectMenu v-if="canResend" v-model:open="moreOpen" :current="ctx.cwd.value" header="Send it in a new chat in" @choose="moveTo">
+      <Tip :label="moreLabel">
+        <button type="button" class="tx-action" :aria-label="moreLabel" :disabled="moveState === 'moving'">
+          <component :is="shellGlyphs.rowMore" class="size-4" :class="moveState === 'failed' && 'text-danger-text'" />
+        </button>
+      </Tip>
     </ChangeProjectMenu>
     <slot />
     <time v-if="align !== 'end'" class="tx-actions-time">{{ time }}</time>

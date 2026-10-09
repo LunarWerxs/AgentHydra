@@ -444,12 +444,12 @@ watch(
           <AppWindow v-else-if="t.kind === 'saved'" class="size-3.5 shrink-0" aria-hidden="true" />
           <Search v-else class="size-3.5 shrink-0" aria-hidden="true" />
           <span class="min-w-0 flex-1 truncate text-[12px]">{{ titleOf(t) }}</span>
-          <span
-            v-if="t.kind === 'saved' && t.page"
-            class="max-w-14.5 shrink-0 truncate rounded-(--radius-6) bg-(--fill-selected) px-1 text-[10px] leading-4 text-(--text-2)"
-            data-testid="profile-badge"
-            :title="`Chrome profile: ${t.target}`"
-          >{{ labelOf(t.target) ?? t.target }}</span>
+          <Tip v-if="t.kind === 'saved' && t.page" :label="`Chrome profile: ${t.target}`">
+            <span
+              class="max-w-14.5 shrink-0 truncate rounded-(--radius-6) bg-(--fill-selected) px-1 text-[10px] leading-4 text-(--text-2)"
+              data-testid="profile-badge"
+            >{{ labelOf(t.target) ?? t.target }}</span>
+          </Tip>
           <button
             type="button"
             class="size-5 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) hover:bg-(--fill-selected) hover:text-(--text) focus-visible:shadow-(--focus-ring) focus-visible:outline-none group-hover:flex"

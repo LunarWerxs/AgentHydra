@@ -14,6 +14,7 @@ import { clearErrors, dismissError, errorList, openInEditor } from '../api'
 import { useDevServers } from '../store'
 import { ago, clockTime } from './format'
 import { BTN_DANGER_SM, BTN_GHOST, BTN_GHOST_SM, CARD, CHIP, chip } from './kit/kit'
+import { Tip } from '@/components/ui/tooltip'
 import EmptyState from './kit/EmptyState.vue'
 
 // A server's Errors tab (owner, 2026-10-07: "The errors look like shit"): its de-duplicated errors, newest first, each
@@ -126,7 +127,7 @@ const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-de
       <li v-for="(e, i) in list" :key="e.fingerprint" :class="CARD" class="flex flex-col gap-3 p-4">
         <div class="flex items-center gap-2">
           <span :class="CHIP">{{ SOURCE[e.source] ?? e.source }}</span>
-          <span :class="chip('danger')" class="font-medium tnum" :title="`Seen ${e.count} ${e.count === 1 ? 'time' : 'times'}`">×{{ e.count }}</span>
+          <Tip :label="`Seen ${e.count} ${e.count === 1 ? 'time' : 'times'}`"><span :class="chip('danger')" class="font-medium tnum">×{{ e.count }}</span></Tip>
           <span class="flex-1" />
           <button type="button" :class="BTN_GHOST_SM" :disabled="dismissing === e.fingerprint" :aria-busy="dismissing === e.fingerprint" @click="dismiss(e)">Dismiss</button>
         </div>
@@ -143,7 +144,7 @@ const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-de
 
         <p class="flex items-center gap-1.5 text-[12px] text-text-muted">
           <Clock class="size-3.5 shrink-0" aria-hidden="true" />
-          <span>First seen {{ clockTime(e.firstSeen, now) }} · <span :title="clockTime(e.lastSeen, now)">last seen {{ ago(e.lastSeen, now) }}</span></span>
+          <span>First seen {{ clockTime(e.firstSeen, now) }} · <Tip :label="clockTime(e.lastSeen, now)"><span>last seen {{ ago(e.lastSeen, now) }}</span></Tip></span>
         </p>
 
         <div v-if="e.frames.length" class="flex flex-col gap-1">
@@ -156,13 +157,11 @@ const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-de
             Source · {{ e.frames.length }} {{ e.frames.length === 1 ? 'frame' : 'frames' }}
           </button>
           <div v-if="framesOpen(e, i)" class="flex flex-col divide-y divide-border overflow-hidden rounded-(--radius-6) shadow-[inset_0_0_0_1px_var(--border)]">
+            <Tip v-for="(f, j) in e.frames" :key="`${f.file}${at(f)}#${j}`" :label="`${f.file}${at(f)}`">
             <button
-              v-for="(f, j) in e.frames"
-              :key="`${f.file}${at(f)}#${j}`"
               type="button"
               class="group flex min-h-8 min-w-0 cursor-default items-center gap-2 px-3 text-start text-[12px] hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
               :aria-label="`Open ${f.file}:${f.line} in the editor`"
-              :title="`${f.file}${at(f)}`"
               @click="jump(f)"
             >
               <FileCode class="size-3.5 shrink-0 text-text-muted" aria-hidden="true" />
@@ -170,6 +169,7 @@ const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-de
               <span class="min-w-0 flex-1 truncate font-mono text-text-muted"><bdi>{{ folder(f.file) }}</bdi></span>
               <ExternalLink class="size-3.5 shrink-0 text-text-muted opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" />
             </button>
+            </Tip>
           </div>
         </div>
       </li>

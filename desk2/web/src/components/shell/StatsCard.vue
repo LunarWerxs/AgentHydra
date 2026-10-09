@@ -8,6 +8,7 @@ const recentAnswers = new Map<StatsRange, HomeStats>()
 </script>
 
 <script setup lang="ts">
+import { Tip } from '@/components/ui/tooltip'
 import { computed, reactive, ref, watch } from 'vue'
 import { ChevronRight } from '@lucide/vue'
 import type { ChatSummary } from '@shared/protocol'
@@ -120,10 +121,10 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
 
     <template v-if="tab === 'overview'">
       <div class="mt-5 grid grid-cols-3 gap-1">
-        <div v-for="t in tiles" :key="t.label" :title="t.title" class="flex h-11 min-w-0 flex-col justify-start rounded-(--radius-6) bg-(--fill-secondary) px-1 pt-[2.5px]">
+        <Tip v-for="t in tiles" :key="t.label" :label="t.title ?? ''"><div class="flex h-11 min-w-0 flex-col justify-start rounded-(--radius-6) bg-(--fill-secondary) px-1 pt-[2.5px]">
           <span class="truncate text-[12px] leading-4 text-text-muted">{{ t.label }}</span>
           <span class="tnum truncate text-[13px] leading-4.75 text-text" :class="t.strong ? 'font-semibold' : ''">{{ t.value }}</span>
-        </div>
+        </div></Tip>
       </div>
       <div v-if="sources.length" class="mt-1.5 flex flex-col gap-0.5">
         <button type="button" class="flex h-5 items-center gap-1 px-1.5 text-start text-[11px] leading-4 text-text-muted hover:text-text-2" :aria-expanded="sourcesOpen" aria-controls="stats-sources" @click="toggleSources">
@@ -138,17 +139,17 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
             <span role="columnheader" class="text-end">Tokens</span>
             <span role="columnheader" class="text-end">Cost</span>
           </div>
-          <div v-for="s in sources" :key="s.key" role="row" :title="s.title" :class="SOURCE_COLS" class="relative h-5.5 overflow-hidden rounded-(--radius-6) bg-(--fill-secondary) text-[12px] leading-4">
+          <Tip v-for="s in sources" :key="s.key" :label="s.title ?? ''"><div role="row" :class="SOURCE_COLS" class="relative h-5.5 overflow-hidden rounded-(--radius-6) bg-(--fill-secondary) text-[12px] leading-4">
             <span class="absolute bottom-0 left-0 h-0.5 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${s.share * 100}%` }" />
             <span role="cell" class="relative truncate text-text">{{ s.label }}</span>
             <span role="cell" class="tnum relative text-end text-text-2">{{ s.sessions }}</span>
             <span role="cell" class="tnum relative text-end text-text-2">{{ s.tokens }}</span>
             <span role="cell" class="tnum relative text-end text-text-2">{{ s.cost }}</span>
-          </div>
+          </div></Tip>
         </div>
       </div>
       <div class="mt-1.5 grid grid-flow-col grid-rows-7 justify-between gap-y-0.75" role="img" aria-label="Activity over the last 27 weeks">
-        <span v-for="cell in heatCells" :key="cell.day" :title="cell.title" class="size-3.75 rounded-xs" :style="{ background: HEAT[cell.level] }" />
+        <Tip v-for="cell in heatCells" :key="cell.day" :label="cell.title"><span class="size-3.75 rounded-xs" :style="{ background: HEAT[cell.level] }" /></Tip>
       </div>
     </template>
 
@@ -175,8 +176,8 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
       <p v-if="!models.length" class="text-[12px] leading-4 text-text-muted">No sessions in this range yet.</p>
     </div>
 
-    <div class="mt-2 text-[11px] leading-4 text-text-muted" :title="footerTitle">
+    <Tip :label="footerTitle ?? ''"><div class="mt-2 text-[11px] leading-4 text-text-muted">
       <p v-for="line in footer" :key="line">{{ line }}</p>
-    </div>
+    </div></Tip>
   </section>
 </template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { RefreshCw } from '@lucide/vue'
+import { Tip } from '@/components/ui/tooltip'
 import PaneSwitch from './PaneSwitch.vue'
 import { BUTTON, FIELD } from './settings-styles'
 import type { AgentHydraSettings, AhSettingsPatch, AhSettings } from './agenthydra'
@@ -126,20 +127,23 @@ function onVersion() {
     @update:model-value="(v: boolean) => (ah.privacy.value = v)"
   />
 
-  <span v-else-if="ah.down.value" class="text-[13px] leading-4.75 text-text-muted" :title="ah.down.value">AgentHydra is not answering</span>
+  <Tip v-else-if="ah.down.value" :label="ah.down.value">
+    <span class="text-[13px] leading-4.75 text-text-muted">AgentHydra is not answering</span>
+  </Tip>
 
   <template v-else-if="id === 'ahVersion'">
-    <button
-      type="button"
-      class="flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-(--radius-6) px-2 font-mono text-[13px] leading-4.75 transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none disabled:opacity-70"
-      :disabled="ah.applying.value"
-      :title="versionTitle"
-      @click="onVersion"
-    >
-      <RefreshCw v-if="ah.checking.value || ah.applying.value" class="size-3.5 animate-spin" :class="versionColor" />
-      <span :class="versionColor">{{ ah.update.value?.currentVersion ? `v${ah.update.value.currentVersion}` : '…' }}</span>
-      <span v-if="ah.update.value?.currentCommit" class="text-text-muted">· {{ ah.update.value.currentCommit.slice(0, 7) }}</span>
-    </button>
+    <Tip :label="versionTitle">
+      <button
+        type="button"
+        class="flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-(--radius-6) px-2 font-mono text-[13px] leading-4.75 transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none disabled:opacity-70"
+        :disabled="ah.applying.value"
+        @click="onVersion"
+      >
+        <RefreshCw v-if="ah.checking.value || ah.applying.value" class="size-3.5 animate-spin" :class="versionColor" />
+        <span :class="versionColor">{{ ah.update.value?.currentVersion ? `v${ah.update.value.currentVersion}` : '…' }}</span>
+        <span v-if="ah.update.value?.currentCommit" class="text-text-muted">· {{ ah.update.value.currentCommit.slice(0, 7) }}</span>
+      </button>
+    </Tip>
   </template>
 
   <PaneSwitch

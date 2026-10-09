@@ -5,6 +5,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { Check, Circle, Highlighter, MoveUpRight, Pencil, Redo2, Square, Trash2, Undo2 } from '@lucide/vue'
 import { MAX_IMAGE_BYTES } from '@/components/composer/logic'
+import { Tip } from '@/components/ui/tooltip'
 import {
   ANNOTATE_COLORS,
   ANNOTATE_SIZES,
@@ -194,63 +195,69 @@ onBeforeUnmount(() => {
   <div class="absolute inset-0 flex flex-col" data-testid="annotator">
     <div class="flex shrink-0 items-center justify-center px-4 pt-3">
       <div class="tx-annotate-bar" role="toolbar" aria-label="Annotate">
-        <button
-          v-for="t in ANNOTATE_TOOLS"
-          :key="t.tool"
-          type="button"
-          class="tx-annotate-btn"
-          :class="{ 'tx-annotate-on': tool === t.tool }"
-          :aria-label="t.label"
-          :aria-pressed="tool === t.tool"
-          :title="`${t.label} (${t.key})`"
-          @click="tool = t.tool"
-        >
-          <component :is="TOOL_ICONS[t.tool]" class="size-4" />
-        </button>
+        <Tip v-for="t in ANNOTATE_TOOLS" :key="t.tool" :label="`${t.label} (${t.key})`">
+          <button
+            type="button"
+            class="tx-annotate-btn"
+            :class="{ 'tx-annotate-on': tool === t.tool }"
+            :aria-label="t.label"
+            :aria-pressed="tool === t.tool"
+            @click="tool = t.tool"
+          >
+            <component :is="TOOL_ICONS[t.tool]" class="size-4" />
+          </button>
+        </Tip>
         <span class="tx-annotate-sep" />
-        <button
-          v-for="c in ANNOTATE_COLORS"
-          :key="c.color"
-          type="button"
-          class="tx-annotate-btn"
-          :class="{ 'tx-annotate-on': color === c.color }"
-          :aria-label="c.label"
-          :aria-pressed="color === c.color"
-          :title="c.label"
-          @click="color = c.color"
-        >
-          <span class="tx-annotate-swatch" :style="{ background: c.color }" />
-        </button>
+        <Tip v-for="c in ANNOTATE_COLORS" :key="c.color" :label="c.label">
+          <button
+            type="button"
+            class="tx-annotate-btn"
+            :class="{ 'tx-annotate-on': color === c.color }"
+            :aria-label="c.label"
+            :aria-pressed="color === c.color"
+            @click="color = c.color"
+          >
+            <span class="tx-annotate-swatch" :style="{ background: c.color }" />
+          </button>
+        </Tip>
         <span class="tx-annotate-sep" />
-        <button
-          v-for="s in ANNOTATE_SIZES"
-          :key="s"
-          type="button"
-          class="tx-annotate-btn"
-          :class="{ 'tx-annotate-on': size === s }"
-          :aria-label="`Line ${s} pixels`"
-          :aria-pressed="size === s"
-          :title="`Line ${s}px`"
-          @click="size = s"
-        >
-          <span class="rounded-full bg-current" :style="{ width: `${s + 1}px`, height: `${s + 1}px` }" />
-        </button>
+        <Tip v-for="s in ANNOTATE_SIZES" :key="s" :label="`Line ${s}px`">
+          <button
+            type="button"
+            class="tx-annotate-btn"
+            :class="{ 'tx-annotate-on': size === s }"
+            :aria-label="`Line ${s} pixels`"
+            :aria-pressed="size === s"
+            @click="size = s"
+          >
+            <span class="rounded-full bg-current" :style="{ width: `${s + 1}px`, height: `${s + 1}px` }" />
+          </button>
+        </Tip>
         <span class="tx-annotate-sep" />
-        <button type="button" class="tx-annotate-btn" aria-label="Undo" title="Undo (Ctrl+Z)" :disabled="!canUndo" @click="undo"><Undo2 class="size-4" /></button>
-        <button type="button" class="tx-annotate-btn" aria-label="Redo" title="Redo (Ctrl+Y)" :disabled="!canRedo" @click="redo"><Redo2 class="size-4" /></button>
-        <button type="button" class="tx-annotate-btn" aria-label="Clear all marks" title="Clear all marks" :disabled="!canUndo" @click="clear"><Trash2 class="size-4" /></button>
+        <Tip label="Undo (Ctrl+Z)">
+          <button type="button" class="tx-annotate-btn" aria-label="Undo" :disabled="!canUndo" @click="undo"><Undo2 class="size-4" /></button>
+        </Tip>
+        <Tip label="Redo (Ctrl+Y)">
+          <button type="button" class="tx-annotate-btn" aria-label="Redo" :disabled="!canRedo" @click="redo"><Redo2 class="size-4" /></button>
+        </Tip>
+        <Tip label="Clear all marks">
+          <button type="button" class="tx-annotate-btn" aria-label="Clear all marks" :disabled="!canUndo" @click="clear"><Trash2 class="size-4" /></button>
+        </Tip>
         <span class="tx-annotate-sep" />
-        <button type="button" class="tx-annotate-text" title="Cancel (Esc)" @click="emit('cancel')">Cancel</button>
-        <button
-          type="button"
-          class="tx-annotate-text tx-annotate-save"
-          title="Save a copy next to the original (Ctrl+S)"
-          :disabled="!canUndo || saving"
-          data-testid="annotate-save"
-          @click="save"
-        >
-          <Check class="size-3.5" />Save copy
-        </button>
+        <Tip label="Cancel (Esc)">
+          <button type="button" class="tx-annotate-text" @click="emit('cancel')">Cancel</button>
+        </Tip>
+        <Tip label="Save a copy next to the original (Ctrl+S)">
+          <button
+            type="button"
+            class="tx-annotate-text tx-annotate-save"
+            :disabled="!canUndo || saving"
+            data-testid="annotate-save"
+            @click="save"
+          >
+            <Check class="size-3.5" />Save copy
+          </button>
+        </Tip>
       </div>
     </div>
     <div ref="area" class="relative flex min-h-0 flex-1 items-center justify-center">

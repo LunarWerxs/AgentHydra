@@ -8,6 +8,7 @@ import { accountTone } from './account-tone'
 import { elapsedLabel, runPulse } from './logic'
 import type { TaskNode } from './tasks'
 import { rowLeave } from '@/lib/row-leave'
+import { Tip } from '@/components/ui/tooltip'
 
 // The CliMayte tasks under one sidebar row, the chat that spawned them (components/sidebar/tasks.ts): 22px
 // lines, one step in per level, with a guide line down their left. A task with a session opens its live
@@ -96,10 +97,12 @@ const hot = ref<string | null>(null)
       <span class="min-w-0 flex-1 truncate" :class="{ 'text-text': isManager(n.worker) && !(own && selectedId === own) }">{{ n.worker.title }}</span>
       <!-- Another PC's task: a little cloud, its PC in the tooltip, so the title keeps the room (owner,
            2026-10-02, of CliMayte's list: "it just shows ones from my other computer with a little cloud icon"). -->
-      <span v-if="n.worker.pc" class="flex shrink-0 items-center" :title="onPc(n.worker.pc)">
-        <Cloud class="size-3 shrink-0 text-text-muted" aria-hidden="true" />
-        <span class="sr-only">{{ onPc(n.worker.pc) }}</span>
-      </span>
+      <Tip v-if="n.worker.pc" :label="onPc(n.worker.pc)">
+        <span class="flex shrink-0 items-center">
+          <Cloud class="size-3 shrink-0 text-text-muted" aria-hidden="true" />
+          <span class="sr-only">{{ onPc(n.worker.pc) }}</span>
+        </span>
+      </Tip>
       <!-- Its account, in that account's colour (account-tone.ts). -->
       <span v-if="n.worker.account" class="shrink-0 text-[11px] tnum" :style="{ color: accountTone(n.worker.account) ?? undefined }">{{ n.worker.account }}</span>
       <span v-if="n.worker.model" class="max-w-[38%] shrink-0 truncate text-[11px] text-text-muted">{{ modelName(n.worker.model) }}</span>

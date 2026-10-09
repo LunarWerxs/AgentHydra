@@ -4,6 +4,7 @@
 // usual lightbox tiles.
 import { computed } from 'vue'
 import type { ImageRef } from '@shared/protocol'
+import { Tip } from '@/components/ui/tooltip'
 import { imageSrc, videoSrc } from '../lib/media'
 import ImageTiles from './ImageTiles.vue'
 
@@ -15,21 +16,20 @@ const pictures = computed(() => props.media.filter((f) => imageSrc(f)))
 
 <template>
   <div class="flex flex-col gap-2.5" data-testid="named-media">
-    <video
-      v-for="(f, i) in videos"
-      :key="`v${i}`"
-      class="tx-inline-video"
-      :src="videoSrc(f)!"
-      :data-reveal-path="f.path"
-      :aria-label="f.name || 'video'"
-      :title="f.name || 'video'"
-      controls
-      autoplay
-      muted
-      loop
-      playsinline
-      preload="metadata"
-    />
+    <Tip v-for="(f, i) in videos" :key="`v${i}`" :label="f.name || 'video'">
+      <video
+        class="tx-inline-video"
+        :src="videoSrc(f)!"
+        :data-reveal-path="f.path"
+        :aria-label="f.name || 'video'"
+        controls
+        autoplay
+        muted
+        loop
+        playsinline
+        preload="metadata"
+      />
+    </Tip>
     <ImageTiles v-if="pictures.length" :images="pictures" />
   </div>
 </template>

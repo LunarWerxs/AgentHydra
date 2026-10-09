@@ -928,9 +928,11 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             />
           </header>
           <p v-if="search.phase === 'offline'" class="px-1.5 text-[12px] leading-4 text-text-muted">AgentHydra search is offline</p>
-          <p v-else-if="search.phase === 'failed'" class="truncate px-1.5 text-[12px] leading-4 text-text-muted" :title="search.error ?? ''">
-            AgentHydra search failed: {{ search.error }}
-          </p>
+          <Tip v-else-if="search.phase === 'failed'" :label="search.error ?? ''">
+            <p class="truncate px-1.5 text-[12px] leading-4 text-text-muted">
+              AgentHydra search failed: {{ search.error }}
+            </p>
+          </Tip>
           <p v-else-if="search.phase === 'done' && everywhere.length === 0" class="px-1.5 text-[12px] leading-4 text-text-muted">No matches</p>
           <div v-else class="flex flex-col gap-[1.5px] pt-[1.5px]">
             <SearchHitRow

@@ -21,6 +21,7 @@ import {
   type Geometry,
   type ViewState,
 } from '../lib/viewer'
+import { Tip } from '@/components/ui/tooltip'
 import Annotator from './Annotator.vue'
 
 const stage = ref<HTMLElement | null>(null)
@@ -244,16 +245,16 @@ onBeforeUnmount(() => {
           <div class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-3 px-4 py-3 text-[13px] text-text-muted">
             <span class="truncate" data-testid="viewer-title">{{ current.alt }}</span>
             <span class="flex shrink-0 items-center gap-1">
-              <button
-                v-if="annotatable"
-                type="button"
-                class="tx-viewer-pen pointer-events-auto"
-                title="Annotate: draw, highlight, circle (A)"
-                data-testid="viewer-annotate"
-                @click.stop="startAnnotating"
-              >
-                <Pencil class="size-3.5" />Annotate
-              </button>
+              <Tip v-if="annotatable" label="Annotate: draw, highlight, circle (A)">
+                <button
+                  type="button"
+                  class="tx-viewer-pen pointer-events-auto"
+                  data-testid="viewer-annotate"
+                  @click.stop="startAnnotating"
+                >
+                  <Pencil class="size-3.5" />Annotate
+                </button>
+              </Tip>
               <button type="button" class="tx-action pointer-events-auto" aria-label="Close" @click.stop="closeLightbox"><X class="size-4" /></button>
             </span>
           </div>

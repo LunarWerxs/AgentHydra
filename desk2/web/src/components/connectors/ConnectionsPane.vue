@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import type { ChatSummary } from '@shared/protocol'
 import { icons, settingsIcons } from '@/lib/icons'
 import { TEXT_BTN } from '@/components/servers/styles'
+import { Tip } from '@/components/ui/tooltip'
 import { PANE_ROW, SEARCH_BOX, SEARCH_INPUT } from './styles'
 import { connectorList, refreshConnectorList, watchConnectors } from './connections-api'
 import { BYPASS_TIP, CONNECTIONS_STUDIO_URL, bypassRow, chipText, connectionsServerInfo, enterPick, isCurrent, signInLine, starState } from './connections-logic'
@@ -80,25 +81,28 @@ watch(() => props.chat.id, reload)
       </label>
       <ul class="min-h-0 flex-1 overflow-y-auto" role="list">
         <li v-for="c in matches" :key="c.companyId" class="group">
-          <div :class="[PANE_ROW, busy ? 'opacity-60' : '']" :data-current="isCurrent(ws, c)" :title="chatOk ? undefined : NO_SESSION">
-            <button type="button" class="flex h-full min-w-0 flex-1 cursor-default items-center text-start" :disabled="busy" @click="pick(c.companyId)">
-              <span class="flex-1 truncate">{{ c.name }}</span>
-            </button>
-            <button
-              type="button"
-              data-star
-              :data-on="starState(ws, c).on"
-              :title="starState(ws, c).title"
-              :aria-label="starState(ws, c).title"
-              :aria-pressed="starState(ws, c).on"
-              class="flex size-4 shrink-0 cursor-default items-center justify-center rounded-(--radius-6) hover:bg-fill-hover"
-              :class="starState(ws, c).on ? 'text-text-2' : 'text-text-muted opacity-0 group-hover:opacity-100'"
-              @click="toggleDefault(c)"
-            >
-              <component :is="icons.star" class="size-3.5" :class="starState(ws, c).on ? 'fill-current' : ''" />
-            </button>
-            <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="isCurrent(ws, c)" /></span>
-          </div>
+          <Tip :label="chatOk ? '' : NO_SESSION">
+            <div :class="[PANE_ROW, busy ? 'opacity-60' : '']" :data-current="isCurrent(ws, c)">
+              <button type="button" class="flex h-full min-w-0 flex-1 cursor-default items-center text-start" :disabled="busy" @click="pick(c.companyId)">
+                <span class="flex-1 truncate">{{ c.name }}</span>
+              </button>
+              <Tip :label="starState(ws, c).title">
+                <button
+                  type="button"
+                  data-star
+                  :data-on="starState(ws, c).on"
+                  :aria-label="starState(ws, c).title"
+                  :aria-pressed="starState(ws, c).on"
+                  class="flex size-4 shrink-0 cursor-default items-center justify-center rounded-(--radius-6) hover:bg-fill-hover"
+                  :class="starState(ws, c).on ? 'text-text-2' : 'text-text-muted opacity-0 group-hover:opacity-100'"
+                  @click="toggleDefault(c)"
+                >
+                  <component :is="icons.star" class="size-3.5" :class="starState(ws, c).on ? 'fill-current' : ''" />
+                </button>
+              </Tip>
+              <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="isCurrent(ws, c)" /></span>
+            </div>
+          </Tip>
         </li>
         <li v-if="!matches.length" class="flex h-6 items-center px-2 text-text-muted">{{ loaded ? 'No workspace matches' : 'Loading workspaces…' }}</li>
       </ul>
@@ -106,12 +110,14 @@ watch(() => props.chat.id, reload)
         <span class="flex-1">No workspace</span>
         <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="ws && !ws.company" /></span>
       </button>
-      <button v-if="bypass" type="button" :class="[PANE_ROW, 'text-[12px] text-text-2']" :title="BYPASS_TIP" @click="openStudio">
-        <span class="flex-1">{{ bypass.label }}</span>
-        <span class="flex items-center gap-1" :class="bypass.on ? 'text-text-2' : 'text-text-muted'">
-          <component :is="icons.check" v-if="bypass.on" class="size-3.5" />{{ bypass.value }}
-        </span>
-      </button>
+      <Tip v-if="bypass" :label="BYPASS_TIP">
+        <button type="button" :class="[PANE_ROW, 'text-[12px] text-text-2']" @click="openStudio">
+          <span class="flex-1">{{ bypass.label }}</span>
+          <span class="flex items-center gap-1" :class="bypass.on ? 'text-text-2' : 'text-text-muted'">
+            <component :is="icons.check" v-if="bypass.on" class="size-3.5" />{{ bypass.value }}
+          </span>
+        </button>
+      </Tip>
     </div>
     <p v-if="note" role="status" class="shrink-0 px-3 pb-3 text-text-muted">{{ note }}</p>
   </section>

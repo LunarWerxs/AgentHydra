@@ -247,22 +247,22 @@ const FOOT_BTN =
 
     <div ref="list" role="tree" :aria-label="model.title" class="flex flex-col">
       <section v-for="sec in model.sections" :key="sec.key" :aria-label="sec.label || undefined">
-        <header v-if="sec.label" class="flex h-7.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-2.5 text-[12px] leading-4 text-text-muted" :title="sec.hint">
-          <span class="truncate">{{ sec.label }}</span>
-          <span class="flex-1" />
-          <span class="tnum">{{ sec.rows.length }}</span>
-        </header>
+        <Tip v-if="sec.label" :label="sec.hint ?? ''">
+          <header class="flex h-7.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-2.5 text-[12px] leading-4 text-text-muted">
+            <span class="truncate">{{ sec.label }}</span>
+            <span class="flex-1" />
+            <span class="tnum">{{ sec.rows.length }}</span>
+          </header>
+        </Tip>
         <div class="flex flex-col gap-[1.5px] pt-[1.5px]">
+          <Tip v-for="r in sec.rows" :key="r.key" :label="r.hint ?? ''">
           <div
-            v-for="r in sec.rows"
-            :key="r.key"
             data-row
             role="treeitem"
             tabindex="0"
             :aria-level="(r.depth ?? 0) + 1"
             :aria-expanded="r.branch ? r.branch === 'open' : undefined"
             :aria-selected="model.selected === r.key"
-            :title="r.hint"
             :class="[
               ROW,
               model.selected === r.key ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
@@ -277,11 +277,13 @@ const FOOT_BTN =
               <ChevronRight class="size-3 transition-transform duration-(--dur-fast)" :class="r.branch === 'open' ? 'rotate-90' : ''" />
             </span>
             <span v-else-if="branching.has(sec.key)" class="size-4 shrink-0" aria-hidden="true" />
-            <span v-if="r.status" class="flex size-5 shrink-0 items-center justify-center" :class="tone(r.status.tone)" :title="r.status.label">
-              <component :is="icon(r.status.icon)" v-if="r.status.icon" class="size-3.5" :class="r.status.spin ? 'animate-spin' : ''" aria-hidden="true" />
-              <span v-else-if="r.status.dot" class="size-1.5 rounded-full" :class="[DOT[r.status.dot], r.status.pulse ? 'animate-pulse' : '']" aria-hidden="true" />
-              <span v-if="r.status.label" class="sr-only">{{ r.status.label }}</span>
-            </span>
+            <Tip v-if="r.status" :label="r.status.label ?? ''">
+              <span class="flex size-5 shrink-0 items-center justify-center" :class="tone(r.status.tone)">
+                <component :is="icon(r.status.icon)" v-if="r.status.icon" class="size-3.5" :class="r.status.spin ? 'animate-spin' : ''" aria-hidden="true" />
+                <span v-else-if="r.status.dot" class="size-1.5 rounded-full" :class="[DOT[r.status.dot], r.status.pulse ? 'animate-pulse' : '']" aria-hidden="true" />
+                <span v-if="r.status.label" class="sr-only">{{ r.status.label }}</span>
+              </span>
+            </Tip>
             <template v-if="r.avatar">
               <img
                 v-if="r.avatar.src && !brokenAvatars.has(r.avatar.src)"
@@ -297,27 +299,32 @@ const FOOT_BTN =
             <component :is="icon(r.icon)" v-else-if="r.icon" class="size-3.5 shrink-0 text-text-muted" aria-hidden="true" />
             <span class="min-w-0 flex-1 truncate"><template v-for="[before, match, after] in [parts(r)]" :key="r.key">{{ before }}<mark v-if="match" class="rounded-xs bg-[rgb(250_204_21/0.3)] text-inherit">{{ match }}</mark>{{ after }}</template></span>
             <component :is="icon(r.badge.icon)" v-if="r.badge" class="size-3.5 shrink-0 text-text-muted" :aria-label="r.badge.label" />
-            <span v-if="r.chip" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-warning-text" :title="r.chip.hint">{{ r.chip.text }}</span>
+            <Tip v-if="r.chip" :label="r.chip.hint ?? ''">
+              <span class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-warning-text">{{ r.chip.text }}</span>
+            </Tip>
             <span v-if="r.count != null" class="shrink-0 text-[12px] leading-4 text-text-muted tnum">({{ r.count }})</span>
             <span v-if="r.tag" class="max-w-[45%] shrink-0 truncate text-[11px] leading-4" :class="r.tag.tone === 'warning' ? 'text-warning-text' : 'text-text-muted'">{{ r.tag.text }}</span>
-            <span v-if="r.mark" class="inline-flex shrink-0" :class="tone(r.mark.tone)" :title="r.mark.hint ?? r.mark.label">
-              <component :is="icon(r.mark.icon)" class="size-3.5" :aria-label="r.mark.label" />
-            </span>
+            <Tip v-if="r.mark" :label="r.mark.hint ?? r.mark.label">
+              <span class="inline-flex shrink-0" :class="tone(r.mark.tone)">
+                <component :is="icon(r.mark.icon)" class="size-3.5" :aria-label="r.mark.label" />
+              </span>
+            </Tip>
             <!-- Clean sidebar (sidebar/clean.ts) leaves the detail and the time out; warnings and marks stay. -->
             <span v-if="r.meta && !cleanSidebar" class="shrink-0 font-mono text-[11px] leading-4 text-text-muted">{{ r.meta }}</span>
             <span v-if="r.time && !cleanSidebar" class="shrink-0 text-[12px] leading-4 text-text-muted tnum">{{ r.time }}</span>
-            <button
-              v-if="r.star"
-              type="button"
-              class="shrink-0 rounded-sm px-0.5 text-[11px] leading-4 hover:bg-fill-hover"
-              :class="[r.star.on ? 'text-accent-text' : 'text-text-muted', r.star.busy ? 'opacity-50' : '']"
-              :aria-label="r.star.label"
-              :title="r.star.label"
-              @click.stop="send.star(r.key)"
-            >
-              {{ r.star.text }}
-            </button>
+            <Tip v-if="r.star" :label="r.star.label">
+              <button
+                type="button"
+                class="shrink-0 rounded-sm px-0.5 text-[11px] leading-4 hover:bg-fill-hover"
+                :class="[r.star.on ? 'text-accent-text' : 'text-text-muted', r.star.busy ? 'opacity-50' : '']"
+                :aria-label="r.star.label"
+                @click.stop="send.star(r.key)"
+              >
+                {{ r.star.text }}
+              </button>
+            </Tip>
           </div>
+          </Tip>
         </div>
       </section>
     </div>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AccountInfo } from '@shared/protocol'
 import { newSessionGlyphs } from '@/lib/icons'
+import { Tip } from '@/components/ui/tooltip'
 import type { ComposerApi } from './api'
 import AccountPicker from './AccountPicker.vue'
 import FolderPicker from './FolderPicker.vue'
@@ -20,25 +21,31 @@ const SOON = 'Not available in Hydra Desk yet'
   <div role="group" aria-label="Environment" class="mb-1 flex h-6 min-w-0 items-center gap-1.5">
     <FolderPicker :model-value="cwd" :api="api" @update:model-value="(v) => emit('update:cwd', v)" />
 
-    <span v-if="branch" :class="ENV_PILL" class="min-w-0 shrink" :title="`On branch ${branch}`">
-      <newSessionGlyphs.branch class="size-4 shrink-0" />
-      <span class="truncate" :class="PILL_TEXT">{{ branch }}</span>
-      <span class="ms-2 flex shrink-0 items-center" :title="`Worktree: ${SOON}`">
-        <span class="h-2.5 w-px bg-(--fill-secondary)" aria-hidden="true" />
-        <span
-          role="checkbox"
-          aria-checked="false"
-          aria-disabled="true"
-          aria-label="worktree"
-          class="ms-1.25 size-3 rounded-[3px] border border-[#ffffff33]"
-        />
-        <span class="ms-0.75" :class="PILL_TEXT" aria-hidden="true">worktree</span>
+    <Tip v-if="branch" :label="`On branch ${branch}`">
+      <span :class="ENV_PILL" class="min-w-0 shrink">
+        <newSessionGlyphs.branch class="size-4 shrink-0" />
+        <span class="truncate" :class="PILL_TEXT">{{ branch }}</span>
+        <Tip :label="`Worktree: ${SOON}`">
+          <span class="ms-2 flex shrink-0 items-center">
+            <span class="h-2.5 w-px bg-(--fill-secondary)" aria-hidden="true" />
+            <span
+              role="checkbox"
+              aria-checked="false"
+              aria-disabled="true"
+              aria-label="worktree"
+              class="ms-1.25 size-3 rounded-[3px] border border-[#ffffff33]"
+            />
+            <span class="ms-0.75" :class="PILL_TEXT" aria-hidden="true">worktree</span>
+          </span>
+        </Tip>
       </span>
-    </span>
+    </Tip>
 
-    <button type="button" :class="ENV_PILL" class="cursor-default" aria-label="Add another folder" aria-disabled="true" :title="`Add another folder: ${SOON}`">
-      <newSessionGlyphs.addFolder class="size-4 shrink-0" />
-    </button>
+    <Tip :label="`Add another folder: ${SOON}`">
+      <button type="button" :class="ENV_PILL" class="cursor-default" aria-label="Add another folder" aria-disabled="true">
+        <newSessionGlyphs.addFolder class="size-4 shrink-0" />
+      </button>
+    </Tip>
 
     <span class="flex-1" />
     <AccountPicker :model-value="account" :api="api" :accounts="accounts" />

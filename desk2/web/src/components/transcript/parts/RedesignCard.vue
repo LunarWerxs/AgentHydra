@@ -9,6 +9,7 @@ import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
 import { canSendReply, composeRedesignReply, landedNames, optionLabel, parseDesignOptions, parseReplyChip, pickedOption, redesignSetup, replyFor, RETRY_MESSAGE, type DesignOption, type RedesignChoice } from '../lib/redesign'
 import { listConnectors } from '@/components/connectors/api'
+import { Tip } from '@/components/ui/tooltip'
 import { openLightbox } from '../lib/media'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
@@ -136,7 +137,9 @@ const moreCount = computed(() => view.value.options.length || expected.value)
           <ChevronUp class="size-3.5" aria-hidden="true" />Collapse
         </button>
       </div>
-      <p v-if="view.brief" class="mt-1 truncate text-[12px] text-text-muted" :title="view.brief">{{ view.brief }}</p>
+      <Tip v-if="view.brief" :label="view.brief">
+        <p class="mt-1 truncate text-[12px] text-text-muted">{{ view.brief }}</p>
+      </Tip>
     </div>
 
     <template v-if="view.state === 'running'">
@@ -198,32 +201,33 @@ const moreCount = computed(() => view.value.options.length || expected.value)
               <img :src="o.src" :alt="optionLabel(o)" class="size-full object-cover object-top" draggable="false" />
             </button>
             <span v-else class="flex aspect-16/10 w-full items-center justify-center text-[12px] text-text-muted">No picture</span>
-            <component
-              :is="editable ? 'button' : 'span'"
-              :type="editable ? 'button' : undefined"
-              :role="editable ? 'radio' : undefined"
-              :aria-checked="editable ? choice === o.n : undefined"
-              :title="editable ? `Choose ${optionLabel(o)}` : undefined"
-              class="absolute bottom-2 left-2 flex max-w-[75%] items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium shadow outline-none focus-visible:ring-2 focus-visible:ring-brand"
-              :class="[
-                shown(o.n) ? 'bg-accent text-white' : 'bg-black/70 text-white backdrop-blur-sm',
-                editable && !shown(o.n) && 'hover:bg-black/85'
-              ]"
-              @click="editable && choose(o.n)"
-            >
-              <Check v-if="shown(o.n)" class="size-3.5 shrink-0" aria-hidden="true" />
-              <span class="truncate">{{ optionLabel(o) }}</span>
-            </component>
-            <button
-              v-if="o.src"
-              type="button"
-              class="absolute right-2 top-2 flex size-7 items-center justify-center rounded-6 bg-black/60 text-white outline-none hover:bg-black/80 focus-visible:ring-2 focus-visible:ring-brand"
-              :aria-label="`View ${optionLabel(o)} full size`"
-              title="Full size"
-              @click="open(o)"
-            >
-              <Maximize2 class="size-4" aria-hidden="true" />
-            </button>
+            <Tip :label="editable ? `Choose ${optionLabel(o)}` : ''">
+              <component
+                :is="editable ? 'button' : 'span'"
+                :type="editable ? 'button' : undefined"
+                :role="editable ? 'radio' : undefined"
+                :aria-checked="editable ? choice === o.n : undefined"
+                class="absolute bottom-2 left-2 flex max-w-[75%] items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium shadow outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                :class="[
+                  shown(o.n) ? 'bg-accent text-white' : 'bg-black/70 text-white backdrop-blur-sm',
+                  editable && !shown(o.n) && 'hover:bg-black/85'
+                ]"
+                @click="editable && choose(o.n)"
+              >
+                <Check v-if="shown(o.n)" class="size-3.5 shrink-0" aria-hidden="true" />
+                <span class="truncate">{{ optionLabel(o) }}</span>
+              </component>
+            </Tip>
+            <Tip v-if="o.src" label="Full size">
+              <button
+                type="button"
+                class="absolute right-2 top-2 flex size-7 items-center justify-center rounded-6 bg-black/60 text-white outline-none hover:bg-black/80 focus-visible:ring-2 focus-visible:ring-brand"
+                :aria-label="`View ${optionLabel(o)} full size`"
+                @click="open(o)"
+              >
+                <Maximize2 class="size-4" aria-hidden="true" />
+              </button>
+            </Tip>
           </div>
         </li>
       </ul>
@@ -240,9 +244,11 @@ const moreCount = computed(() => view.value.options.length || expected.value)
           @keydown.enter.exact.prevent="send"
         />
         <div class="flex items-center gap-2">
-          <button type="button" class="tx-btn" :disabled="busy" :title="`${moreCount} new designs, different directions`" @click="sendMore">
-            More options <span class="text-text-muted">· {{ moreCount }} new</span>
-          </button>
+          <Tip :label="`${moreCount} new designs, different directions`">
+            <button type="button" class="tx-btn" :disabled="busy" @click="sendMore">
+              More options <span class="text-text-muted">· {{ moreCount }} new</span>
+            </button>
+          </Tip>
           <button type="button" class="tx-btn" :class="choice === 'other' && 'border-accent text-text'" :aria-pressed="choice === 'other'" @click="choose('other')">Other</button>
           <span v-if="err" class="min-w-0 truncate text-[12px] text-danger-text">{{ err }}</span>
           <button type="button" class="tx-btn tx-btn-primary ms-auto" :disabled="!ready || busy" @click="send">Send</button>

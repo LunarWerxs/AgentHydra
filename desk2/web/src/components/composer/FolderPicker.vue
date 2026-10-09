@@ -6,6 +6,7 @@ import type { ComposerApi } from './api'
 import { folderRows } from './folders'
 import { folderName } from './logic'
 import { HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR } from './menu'
+import { Tip } from '@/components/ui/tooltip'
 import { ENV_PILL_BUTTON, PILL_TEXT } from './pill'
 
 // The new session's folder, as the real app's folder menu: Recent by name, a check on the current folder and,
@@ -71,12 +72,14 @@ async function addFolder() {
 
 <template>
   <DropdownMenu v-model:open="open">
-    <DropdownMenuTrigger as-child>
-      <button type="button" :class="ENV_PILL_BUTTON" class="min-w-0 shrink" :title="modelValue ?? 'Choose a folder'">
-        <newSessionGlyphs.folder class="size-4 shrink-0" />
-        <span class="truncate" :class="PILL_TEXT">{{ modelValue ? folderName(modelValue) : 'Choose folder' }}</span>
-      </button>
-    </DropdownMenuTrigger>
+    <Tip :label="modelValue ?? 'Choose a folder'">
+      <DropdownMenuTrigger as-child>
+        <button type="button" :class="ENV_PILL_BUTTON" class="min-w-0 shrink">
+          <newSessionGlyphs.folder class="size-4 shrink-0" />
+          <span class="truncate" :class="PILL_TEXT">{{ modelValue ? folderName(modelValue) : 'Choose folder' }}</span>
+        </button>
+      </DropdownMenuTrigger>
+    </Tip>
     <DropdownMenuContent side="top" align="start" :side-offset="6" :class="[MENU, 'min-w-48 max-w-72']" data-composer-menu="folder">
       <template v-if="rows.length">
         <div role="presentation" :class="HEADER">Recent</div>

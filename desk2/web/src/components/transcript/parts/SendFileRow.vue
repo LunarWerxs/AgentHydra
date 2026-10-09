@@ -4,6 +4,7 @@
 // as prose, then a file card per file. Until the result lands the files are not known; the caption shows alone.
 import { computed } from 'vue'
 import type { TranscriptItem } from '@shared/protocol'
+import { Tip } from '@/components/ui/tooltip'
 import { imageSrc, openLightbox, tileKey, videoSrc } from '../lib/media'
 import FileCard from './FileCard.vue'
 import MarkdownBlock from './MarkdownBlock.vue'
@@ -33,21 +34,20 @@ const videos = computed(() => (render.value ? files.value.filter((f) => videoSrc
     >
       <img :src="imageSrc(f)!" :alt="f.name || 'picture'" loading="lazy" />
     </button>
-    <video
-      v-for="(f, i) in videos"
-      :key="`v${i}`"
-      class="tx-inline-video"
-      :src="videoSrc(f)!"
-      :data-reveal-path="f.path"
-      :aria-label="f.name || 'video'"
-      :title="f.name || 'video'"
-      controls
-      autoplay
-      muted
-      loop
-      playsinline
-      preload="metadata"
-    />
+    <Tip v-for="(f, i) in videos" :key="`v${i}`" :label="f.name || 'video'">
+      <video
+        class="tx-inline-video"
+        :src="videoSrc(f)!"
+        :data-reveal-path="f.path"
+        :aria-label="f.name || 'video'"
+        controls
+        autoplay
+        muted
+        loop
+        playsinline
+        preload="metadata"
+      />
+    </Tip>
     <MarkdownBlock v-if="caption" :text="caption" />
     <div v-if="files.length" class="flex flex-wrap gap-2 ps-0">
       <FileCard v-for="(f, i) in files" :key="`f${i}`" :file="f" />

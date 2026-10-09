@@ -20,6 +20,7 @@ import { revealTarget, type RevealTarget } from './lib/reveal'
 import { COLLAPSE_MS } from './lib/motion'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { MENU_CONTENT, MENU_ITEM } from '@/components/sidebar/menuClasses'
+import { Tip } from '@/components/ui/tooltip'
 import TranscriptRow from './TranscriptRow.vue'
 import WorkingFooter from './parts/WorkingFooter.vue'
 import ToolGroup from './parts/ToolGroup.vue'
@@ -603,16 +604,16 @@ watch(
       enter-active-class="transition duration-150"
       leave-active-class="transition duration-150"
     >
-      <button
-        v-if="showJump"
-        type="button"
-        aria-label="Scroll to bottom"
-        title="Scroll to bottom"
-        class="tx-scroll-bottom absolute bottom-4 right-5"
-        @click="jumpToLatest"
-      >
-        <ArrowDown class="size-5 mix-blend-luminosity" />
-      </button>
+      <Tip v-if="showJump" label="Scroll to bottom">
+        <button
+          type="button"
+          aria-label="Scroll to bottom"
+          class="tx-scroll-bottom absolute bottom-4 right-5"
+          @click="jumpToLatest"
+        >
+          <ArrowDown class="size-5 mix-blend-luminosity" />
+        </button>
+      </Tip>
     </Transition>
   </div>
 </template>

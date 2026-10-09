@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from 'vue'
 import { Ban, Check, Clock, ExternalLink, Plug } from '@lucide/vue'
 import type { ElicitationAnswer, TranscriptItem } from '@shared/protocol'
+import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
 import { formAnswer, initialForm, limitHint, linkOf, LONG_CHOICE, togglePick } from '../lib/elicitation'
@@ -172,14 +173,18 @@ const answered = computed(() => {
     <!-- Where the link goes, in plain sight: the message is the server's to word, the host is not -->
     <div v-if="item.mode === 'url' && link" class="grid gap-1 px-3 pt-2 ps-9">
       <div class="flex min-w-0 flex-wrap items-center gap-2">
-        <a :href="link.href" :title="link.href" target="_blank" rel="noopener noreferrer" class="tx-btn">
-          Open link
-          <ExternalLink class="size-3.5" />
-        </a>
+        <Tip :label="link.href">
+          <a :href="link.href" target="_blank" rel="noopener noreferrer" class="tx-btn">
+            Open link
+            <ExternalLink class="size-3.5" />
+          </a>
+        </Tip>
         <span class="min-w-0 truncate text-[13px] font-medium text-text">{{ link.host }}</span>
         <span v-if="link.insecure" class="text-[12px] text-warning-text">Not secure (http)</span>
       </div>
-      <p class="truncate font-mono text-[12px] text-text-muted" :title="link.href">{{ link.href }}</p>
+      <Tip :label="link.href">
+        <p class="truncate font-mono text-[12px] text-text-muted">{{ link.href }}</p>
+      </Tip>
     </div>
     <p v-else-if="item.mode === 'url'" class="px-3 pt-2 ps-9 text-[12px] text-warning-text">
       The link it sent was refused: only http and https links open here.

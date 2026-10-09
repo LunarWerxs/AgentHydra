@@ -9,6 +9,7 @@ import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { nowDoing, runningFor } from '../lib/now-doing'
 import { useClock } from '@/lib/clock'
 import { waitingLine } from '@/components/sidebar/logic'
+import { Tip } from '@/components/ui/tooltip'
 import WorkingMark from './WorkingMark.vue'
 import RevealStep from './RevealStep.vue'
 
@@ -36,7 +37,9 @@ const step = computed(() => (!needsYou.value && props.chat.status !== 'starting'
   <div class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-[14px]" role="status" aria-live="polite">
     <span v-if="needsYou" class="mx-1.25 size-1.5 shrink-0 animate-dot-blink rounded-full bg-warning" />
     <WorkingMark v-else />
-    <span class="min-w-0 truncate" :class="needsYou ? 'text-warning-text' : 'tx-shimmer'" :title="why">{{ text }}</span>
+    <Tip :label="why">
+      <span class="min-w-0 truncate" :class="needsYou ? 'text-warning-text' : 'tx-shimmer'">{{ text }}</span>
+    </Tip>
     <RevealStep v-if="step" @click="step && emit('reveal', step)" />
     <span class="shrink-0 tabular-nums text-[13px] text-text-muted" aria-hidden="true">{{ elapsed }}</span>
     <span v-if="chat.queuedCount" class="shrink-0 text-[13px] text-text-muted">· {{ chat.queuedCount }} queued</span>

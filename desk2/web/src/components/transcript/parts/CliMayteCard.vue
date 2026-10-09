@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { FolderOpen } from '@lucide/vue'
 import type { CliMayteWorker, TranscriptItem } from '@shared/protocol'
+import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
 import { parseCliMayte, shortPath } from '../lib/tools'
 import { useTranscript } from '../context'
@@ -47,15 +48,12 @@ function dot(w: CliMayteWorker | null): string {
       </div>
       <div v-if="workers.length" class="flex flex-wrap items-center gap-1.5 pt-0.5">
         <span class="text-[11px] text-text-muted">Workers</span>
-        <span
-          v-for="w in workers"
-          :key="w.id"
-          class="inline-flex items-center gap-1.5 rounded-md bg-fill-hover px-1.5 py-0.5 font-mono text-[11px] text-text-muted"
-          :title="w.worker ? `${w.worker.title} · ${w.worker.status}` : w.id"
-        >
-          <span class="size-1.5 rounded-full" :class="dot(w.worker)" />{{ w.id.slice(0, 10) }}
-          <span v-if="w.worker" class="font-sans text-text-muted">{{ w.worker.status }}</span>
-        </span>
+        <Tip v-for="w in workers" :key="w.id" :label="w.worker ? `${w.worker.title} · ${w.worker.status}` : w.id">
+          <span class="inline-flex items-center gap-1.5 rounded-md bg-fill-hover px-1.5 py-0.5 font-mono text-[11px] text-text-muted">
+            <span class="size-1.5 rounded-full" :class="dot(w.worker)" />{{ w.id.slice(0, 10) }}
+            <span v-if="w.worker" class="font-sans text-text-muted">{{ w.worker.status }}</span>
+          </span>
+        </Tip>
       </div>
     </div>
     <Collapse :open="open">

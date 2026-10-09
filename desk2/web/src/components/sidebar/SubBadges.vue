@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Bot, Network } from '@lucide/vue'
+import { Tip } from '@/components/ui/tooltip'
 import { runPulse } from './logic'
 import { badgeTip, SUB_KIND_LABELS, toggleExpanded, type SubBadge } from './subitems'
 
@@ -18,20 +19,19 @@ const tone = (b: SubBadge) => (!b.running ? 'text-text-muted' : b.kind === 'jobs
 
 <template>
   <span v-if="badges.length" class="flex shrink-0 items-center gap-1">
-    <button
-      v-for="b in badges"
-      :key="b.kind"
-      type="button"
-      :title="badgeTip(b)"
-      :aria-label="label(b)"
-      :aria-expanded="b.open"
-      class="flex h-4 min-w-4 cursor-default items-center justify-center gap-0.5 rounded-sm px-1 text-[11px] leading-4 tnum transition-colors duration-(--dur-fast) hover:bg-fill-hover"
-      :class="[b.open ? 'bg-fill-selected' : 'bg-(--fill-secondary)', tone(b)]"
-      @click.stop="toggleExpanded(rowKey, b.kind)"
-      @keydown.enter.stop
-    >
-      <component :is="b.kind === 'tasks' ? Bot : Network" class="size-3 shrink-0" :class="b.running ? runPulse(b.kind === 'jobs' ? 'blue' : 'gray') : ''" aria-hidden="true" />
-      {{ b.running || b.total }}
-    </button>
+    <Tip v-for="b in badges" :key="b.kind" :label="badgeTip(b)">
+      <button
+        type="button"
+        :aria-label="label(b)"
+        :aria-expanded="b.open"
+        class="flex h-4 min-w-4 cursor-default items-center justify-center gap-0.5 rounded-sm px-1 text-[11px] leading-4 tnum transition-colors duration-(--dur-fast) hover:bg-fill-hover"
+        :class="[b.open ? 'bg-fill-selected' : 'bg-(--fill-secondary)', tone(b)]"
+        @click.stop="toggleExpanded(rowKey, b.kind)"
+        @keydown.enter.stop
+      >
+        <component :is="b.kind === 'tasks' ? Bot : Network" class="size-3 shrink-0" :class="b.running ? runPulse(b.kind === 'jobs' ? 'blue' : 'gray') : ''" aria-hidden="true" />
+        {{ b.running || b.total }}
+      </button>
+    </Tip>
   </span>
 </template>
