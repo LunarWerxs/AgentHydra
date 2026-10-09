@@ -5,22 +5,19 @@
 // continues it once the limit resets whether or not the orchestrator is armed (plugins/72-babysitter.ts): the plan
 // shows it and the orchestrator sends it nothing. Everything else stays a plan: a question waits for the CreAitor's
 // promotion (phase C), an outside session is only shown, and a chat a person wrote in is theirs (plan.ts).
-// Pure: the plugin (plugins/70-orchestrator.ts) reads, this decides, the plugin sends.
+// The words a continue carries are the judge's (judge.ts), never a template here. Pure: the plugin
+// (plugins/70-orchestrator.ts) reads, this decides, the judge judges, the plugin sends.
 
-import { ORCHESTRATOR_FROM, type OrchestratorRow } from '@shared/orchestrator'
+import type { OrchestratorRow } from '@shared/orchestrator'
 
 /** Continues sent to one chat since its last good turn before the orchestrator leaves it to a person. */
 export const RETRIES = 2
 
-/** One act, and `count`: the continues its chat has had once this act is carried out. */
+/** One act, and `count`: the continues its chat has had once this act is carried out. The words of a continue are the
+ *  judge's (judge.ts), sent by the plugin when the judge asks for one. */
 export type Act =
-  | { row: OrchestratorRow; kind: 'continue'; text: string; release: boolean; count: number }
+  | { row: OrchestratorRow; kind: 'continue'; release: boolean; count: number }
   | { row: OrchestratorRow; kind: 'give-up'; count: number }
-
-/** The message that continues a chat an error stopped; Desk shows it as a note from the orchestrator. */
-export function continueText(row: OrchestratorRow): string {
-  return `[${ORCHESTRATOR_FROM}] Not from the user.\nYour last turn stopped on an error: ${row.reason} Continue the task exactly where you left off. Do not redo steps that are already finished.`
-}
 
 /** This look's acts. `tries` (chat id -> continues since its last good turn) carries across looks; a chat that is
  *  neither stopped nor being watched ended a turn well (or a person took it) and is forgotten here, while an act's
@@ -39,7 +36,7 @@ export function decide(rows: readonly OrchestratorRow[], tries: Map<string, numb
     }
     const n = tries.get(row.id) ?? 0
     if (n > RETRIES) continue
-    acts.push(n === RETRIES ? { row, kind: 'give-up', count: n + 1 } : { row, kind: 'continue', text: continueText(row), release: true, count: n + 1 })
+    acts.push(n === RETRIES ? { row, kind: 'give-up', count: n + 1 } : { row, kind: 'continue', release: true, count: n + 1 })
   }
   return acts
 }

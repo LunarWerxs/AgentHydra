@@ -2,16 +2,16 @@
 // or a Claude Desktop session AgentHydra knows) and judges from its transcript alone whether the work is moving
 // (owner, 2026-10-09: "keeps an eye on actively running threads, and just once in a while peeks its nose in and sees
 // what's happening, kind of like a foreman whose job is to make sure his employees aren't fucking around"). No model
-// is asked. Pure: the plugin (plugins/70-orchestrator.ts) reads, this judges, the plugin sends the note.
+// is asked here. The findings below are the rules' signals: the judge (judge.ts) reads them with the transcript and
+// decides; the plugin (plugins/70-orchestrator.ts) sends what the judge writes. Pure.
 //
 // spinning: the same tool call failed SAME_FAILS times among the last RECENT_TOOLS calls, or the last ALL_FAILED calls
-//   all failed. It gets one note to stop repeating it.
-// hung: a tool call has run HUNG_MS and is still running. It gets one note asking whether it is stuck.
-// stalled: a Desk chat that says it is working wrote nothing for STALL_MS and is not inside a tool call. Only shown: a
-//   note queues behind the turn and cannot help an engine that stopped answering.
+//   all failed.
+// hung: a tool call has run HUNG_MS and is still running.
+// stalled: a Desk chat that says it is working wrote nothing for STALL_MS and is not inside a tool call. The plugin
+//   never sends into a stalled chat: a note queues behind the turn and cannot help an engine that stopped answering.
 
 import type { TranscriptItem } from '@shared/protocol'
-import { ORCHESTRATOR_FROM } from '@shared/orchestrator'
 
 /** How often one running chat is peeked at. */
 export const PEEK_MS = 10 * 60_000
@@ -62,12 +62,4 @@ export function peek(items: readonly TranscriptItem[], now: number, desk: boolea
 export function personRecent(items: readonly TranscriptItem[], now: number): boolean {
   for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'user') return now - items[i].ts < PERSON_QUIET_MS
   return false
-}
-
-/** The note for a spinning or hung chat; Desk shows it as a note from the orchestrator, never as the person's. */
-export function noteText(p: Extract<Peek, { kind: 'spinning' } | { kind: 'hung' }>): string {
-  const lead = `[${ORCHESTRATOR_FROM}] Not from the user.\n`
-  return p.kind === 'spinning'
-    ? `${lead}A check-in: ${p.detail}. Stop repeating it. Read the error, change the approach, and if something outside your reach blocks you, say what in one line.`
-    : `${lead}A check-in: ${p.detail}. If it is stuck, stop it and find another way; if it is meant to take this long, carry on.`
 }

@@ -9,7 +9,7 @@ describe('settings search', () => {
     expect(settingsGroups('general', '  ').map((g) => [g.heading, g.rows.map((r) => r.id)])).toEqual([
       ['New chats', ['model', 'effort', 'permission']],
       ['Behaviour', ['notifications', 'idle']],
-      ['Watching chats', ['babysitter', 'orchestrator']],
+      ['Watching chats', ['babysitter', 'orchestrator', 'orchestratorModel']],
       ['AgentHydra pages', ['ahTooltips', 'ahPrivacy']]
     ])
     // The working animation is no longer a setting: the window picks a look itself (lib/working-mark.ts).

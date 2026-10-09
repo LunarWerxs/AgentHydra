@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check } from '@lucide/vue'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
+import { isOrchestratorModel, ORCHESTRATOR_MODEL_ALIASES, type OrchestratorModelStatus } from '@shared/orchestrator'
 import { useShellSource } from '@/components/shell/source'
 import PaneSwitch from './PaneSwitch.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
@@ -61,6 +62,10 @@ const version = ref<string | null>(null)
 const home = ref<string | null>(null)
 const bridge = ref<{ up: boolean; url: string } | null>(null)
 const babysitter = ref<BabysitterStatus | null>(null)
+const orchestratorModel = ref<OrchestratorModelStatus | null>(null)
+/** The custom model id being typed (the Custom choice of the orchestrator model's select). */
+const customModelOpen = ref(false)
+const customModelDraft = ref('')
 const loadError = ref<string | null>(null)
 const saveError = ref<string | null>(null)
 const showSaved = ref(false)
@@ -168,6 +173,50 @@ async function loadBabysitter() {
   }
 }
 
+async function loadOrchestratorModel() {
+  try {
+    orchestratorModel.value = await api.orchestratorModel()
+  } catch {
+    orchestratorModel.value = null
+  }
+}
+
+const isAliasModel = (m: string | undefined) => (ORCHESTRATOR_MODEL_ALIASES as readonly string[]).includes(m ?? '')
+/** The select's choice: an alias, or Custom when the setting is a full id or the owner picked Custom. */
+const orchestratorModelChoice = computed(() => {
+  const m = local.value?.orchestratorModel
+  return customModelOpen.value || !isAliasModel(m) ? 'custom' : m!
+})
+/** Under the model's row: what the setting runs now (the model the SDK reported, once a judgment ran), or the alias. */
+const orchestratorModelNote = computed(() => {
+  const m = local.value?.orchestratorModel
+  if (customModelOpen.value && !isOrchestratorModel(customModelDraft.value.trim())) return 'Type a full model id, such as claude-opus-5-5.'
+  if (!m) return null
+  const s = orchestratorModel.value
+  if (s?.resolved && s.setting === m) return `Runs ${s.resolved}`
+  return isAliasModel(m) ? `Alias ${m}: the model it resolves to shows after the first judgment.` : `Runs ${m}`
+})
+function pickOrchestratorModel(v: string) {
+  if (v !== 'custom') {
+    customModelOpen.value = false
+    void save({ orchestratorModel: v })
+    return
+  }
+  const current = local.value?.orchestratorModel ?? ''
+  customModelOpen.value = true
+  customModelDraft.value = isAliasModel(current) ? '' : current
+}
+function commitOrchestratorModel() {
+  const id = customModelDraft.value.trim()
+  if (!isOrchestratorModel(id) || id === local.value?.orchestratorModel) return
+  void save({ orchestratorModel: id }).then(loadOrchestratorModel)
+}
+
+// A full model id in the setting shows in the custom box, ready to edit.
+watch(() => local.value?.orchestratorModel, (m) => {
+  if (m && !isAliasModel(m)) customModelDraft.value = m
+}, { immediate: true })
+
 const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 /** Under the Babysitter row: what a usage limit has stopped now, by account, and what it last continued. */
 const babysitterNote = computed(() => {
@@ -264,6 +313,12 @@ document.addEventListener('visibilitychange', onBabysitterVisibility)
 function onBabysitterVisibility() {
   if (showsBabysitter.value && !document.hidden) void loadBabysitter()
 }
+
+// The orchestrator model's resolved id is read when its row comes on screen.
+const showsOrchestratorModel = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'orchestratorModel')))
+watch(showsOrchestratorModel, (on) => {
+  if (on) void loadOrchestratorModel()
+}, { immediate: true })
 
 // AgentHydra's update check asks its Git remote, so it runs when its row is first on screen.
 const showsUpdate = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'ahVersion')))
@@ -420,6 +475,7 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ babysitterNote }}</div>
+                <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-if="r.id === 'ahDesktopCliPair' && inst.pairingConfirm.value" class="mt-1.5">
@@ -519,6 +575,28 @@ onBeforeUnmount(() => {
                   :model-value="local.orchestrator"
                   @update:model-value="(v: boolean) => save({ orchestrator: v })"
                 />
+
+                <div v-else-if="r.id === 'orchestratorModel'" class="flex shrink-0 items-center gap-2">
+                  <input
+                    v-if="orchestratorModelChoice === 'custom'"
+                    v-model="customModelDraft"
+                    type="text"
+                    class="h-7 w-52 rounded-(--radius-6) bg-fill-5 px-2 font-mono text-[13px] text-text shadow-[inset_0_0_0_1px_var(--border)] outline-none focus:shadow-(--focus-ring)"
+                    aria-label="Custom model id"
+                    placeholder="claude-opus-5-5"
+                    @blur="commitOrchestratorModel"
+                    @keydown.enter="commitOrchestratorModel"
+                  />
+                  <Select :model-value="orchestratorModelChoice" @update:model-value="(v) => pickOrchestratorModel(String(v))">
+                    <SelectTrigger :class="TRIGGER" aria-label="Orchestrator model"><SelectValue /></SelectTrigger>
+                    <SelectContent :class="CONTENT" position="popper" align="end" :side-offset="4">
+                      <SelectItem :class="SELECT_ITEM" value="opus">Opus (newest)</SelectItem>
+                      <SelectItem :class="SELECT_ITEM" value="sonnet">Sonnet (newest)</SelectItem>
+                      <SelectItem :class="SELECT_ITEM" value="haiku">Haiku (newest)</SelectItem>
+                      <SelectItem :class="SELECT_ITEM" value="custom">Custom id</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
 
                 <PaneSwitch
                   v-else-if="r.id === 'delegate'"

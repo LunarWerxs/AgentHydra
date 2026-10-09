@@ -1,8 +1,8 @@
 // plugins/70-orchestrator.ts through its route: the chats and transcripts come from stand-in engine routes (the send
-// queue's too, which records what the armed orchestrator queues), the CreAitor from a stand-in script run by this
-// test's own runtime. Nothing outside a temp folder is read or written.
+// queue's too, which records what the armed orchestrator queues), the judge from a stand-in model (ctx.deps.orchestratorAsk),
+// the CreAitor from a stand-in script run by this test's own runtime. Nothing outside a temp folder is read or written.
 
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, setSystemTime, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,13 +13,17 @@ import { ORCHESTRATOR_FROM, type OrchestratorPlan } from '@shared/orchestrator'
 import type { ServerContext } from '../../src/context'
 import { createServer, type DeskServer } from '../../src/index'
 import plugin from '../../src/plugins/70-orchestrator'
+import { NOTES_PER_HOUR } from '../../src/orchestrator/foreman'
 
 const NOW = Date.now()
+// The real fetch: a web store test in the same `bun test` run replaces the global one and never restores it.
+const realFetch = globalThis.fetch
 const temps: string[] = []
 const servers: DeskServer[] = []
 const stops: (() => void | Promise<void>)[] = []
 const saved = { tool: process.env.HYDRA_DESK_CREAITOR, python: process.env.HYDRA_DESK_PYTHON }
 afterEach(async () => {
+  setSystemTime()
   for (const s of stops.splice(0)) await s()
   for (const s of servers.splice(0)) await s.stop()
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
@@ -84,10 +88,28 @@ const OUTSIDE: [ExternalSession, TranscriptItem[]][] = [
   [outside('o-archived', { archived: true }), [said('🔴 NEED: Gone? A) a B) b')]]
 ]
 
+/** What the judge's stand-in answers for one chat: a verdict with its message and reason, or 'error' (the model call fails). */
+type Answer = { verdict: 'fine' | 'nudge' | 'continue' | 'leave'; message?: string; why?: string } | 'error'
+
+/** The judge's stand-in, handed to the plugin as ctx.deps.orchestratorAsk in place of the SDK: `answers` by chat id, `fallback`
+ *  for the rest. It records each chat it was asked about, and the model each call asked for. */
+function judge(answers: Record<string, Answer> = {}, fallback: Answer = { verdict: 'fine', why: 'it is moving' }) {
+  const asked: string[] = []
+  const models: string[] = []
+  const ask = async (req: { brief: { id: string }; model: string }): Promise<{ text: string; resolved: string | null }> => {
+    asked.push(req.brief.id)
+    models.push(req.model)
+    const a = answers[req.brief.id] ?? fallback
+    if (a === 'error') throw new Error('model down')
+    return { text: JSON.stringify({ verdict: a.verdict, message: a.message ?? '', why: a.why ?? 'the reason' }), resolved: 'claude-opus-5-5' }
+  }
+  return { asked, models, ask }
+}
+
 /** The plugin over a stand-in engine; `sent` counts every request that would change something, and `queued` holds
  *  each message handed to the send queue and not yet delivered (a test delivers them by emptying it). `onQueue` runs
  *  while the queue takes a message. */
-function desk(onQueue?: (app: Hono) => Promise<unknown>, chats = CHATS): { app: Hono; sent: string[]; queued: { chatId: string; text: string }[] } {
+function desk(onQueue?: (app: Hono) => Promise<unknown>, chats = CHATS, model = judge()): { app: Hono; sent: string[]; queued: { chatId: string; text: string }[] } {
   const app = new Hono()
   const sent: string[] = []
   const queued: { chatId: string; text: string }[] = []
@@ -114,15 +136,186 @@ function desk(onQueue?: (app: Hono) => Promise<unknown>, chats = CHATS): { app: 
   )
   app.get('/api/external/sessions', (c) => c.json(OUTSIDE.map(([s]) => s)))
   app.get('/api/external/sessions/:id/items', (c) => c.json(OUTSIDE.find(([s]) => s.id === c.req.param('id'))?.[1] ?? []))
-  // The `orchestrator` setting is what arming saves.
-  const settings = { orchestrator: false }
-  plugin(app, { onStop: (fn: () => void) => stops.push(fn), settings: () => settings, updateSettings: (p: object) => Object.assign(settings, p) } as unknown as ServerContext)
+  // The `orchestrator` setting is what arming saves; `orchestratorModel` is what the judge asks.
+  const settings = { orchestrator: false, orchestratorModel: 'opus' }
+  plugin(app, {
+    onStop: (fn: () => void) => stops.push(fn),
+    settings: () => settings,
+    updateSettings: (p: object) => Object.assign(settings, p),
+    deps: { orchestratorAsk: model.ask }
+  } as unknown as ServerContext)
   return { app, sent, queued }
 }
 
 /** The page's Arm / Disarm. */
 const arm = async (app: Hono, armed: boolean): Promise<OrchestratorPlan> =>
   (await (await app.request('/api/diagnostics/orchestrator', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ armed }) })).json()) as OrchestratorPlan
+
+/** Moves the clock to `min` minutes after the chats were written (the judge judges again after PEEK_MS). */
+const at = (min: number): void => {
+  setSystemTime(new Date(NOW + min * 60_000))
+}
+
+test('armed, the judge continues a Desk chat an error stopped, once per stop and twice at most, and a limit stop stays with the babysitter', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  const model = judge({ error: { verdict: 'continue', message: 'Pick up where you stopped.' } })
+  const { app, sent, queued } = desk(undefined, CHATS, model)
+  const lead = `[${ORCHESTRATOR_FROM}] Not from the user.\n`
+  const continued = ['POST /api/diagnostics/orchestrator', 'POST /api/queue', 'POST /api/queue/chats/error/resume']
+  // Arming looks at once: the judge reads the chat an error stopped, and its message goes out with a resume. Never
+  // 'unreadable', whose transcript did not load (a person may have just written in it), nor 'limited' or 'moved', which
+  // the babysitter continues after the reset.
+  const first = await arm(app, true)
+  expect(first.mode).toBe('armed')
+  expect(sent.splice(0)).toEqual(continued)
+  expect(queued).toEqual([{ chatId: 'error', text: `${lead}Pick up where you stopped.` }])
+  expect(first.acts.map((a) => [a.id, a.move, a.did, a.error])).toEqual([['error', 'retry-error', 'continued', undefined]])
+  expect(first.rows.find((r) => r.id === 'error')?.judgment).toMatchObject({ verdict: 'continue', message: 'Pick up where you stopped.', held: null, error: null, resolved: 'claude-opus-5-5' })
+  expect([model.asked.includes('unreadable'), model.asked.includes('limited'), model.asked.includes('moved'), model.models[0]]).toEqual([false, false, false, 'opus'])
+  // Judged within PEEK_MS, and its message still waits in the send queue: a look asks nothing new about it.
+  expect((await arm(app, true)).acts).toHaveLength(1)
+  expect([sent.splice(0), model.asked.filter((id) => id === 'error')]).toEqual([['POST /api/diagnostics/orchestrator'], ['error']])
+  // Delivered; eleven minutes later it stopped again: the second continue.
+  queued.splice(0)
+  at(11)
+  expect((await arm(app, true)).acts).toHaveLength(2)
+  expect(sent.splice(0)).toEqual(continued)
+  // The third stop: the hard limit gives up without asking the judge, and the plan leaves the chat to a person.
+  queued.splice(0)
+  at(22)
+  const third = await arm(app, true)
+  expect([sent.splice(0), queued, model.asked.filter((id) => id === 'error').length]).toEqual([['POST /api/diagnostics/orchestrator'], [], 2])
+  expect(third.acts[0]).toMatchObject({ id: 'error', did: 'gave-up' })
+  const by = Object.fromEntries(third.rows.map((r) => [r.id, r]))
+  expect([by.error.move, by.limited.move, by.unreadable.move]).toEqual(['leave', 'resume-after-limit', 'retry-error'])
+  expect(by.error.reason).toBe('the orchestrator continued it 2 times and it stopped again: network down')
+  expect(by.limited.reason).toBe('its account hit the usage limit; the babysitter continues it in 38 min, when it resets')
+  // The model's own setting is what the route reports, once the SDK has named the model it resolves to.
+  expect(await (await app.request('/api/orchestrator/model')).json()).toEqual({ setting: 'opus', resolved: 'claude-opus-5-5' })
+  const off = await arm(app, false)
+  expect([off.mode, sent.splice(0), queued]).toEqual(['shadow', ['POST /api/diagnostics/orchestrator'], []])
+})
+
+test('a judge whose call fails sends nothing, and its error shows on the row', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  const { app, sent, queued } = desk(undefined, [[chat('error', { status: 'error', lastError: 'network down' }), []]], judge({ error: 'error' }))
+  const plan = await arm(app, true)
+  expect([queued, sent.splice(0), plan.acts]).toEqual([[], ['POST /api/diagnostics/orchestrator'], []])
+  expect(plan.rows.find((r) => r.id === 'error')?.judgment).toMatchObject({ verdict: null, error: 'model down', message: '', held: null })
+})
+
+test('a disarm part-way through a look stops it before the next send', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  // The owner's Disarm lands while the queue takes the look's first continue, with a second chat still to continue.
+  // The second chat's judgment answers only after that Disarm, as a slow model would; the look is judged three at a time,
+  // so without the wait it could already have passed its check when the Disarm landed.
+  const carry = { verdict: 'continue' as const, message: 'Carry on.' }
+  const model = judge({ error: carry, 'error-2': carry })
+  let releaseSecond: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    releaseSecond = resolve
+  })
+  const slow = async (req: Parameters<typeof model.ask>[0]) => {
+    if (req.brief.id === 'error-2') await gate
+    return model.ask(req)
+  }
+  const { app, queued } = desk(
+    async (self) => {
+      await arm(self, false)
+      releaseSecond()
+    },
+    [...CHATS, [chat('error-2', { status: 'error', lastError: 'timed out' }), []]],
+    { ...model, ask: slow }
+  )
+  await arm(app, true)
+  expect(queued.map((q) => q.chatId)).toEqual(['error'])
+  const plan = (await (await app.request('/api/diagnostics/orchestrator')).json()) as OrchestratorPlan
+  expect([plan.mode, plan.acts.map((a) => a.id)]).toEqual(['shadow', ['error']])
+})
+
+// The judge on running chats: one due a peek is judged, and a nudge goes in. Never into a chat a person wrote in, never
+// into a stalled one (a note queues behind a turn that stopped answering), and never more than two an hour.
+test('armed, the judge checks in on a running chat that keeps failing a step, and leaves a stalled one and one a person just wrote in', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  const failed = (n: number, status: 'error' | 'done' = 'error'): TranscriptItem => ({
+    id: `t${n}`, ts: NOW - (10 - n) * 60_000, kind: 'tool_use', name: 'Bash', input: { command: 'bun test' }, status, startedAt: NOW - (10 - n) * 60_000
+  })
+  const model = judge({
+    spinning: { verdict: 'nudge', message: 'Stop repeating bun test; read the error first.', why: 'the same test fails again and again' },
+    quiet: { verdict: 'nudge', message: 'Still there?', why: 'nothing new for half an hour' }
+  })
+  const { app, queued } = desk(
+    undefined,
+    [
+      [chat('spinning', { status: 'working', activity: 'Bash: bun test' }), [failed(1), failed(2), failed(3)]],
+      [chat('quiet', { status: 'working' }), [said('Starting on it.', 30 * 60_000)]],
+      [chat('moving', { status: 'working' }), [failed(4), failed(5, 'done')]],
+      [chat('person', { status: 'working' }), [failed(6), failed(7), failed(8), wrote(60_000)]]
+    ],
+    model
+  )
+  const first = await arm(app, true)
+  expect(queued).toEqual([{ chatId: 'spinning', text: `[${ORCHESTRATOR_FROM}] Not from the user.\nStop repeating bun test; read the error first.` }])
+  expect(first.acts.map((a) => [a.id, a.did, a.detail]).sort()).toEqual([
+    ['quiet', 'flagged', 'nothing new for half an hour'],
+    ['spinning', 'nudged', 'the same test fails again and again']
+  ])
+  const by = Object.fromEntries(first.rows.map((r) => [r.id, r]))
+  expect([by.spinning.judgment?.verdict, by.spinning.judgment?.held]).toEqual(['nudge', null])
+  expect(by.quiet.judgment?.held).toContain('stalled')
+  expect(model.asked).not.toContain('person')
+  // Judged within PEEK_MS: the next look asks nothing more about them.
+  queued.splice(0)
+  expect((await arm(app, true)).acts).toHaveLength(2)
+  expect([queued, model.asked.filter((id) => id === 'spinning')]).toEqual([[], ['spinning']])
+})
+
+test('two check-ins an hour to one chat at most, even when the judge asks for more', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  // A call that has run an hour is hung, not stalled: the judge is asked each time, and the limit holds the third check-in.
+  const hung: TranscriptItem = { id: 'h', ts: NOW - 3_600_000, kind: 'tool_use', name: 'Bash', input: { command: 'sleep 9999' }, status: 'running', startedAt: NOW - 3_600_000 }
+  const model = judge({ hung: { verdict: 'nudge', message: 'Is it stuck? Stop it if so.', why: 'a command has run an hour' } })
+  const { app, queued } = desk(undefined, [[chat('hung', { status: 'working' }), [hung]]], model)
+  await arm(app, true)
+  expect(queued).toHaveLength(1)
+  queued.splice(0)
+  at(11)
+  await arm(app, true)
+  expect(queued).toHaveLength(1)
+  queued.splice(0)
+  at(22)
+  const third = await arm(app, true)
+  expect([queued, model.asked.filter((id) => id === 'hung').length]).toEqual([[], 3])
+  expect(third.rows.find((r) => r.id === 'hung')?.judgment).toMatchObject({ verdict: 'nudge', held: `${NOTES_PER_HOUR} check-in notes already went to it this hour` })
+})
+
+test('the judge is asked about at most three chats at once', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  let inFlight = 0
+  let most = 0
+  const asked: string[] = []
+  const slow = async (req: { brief: { id: string } }): Promise<{ text: string; resolved: string | null }> => {
+    asked.push(req.brief.id)
+    inFlight++
+    most = Math.max(most, inFlight)
+    await Bun.sleep(20)
+    inFlight--
+    return { text: JSON.stringify({ verdict: 'fine', message: '', why: 'moving' }), resolved: null }
+  }
+  const errors = [0, 1, 2, 3, 4].map((i): [ChatSummary, TranscriptItem[]] => [chat(`e${i}`, { status: 'error', lastError: 'boom' }), []])
+  const { app } = desk(undefined, errors, { asked: [], models: [], ask: slow })
+  await arm(app, true)
+  expect(asked.filter((id) => id.startsWith('e'))).toHaveLength(5)
+  expect(most).toBe(3)
+})
+
+test('a page look judges nothing; only the armed tick does', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  const model = judge({ error: { verdict: 'continue', message: 'Carry on.' } })
+  const { app, sent } = desk(undefined, CHATS, model)
+  await app.request('/api/diagnostics/orchestrator')
+  expect([model.asked, sent]).toEqual([[], []])
+})
 
 test('each open chat and outside session gets its one next move, most urgent first, and nothing is sent', async () => {
   process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
@@ -161,77 +354,6 @@ test('each open chat and outside session gets its one next move, most urgent fir
   expect(plan.counts).toEqual({ 'answer-question': 3, 'answer-need': 3, 'retry-error': 2, 'resume-after-limit': 1, watch: 4, leave: 4, done: 2 })
   expect([plan.mode, plan.acts]).toEqual(['shadow', []])
   expect(sent).toEqual([])
-})
-
-test('armed, it continues each Desk chat an error stopped, once per stop and twice at most, and leaves a limit stop to the babysitter', async () => {
-  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
-  const { app, sent, queued } = desk()
-  const lead = `[${ORCHESTRATOR_FROM}] Not from the user.\n`
-  const continued = ['POST /api/diagnostics/orchestrator', 'POST /api/queue', 'POST /api/queue/chats/error/resume']
-  // Arming looks at once: the chat an error stopped gets one continue; never 'unreadable', whose transcript did not
-  // load (a person may have just written in it), nor 'limited', which the babysitter continues after its reset.
-  const first = await arm(app, true)
-  expect(first.mode).toBe('armed')
-  expect(sent.splice(0)).toEqual(continued)
-  expect(queued.map((q) => q.chatId)).toEqual(['error'])
-  expect(queued[0].text).toStartWith(`${lead}Your last turn stopped on an error: network down`)
-  expect(first.acts.map((a) => [a.id, a.move, a.did, a.error])).toEqual([['error', 'retry-error', 'continued', undefined]])
-  // While it waits in the send queue, another look sends nothing.
-  expect((await arm(app, true)).acts).toHaveLength(1)
-  expect(sent.splice(0)).toEqual(['POST /api/diagnostics/orchestrator'])
-  // Delivered, and stopped again (the stand-ins never change): one more.
-  queued.splice(0)
-  expect((await arm(app, true)).acts).toHaveLength(2)
-  expect(sent.splice(0)).toEqual(continued)
-  // The third stop: it gives up, sends nothing, and the plan leaves it to a person, for good.
-  queued.splice(0)
-  const third = await arm(app, true)
-  expect([sent.splice(0), queued]).toEqual([['POST /api/diagnostics/orchestrator'], []])
-  expect(third.acts[0]).toMatchObject({ id: 'error', did: 'gave-up' })
-  const by = Object.fromEntries(third.rows.map((r) => [r.id, r]))
-  expect([by.error.move, by.limited.move, by.unreadable.move]).toEqual(['leave', 'resume-after-limit', 'retry-error'])
-  expect(by.error.reason).toBe('the orchestrator continued it 2 times and it stopped again: network down')
-  expect(by.limited.reason).toBe('its account hit the usage limit; the babysitter continues it in 60 min, when it resets')
-  for (const _ of [5, 6]) expect((await arm(app, true)).acts).toHaveLength(3)
-  const off = await arm(app, false)
-  expect([off.mode, sent.splice(0), queued]).toEqual(['shadow', Array(3).fill('POST /api/diagnostics/orchestrator'), []])
-})
-
-test('a disarm part-way through a look stops it before the next send', async () => {
-  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
-  // The owner's Disarm lands while the queue takes the look's first continue, with a second chat still to continue.
-  const { app, queued } = desk((self) => arm(self, false), [...CHATS, [chat('error-2', { status: 'error', lastError: 'timed out' }), []]])
-  await arm(app, true)
-  expect(queued.map((q) => q.chatId)).toEqual(['error'])
-  const plan = (await (await app.request('/api/diagnostics/orchestrator')).json()) as OrchestratorPlan
-  expect([plan.mode, plan.acts.map((a) => a.id)]).toEqual(['shadow', ['error']])
-})
-
-// The foreman (orchestrator/foreman.ts): one check-in per episode, never into a chat a person is writing in, and a chat
-// that stopped writing is only flagged.
-test('armed, the foreman checks in once on a running chat that keeps failing the same step, and only flags one that stopped writing', async () => {
-  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
-  const failed = (n: number, status: 'error' | 'done' = 'error'): TranscriptItem => ({
-    id: `t${n}`, ts: NOW - (10 - n) * 60_000, kind: 'tool_use', name: 'Bash', input: { command: 'bun test' }, status, startedAt: NOW - (10 - n) * 60_000
-  })
-  const { app, queued } = desk(undefined, [
-    [chat('spinning', { status: 'working', activity: 'Bash: bun test' }), [failed(1), failed(2), failed(3)]],
-    [chat('quiet', { status: 'working' }), [said('Starting on it.', 30 * 60_000)]],
-    [chat('moving', { status: 'working' }), [failed(4), failed(5, 'done')]],
-    [chat('person', { status: 'working' }), [failed(6), failed(7), failed(8), wrote(60_000)]]
-  ])
-  const first = await arm(app, true)
-  expect(queued.map((q) => q.chatId)).toEqual(['spinning'])
-  expect(queued[0].text).toStartWith(`[${ORCHESTRATOR_FROM}] Not from the user.\nA check-in: the same Bash call failed 3 times.`)
-  expect(first.acts.map((a) => [a.id, a.did, a.detail])).toEqual([
-    ['quiet', 'flagged', 'nothing new for 30 min while it says it is working'],
-    ['spinning', 'nudged', 'the same Bash call failed 3 times']
-  ])
-  expect(first.rows.find((r) => r.id === 'spinning')?.reason).toBe('working: Bash: bun test; the foreman saw: the same Bash call failed 3 times')
-  // The next look, inside the peek interval, sends nothing more.
-  queued.splice(0)
-  expect((await arm(app, true)).acts).toHaveLength(2)
-  expect(queued).toEqual([])
 })
 
 test('?ask=1 hands each waiting question and its choices to the CreAitor and shows its answer', async () => {
@@ -275,7 +397,7 @@ test("an ask longer than the server's 10 s idle limit still reaches the page", a
   process.env.HYDRA_DESK_PYTHON = process.execPath
   const desk = await createServer({ port: 0, home: join(dir, 'home'), pluginsDir: plugins })
   servers.push(desk)
-  const plan = (await (await fetch(`${desk.url}/api/diagnostics/orchestrator?ask=1`)).json()) as OrchestratorPlan
+  const plan = (await (await realFetch(`${desk.url}/api/diagnostics/orchestrator?ask=1`)).json()) as OrchestratorPlan
   expect(plan.rows.map((r) => [r.id, r.creaitor])).toEqual([['need', { verdict: 'decide', answer: '', option: 'No', confidence: 0.9, basis: [], needLine: null, mode: 'shadow' }]])
 }, 60_000)
 

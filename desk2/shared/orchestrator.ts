@@ -5,7 +5,8 @@
 // POST the same path { armed }): it also continues a Desk chat an error stopped (server/src/orchestrator/act.ts), and its
 // foreman peeks at running chats and sends a note to one that keeps failing the same step or hangs on a call
 // (server/src/orchestrator/foreman.ts); a chat a usage limit stopped is the babysitter's (shared/babysitter.ts).
-// Plain types only.
+// Since 2026-10-09 a model judges each chat it looks at (server/src/orchestrator/judge.ts): the rules above are its
+// inputs and its safety rails, and each judgment is shown on the chat's row. Plain types and pure checks only.
 
 /** The one next move for a chat, most urgent first. */
 export type OrchestratorMove =
@@ -46,6 +47,44 @@ export interface OrchestratorRow {
   options?: string[]
   /** Present only on ?ask=1, for rows with a question. */
   creaitor?: CreaitorAnswer | { error: string }
+  /** The model's latest judgment of this chat, when it has judged it (the armed orchestrator). */
+  judgment?: OrchestratorJudgment
+}
+
+/** What the judge decided for one chat: fine (send nothing), nudge (a check-in), continue (carry on after an error),
+ *  leave (only a person can move it). Anything else in the model's answer is an error, never a guess. */
+export const ORCHESTRATOR_VERDICTS = ['fine', 'nudge', 'continue', 'leave'] as const
+export type OrchestratorVerdict = (typeof ORCHESTRATOR_VERDICTS)[number]
+
+/** The model the judge asks: Claude Code's alias for the newest model of that family (`opus` is the newest Opus), or a
+ *  full model id such as `claude-opus-5-5`. */
+export const ORCHESTRATOR_MODEL_ALIASES = ['opus', 'sonnet', 'haiku'] as const
+
+/** A valid `orchestratorModel`: one of the aliases, or a full `claude-...` model id. */
+export function isOrchestratorModel(v: unknown): v is string {
+  return typeof v === 'string' && ((ORCHESTRATOR_MODEL_ALIASES as readonly string[]).includes(v) || /^claude-[a-z0-9][a-z0-9.-]{0,63}$/.test(v))
+}
+
+/** GET /api/orchestrator/model: the `orchestratorModel` setting, and the model id the SDK reported for it (null until the
+ *  judge has asked the model once; then Settings shows what the alias resolves to). */
+export interface OrchestratorModelStatus {
+  setting: string
+  resolved: string | null
+}
+
+/** One judgment of one chat, shown on its row. `verdict` is null and `error` set when the model call failed; nothing
+ *  was sent then. `resolved` is the model id the SDK reported for the call (null when it did not say). `message` is what
+ *  the judge wrote to send ('' for fine or leave); `held` says why a nudge or continue the judge asked for was not sent,
+ *  the hard limits (server/src/orchestrator/judge.ts, plugins/70-orchestrator.ts) holding it. */
+export interface OrchestratorJudgment {
+  at: number
+  model: string // the `orchestratorModel` setting the call used
+  resolved: string | null
+  verdict: OrchestratorVerdict | null
+  why: string // one sentence for the owner, or the error
+  message: string
+  held: string | null
+  error: string | null
 }
 
 /** The name on every message the armed orchestrator sends: Desk shows it as a note from it, never as the person's
@@ -63,6 +102,7 @@ export interface OrchestratorAct {
   did: 'continued' | 'gave-up' | 'nudged' | 'flagged'
   /** The foreman's acts: which app runs the chat, and what it saw. */
   source?: OrchestratorRow['source']
+  /** The judge's one-sentence reason for the act. */
   detail?: string
   /** Why the send failed, when it did. */
   error?: string

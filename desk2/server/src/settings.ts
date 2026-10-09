@@ -3,6 +3,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DeskSettings, Effort, PermissionMode } from '@shared/protocol'
+import { isOrchestratorModel } from '@shared/orchestrator'
 import { writeFlushed } from './write-flushed'
 
 export const DEFAULT_SETTINGS: DeskSettings = {
@@ -18,6 +19,7 @@ export const DEFAULT_SETTINGS: DeskSettings = {
   hiddenProjects: [],
   babysitter: true,
   orchestrator: false,
+  orchestratorModel: 'opus',
 }
 
 const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -37,6 +39,7 @@ const CHECKS: { [K in keyof DeskSettings]: [Check, string] } = {
   hiddenProjects: [isPathList, 'a list of folder paths'],
   babysitter: [(v) => typeof v === 'boolean', 'true or false'],
   orchestrator: [(v) => typeof v === 'boolean', 'true or false'],
+  orchestratorModel: [isOrchestratorModel, "'opus', 'sonnet', 'haiku' or a full model id such as claude-opus-5-5"],
 }
 
 function isPathList(v: unknown): boolean {

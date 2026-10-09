@@ -32,6 +32,7 @@ export type SettingsRowId =
   | 'idle'
   | 'babysitter'
   | 'orchestrator'
+  | 'orchestratorModel'
   | 'ahTooltips'
   | 'ahPrivacy'
   | 'ahAlerts'
@@ -144,7 +145,14 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'Watching chats',
     label: 'Orchestrator',
     description:
-      'A foreman for running chats: every 10 minutes it peeks in, and nudges one that keeps failing the same step or is stuck on a command. It also continues a chat an error stopped. What it saw and did: Diagnostics > Orchestrator.'
+      'A foreman for running chats: every 10 minutes a model peeks in and judges whether it is moving; it nudges one that is going nowhere. It also continues a chat an error stopped. What it judged and did: Diagnostics > Orchestrator.'
+  },
+  {
+    id: 'orchestratorModel',
+    section: 'general',
+    group: 'Watching chats',
+    label: 'Orchestrator model',
+    description: 'The model that judges each chat the orchestrator looks at. Opus, Sonnet and Haiku are always the newest of their family.'
   },
   {
     id: 'ahTooltips',

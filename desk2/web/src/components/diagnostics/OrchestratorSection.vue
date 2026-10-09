@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import type { OrchestratorAct, OrchestratorMove, OrchestratorPlan, OrchestratorRow } from '@shared/orchestrator'
+import type { OrchestratorAct, OrchestratorJudgment, OrchestratorMove, OrchestratorPlan, OrchestratorRow } from '@shared/orchestrator'
 import type { View } from '@/components/shell/logic'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
 import { relativeTime } from '@/components/sidebar/search'
 
 // Orchestrator: each open chat's next move as the orchestrator sees it, and on request what the CreAitor says the
-// owner would answer. Shadow until the owner arms it (here or Settings > General > Orchestrator); armed, it continues
-// Desk chats an error stopped (server/src/orchestrator/act.ts), its foreman peeks at running chats and nudges one that
-// is going nowhere (server/src/orchestrator/foreman.ts), and it lists what it did. Nothing else here sends anything.
+// owner would answer. Shadow until the owner arms it (here or Settings > General > Orchestrator); armed, a model judges
+// each running chat due a peek and each Desk chat an error stopped (server/src/orchestrator/judge.ts), sends the message
+// it writes when the hard limits allow (plugins/70-orchestrator.ts), and lists what it did. Nothing else here sends.
 const api = usePaneApi()
 const src = useShellSource()
 const plan = ref<OrchestratorPlan | null>(null)
@@ -64,6 +64,9 @@ const SOURCE: Record<OrchestratorRow['source'], string> = { desk: '', desktop: '
 const where = (r: OrchestratorRow): string => [SOURCE[r.source], r.account].filter(Boolean).join(' ')
 const verdictText = (v: string): string => (v === 'decide' ? 'The owner would say' : v === 'reversible' ? 'Take the reversible option' : 'Only the owner can answer')
 const armed = computed(() => plan.value?.mode === 'armed')
+/** A judgment's line: its verdict and reason, or its error; what the limits held back; the model and when. */
+const judgedText = (j: OrchestratorJudgment): string => (j.error ? `The judge failed: ${j.error}` : `${j.verdict}: ${j.why}`)
+const judgedWhere = (j: OrchestratorJudgment): string => [j.resolved ?? j.model, relativeTime(j.at)].join(' · ')
 const actText = (a: OrchestratorAct): string =>
   a.did === 'nudged'
     ? `Checked in: ${a.detail ?? 'it was going nowhere'}`
@@ -75,7 +78,7 @@ const actText = (a: OrchestratorAct): string =>
 <template>
   <div class="text-[13px] leading-4.75" data-testid="orchestrator">
     <p v-if="armed" class="text-text-muted">
-      What the orchestrator does next in each open chat. Armed: it continues Desk chats an error stopped and its foreman checks in on running ones; the rest it only plans. A usage limit's stop is the babysitter's.
+      What the orchestrator does next in each open chat. Armed: a model judges the running chats and the Desk chats an error stopped, and sends the message it writes when the limits allow; the rest it only plans. A usage limit's stop is the babysitter's.
     </p>
     <p v-else class="text-text-muted">What the orchestrator would do next in each open chat. Shadow: it only plans, nothing is sent.</p>
     <p v-if="error" class="mt-2 text-danger-text">Could not load the plan: {{ error }}</p>
@@ -124,6 +127,11 @@ const actText = (a: OrchestratorAct): string =>
           </div>
           <div v-if="r.question" class="mt-0.5 truncate text-text-2" :title="r.question">{{ r.question }}</div>
           <div v-if="r.options?.length" class="mt-0.5 truncate text-text-muted">{{ r.options.join(' · ') }}</div>
+          <div v-if="r.judgment" class="mt-0.5 text-text-2" :class="{ 'text-danger-text': r.judgment.error }" data-testid="judgment">
+            {{ judgedText(r.judgment) }}
+            <span class="text-text-muted">({{ judgedWhere(r.judgment) }}{{ r.judgment.held ? `; held: ${r.judgment.held}` : '' }})</span>
+            <div v-if="r.judgment.message" class="mt-0.5 truncate text-text-muted" :title="r.judgment.message">Message: {{ r.judgment.message }}</div>
+          </div>
           <div v-if="r.creaitor && 'error' in r.creaitor" class="mt-0.5 text-danger-text">{{ r.creaitor.error }}</div>
           <div v-else-if="r.creaitor" class="mt-0.5 text-text-2">
             {{ verdictText(r.creaitor.verdict) }}: {{ r.creaitor.option || r.creaitor.answer || r.creaitor.needLine }}

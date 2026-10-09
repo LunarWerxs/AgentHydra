@@ -4,20 +4,24 @@
 // would answer each one that waits on a question. Phase A, shadow: that is all it does. Phase B, armed: the
 // `orchestrator` setting (Settings > General, beside the babysitter's switch; or POST the same path { armed }), off by
 // default and kept until it is turned off (owner, 2026-10-09: "I may not always want the foreman on ... but sometimes I
-// might want it on"). Armed, it looks every TICK_MS: it continues Desk chats an error stopped (orchestrator/act.ts)
-// through Desk's send queue, and its foreman peeks at each running chat every PEEK_MS and sends a check-in note to one
-// that keeps failing the same step or hangs on a call (orchestrator/foreman.ts). A usage limit's stop is the
-// babysitter's (plugins/72-babysitter.ts). It never acts blind: no read of Desk's chats, no act. Own page only.
+// might want it on"). Armed, it looks every TICK_MS, and a model judges each chat that needs it (orchestrator/judge.ts):
+// every running chat due a peek, and every Desk chat an error stopped. The model's verdict decides; its message goes
+// through the send queue or the outside session's message route. The rules stay as its inputs and its hard limits
+// (orchestrator/act.ts, foreman.ts): a usage limit's stop is the babysitter's (plugins/72-babysitter.ts), a chat a person
+// wrote in is left alone, and a chat gets two check-ins an hour at most. It never acts blind: no read of Desk's chats,
+// no act. Own page only, and GET /api/orchestrator/model says which model the judge asks.
 // README "What Desk 2 adds", the orchestrator.
 
 import type { Hono } from 'hono'
 import type { ChatSummary, ExternalSession, QueueState, TranscriptItem } from '@shared/protocol'
-import type { OrchestratorAct, OrchestratorArm, OrchestratorPlan, OrchestratorRow } from '@shared/orchestrator'
+import { ORCHESTRATOR_FROM, type OrchestratorAct, type OrchestratorArm, type OrchestratorJudgment, type OrchestratorPlan, type OrchestratorRow } from '@shared/orchestrator'
 import type { ServerContext } from '../context'
+import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { DIAGNOSTICS_API } from '../engine/diagnostics'
-import { afterGivingUp, decide, type Act } from '../orchestrator/act'
+import { afterGivingUp, decide } from '../orchestrator/act'
 import { askCreaitor, creaitorTool } from '../orchestrator/creaitor'
-import { NOTES_PER_HOUR, noteText, PEEK_MS, peek, personRecent, type Peek } from '../orchestrator/foreman'
+import { askOf, judgeChat, recentText, sdkAskModel, type AskModel, type JudgeBrief } from '../orchestrator/judge'
+import { NOTES_PER_HOUR, PEEK_MS, peek, personRecent, type Peek } from '../orchestrator/foreman'
 import { classify, fromChat, fromExternal, rank } from '../orchestrator/plan'
 import { notOwnPage } from '../own-page'
 
@@ -26,6 +30,8 @@ const WHAT = "the orchestrator's plan"
 const MAX_CHATS = 100
 /** CreAitor asks run this many at once. */
 const ASK_WIDTH = 4
+/** The judge asks at most this many models at once (each one a 90 s call at most). */
+const JUDGE_WIDTH = 3
 /** Bun closes a request that sends nothing for 10 s, and one ask may take a minute: while the CreAitor answers, the
  *  reply sends a space this often ahead of its JSON, which JSON allows. */
 const KEEPALIVE_MS = 4_000
@@ -34,6 +40,9 @@ const DEFAULT_DAYS = 3
 const TICK_MS = 60_000
 /** Acts kept for the page. */
 const ACTS_KEPT = 50
+const HOUR_MS = 3_600_000
+/** Judgments kept for the page. */
+const JUDGED_KEPT_MS = 24 * HOUR_MS
 
 /** A JSON reply whose body is still being worked out, kept open with a space every KEEPALIVE_MS. */
 function slowJson(work: Promise<unknown>): Response {
@@ -61,14 +70,20 @@ function slowJson(work: Promise<unknown>): Response {
   return new Response(body, { headers: { 'content-type': 'application/json; charset=UTF-8' } })
 }
 
-/** What the foreman last saw in one running chat, and the notes it sent there. */
-interface Peeked {
-  at: number
-  seen: Peek
-  /** Episodes (Peek key) already noted or flagged: one each. */
-  done: string[]
-  /** When each note went, for NOTES_PER_HOUR. */
-  notes: number[]
+/** One chat the judge looks at this tick: a Desk chat an error stopped (`error`), or a running one due a peek. */
+interface Candidate {
+  id: string
+  title: string
+  source: OrchestratorRow['source']
+  status: string
+  kind: 'error' | 'running'
+  items: readonly TranscriptItem[]
+  /** The rules' findings, in words, for the judge. */
+  signals: string[]
+  /** A running chat the foreman's rule finds stalled: its note would queue behind a turn that stopped answering. */
+  stalled: boolean
+  /** An error chat: how many continues it has had once this one is sent (act.ts). */
+  count: number
 }
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
@@ -78,8 +93,15 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   /** Chat id -> continues sent since its last good turn (act.ts decide). */
   const tries = new Map<string, number>()
   const acts: OrchestratorAct[] = []
-  /** Running chat id -> the foreman's last peek. */
-  const peeked = new Map<string, Peeked>()
+  /** Chat id -> the judge's latest judgment of it, shown on its row. */
+  const judgments = new Map<string, OrchestratorJudgment>()
+  /** Chat id -> the check-ins and continues the judge sent it, newest last (an hour's worth). */
+  const sends = new Map<string, { at: number; kind: 'note' | 'continue' }[]>()
+  /** The model id the SDK last reported for an alias, so Settings can show what it resolves to. */
+  let resolved: { setting: string; model: string } | null = null
+
+  /** The judge's model: the owner's test double when the context carries one (tests inject it under deps), else the SDK. */
+  const askModel = (): AskModel => (ctx.deps.orchestratorAsk as AskModel | undefined) ?? sdkAskModel(ctx.home, () => claudeCodeBinaryFor(ctx.home).path())
 
   async function get<T>(path: string): Promise<T | null> {
     const res = await app.request(path)
@@ -95,12 +117,12 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   }
 
   /** Each open chat's row (with `outside`, each outside session's too), the most recently active first, and each
-   *  one's Claude session. `blind` when Desk's own chats could not be read; `unread`, the chats whose transcript
-   *  could not be (each is classified as if it were empty, which is fine to show and never enough to act on). */
+   *  one's Claude session and transcript. `blind` when Desk's own chats could not be read; `unread`, the chats whose
+   *  transcript could not be (each is classified as if it were empty, which is fine to show and never enough to act on). */
   async function read(
     days: number,
     outside: boolean
-  ): Promise<{ rows: OrchestratorRow[]; session: Map<string, string | null>; blind: boolean; unread: Set<string> }> {
+  ): Promise<{ rows: OrchestratorRow[]; session: Map<string, string | null>; blind: boolean; unread: Set<string>; items: Map<string, TranscriptItem[]> }> {
     const now = Date.now()
     const [own, others] = await Promise.all([get<ChatSummary[]>('/api/chats'), outside ? get<ExternalSession[]>('/api/external/sessions') : null])
     const subjects = [
@@ -112,93 +134,201 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       .slice(0, MAX_CHATS)
     const rows: OrchestratorRow[] = []
     const unread = new Set<string>()
+    const transcripts = new Map<string, TranscriptItem[]>()
     for (const { s, items } of subjects) {
       const busy = s.status === 'working' || s.status === 'starting'
       const got = busy ? null : await get<TranscriptItem[]>(items)
       if (!busy && got === null) unread.add(s.id)
+      if (got) transcripts.set(s.id, got)
       rows.push(classify(s, got, now))
     }
-    return { rows, session: new Map(subjects.map(({ s }) => [s.id, s.session])), blind: own === null, unread }
+    return { rows, session: new Map(subjects.map(({ s }) => [s.id, s.session])), blind: own === null, unread, items: transcripts }
   }
 
-  /** The plan as the page shows it: a chat the orchestrator gave up on reads as left to a person. Only the shown
-   *  rows say so; the tick decides on the chat's own move, or the given-up chat would count as a good turn. */
+  /** The plan as the page shows it: a chat the orchestrator gave up on reads as left to a person, and each row carries
+   *  the judge's latest judgment of its chat. */
   function plan(read: OrchestratorRow[], days: number): OrchestratorPlan {
     const now = Date.now()
     const rows = read.map((r) => {
       const row = afterGivingUp(r, tries)
-      // A running chat the foreman found wrong in its last peek says so beside its activity.
-      const p = peeked.get(row.id)
-      return row.move === 'watch' && p && p.seen.kind !== 'ok' && now - p.at < 2 * PEEK_MS ? { ...row, reason: `${row.reason}; the foreman saw: ${p.seen.detail}` } : row
+      const judgment = judgments.get(row.id)
+      return judgment ? { ...row, judgment } : row
     })
     const counts: OrchestratorPlan['counts'] = {}
     for (const r of rows) counts[r.move] = (counts[r.move] ?? 0) + 1
     return { at: now, mode: armed() ? 'armed' : 'shadow', days, creaitor: creaitorTool() !== null, rows: rank(rows), counts, acts: [...acts] }
   }
 
-  async function carry(a: Act): Promise<OrchestratorAct> {
-    const base = { at: Date.now(), id: a.row.id, title: a.row.title, move: a.row.move }
-    if (a.kind === 'give-up') return { ...base, did: 'gave-up' }
-    const id = encodeURIComponent(a.row.id)
-    const error = (await post('/api/queue', { kind: 'message', chatId: a.row.id, text: a.text })) ?? (a.release ? await post(`/api/queue/chats/${id}/resume`) : null)
-    return error ? { ...base, did: 'continued', error } : { ...base, did: 'continued' }
+  /** Check-ins or continues sent to a chat in the last hour. */
+  function sent(id: string, kind: 'note' | 'continue', now: number): number {
+    return (sends.get(id) ?? []).filter((s) => s.kind === kind && now - s.at < HOUR_MS).length
   }
 
-  /** The foreman's round: each running Desk chat and Claude Desktop session not peeked at in PEEK_MS is read and judged
-   *  (foreman.ts peek); a spinning or hung one gets one note per episode, at most NOTES_PER_HOUR an hour, never while a
-   *  person wrote in it in the last 10 minutes; a stalled Desk chat is flagged on the page only. A disarm part-way
-   *  through stops it before its next send. */
-  async function rounds(): Promise<void> {
-    const now = Date.now()
-    const [own, others] = await Promise.all([get<ChatSummary[]>('/api/chats'), get<ExternalSession[]>('/api/external/sessions')])
-    const running = [
-      ...(own ?? []).filter((ch) => !ch.archived && ch.status === 'working').map((ch) => ({ id: ch.id, title: ch.title, source: 'desk' as const })),
-      ...(others ?? []).filter((x) => !x.archived && !x.fromPc && x.source === 'desktop' && x.status === 'working').map((x) => ({ id: x.id, title: x.title, source: 'desktop' as const }))
-    ]
-    const live = new Set(running.map((r) => r.id))
-    for (const id of peeked.keys()) if (!live.has(id) && now - (peeked.get(id)?.at ?? 0) > 86_400_000) peeked.delete(id)
-    for (const r of running) {
-      const before = peeked.get(r.id)
-      if (before && now - before.at < PEEK_MS) continue
-      const id = encodeURIComponent(r.id)
-      const items = await get<TranscriptItem[]>(r.source === 'desk' ? `/api/chats/${id}/items` : `/api/external/sessions/${id}/items`)
-      if (!items) continue
-      const seen = peek(items, now, r.source === 'desk')
-      const p: Peeked = { at: now, seen, done: before?.done ?? [], notes: (before?.notes ?? []).filter((t) => now - t < 3_600_000) }
-      peeked.set(r.id, p)
-      if (seen.kind === 'ok' || p.done.includes(seen.key)) continue
-      const base = { at: now, id: r.id, title: r.title, move: 'watch' as const, source: r.source, detail: seen.detail }
-      if (seen.kind === 'stalled') {
-        p.done.push(seen.key)
-        acts.unshift({ ...base, did: 'flagged' })
-        continue
-      }
-      if (personRecent(items, now) || p.notes.length >= NOTES_PER_HOUR) continue
-      if (!armed()) break
-      const text = noteText(seen)
-      const error = r.source === 'desk' ? await post('/api/queue', { kind: 'message', chatId: r.id, text }) : await post(`/api/external/sessions/${id}/message`, { text })
-      p.done.push(seen.key)
-      p.notes.push(now)
-      acts.unshift(error ? { ...base, did: 'nudged', error } : { ...base, did: 'nudged' })
+  /** Minutes since a person last wrote in the chat, or null when no message of theirs is in view. */
+  function minutesSincePerson(items: readonly TranscriptItem[], now: number): number | null {
+    for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'user') return Math.max(0, Math.round((now - items[i].ts) / 60_000))
+    return null
+  }
+
+  /** The brief the judge reads of one chat: its first message, its last transcript items, and the rules' findings. */
+  function briefOf(c: Candidate, now: number): JudgeBrief {
+    const since = minutesSincePerson(c.items, now)
+    let started = c.items[0]?.ts ?? now
+    for (const i of c.items) if (i.kind === 'user') started = i.ts
+    return {
+      id: c.id,
+      title: c.title,
+      source: c.source,
+      status: c.status,
+      ask: askOf(c.items),
+      recent: recentText(c.items),
+      workingMinutes: c.items.length ? Math.max(0, Math.round((now - started) / 60_000)) : null,
+      signals: [...c.signals, since === null ? 'no message from the person in view' : `the person last wrote ${since} min ago`],
+      notesThisHour: sent(c.id, 'note', now),
+      continuesThisHour: sent(c.id, 'continue', now)
     }
   }
 
-  /** One look while armed; never two at once. Without a read of the chats or of the send queue it continues nothing,
-   *  and a disarm part-way through stops it before the next send. */
+  /** The hard limits that hold a judge's send, the model cannot override them: null when the send may go. */
+  function heldBy(c: Candidate, now: number): string | null {
+    if (c.kind === 'error') return null
+    if (c.stalled) return 'it is stalled: a note would queue behind a turn that stopped answering'
+    if (sent(c.id, 'note', now) >= NOTES_PER_HOUR) return `${NOTES_PER_HOUR} check-in notes already went to it this hour`
+    return null
+  }
+
+  /** Sends a message to a chat: through Desk's send queue (a continue releases its hold), or to an outside session. */
+  async function send(c: Candidate, text: string): Promise<string | null> {
+    if (c.source !== 'desk') return post(`/api/external/sessions/${encodeURIComponent(c.id)}/message`, { text })
+    const id = encodeURIComponent(c.id)
+    const error = await post('/api/queue', { kind: 'message', chatId: c.id, text })
+    return error ?? (c.kind === 'error' ? await post(`/api/queue/chats/${id}/resume`) : null)
+  }
+
+  /** Asks the judge about one chat and carries out its verdict within the hard limits. A failed call sends nothing and
+   *  shows its error on the row; there is no fallback text. */
+  async function judgeOne(c: Candidate): Promise<void> {
+    const model = ctx.settings().orchestratorModel
+    const result = await judgeChat(briefOf(c, Date.now()), model, askModel())
+    const at = Date.now()
+    if (result.resolved) resolved = { setting: model, model: result.resolved }
+    if (!result.ok) {
+      judgments.set(c.id, { at, model, resolved: result.resolved, verdict: null, why: result.error, message: '', held: null, error: result.error })
+      return
+    }
+    const { verdict, message, why } = result.judgment
+    const judgment: OrchestratorJudgment = { at, model, resolved: result.resolved, verdict, why, message, held: null, error: null }
+    judgments.set(c.id, judgment)
+    if (verdict === 'fine' || verdict === 'leave') return
+    const base = { at, id: c.id, title: c.title, source: c.source, detail: why }
+    const held = heldBy(c, at)
+    if (held) {
+      judgment.held = held
+      if (c.stalled) acts.unshift({ ...base, move: 'watch', did: 'flagged' })
+      return
+    }
+    if (!armed()) {
+      judgment.held = 'the orchestrator was disarmed before it sent'
+      return
+    }
+    if (c.kind === 'error') tries.set(c.id, c.count)
+    const error = await send(c, `[${ORCHESTRATOR_FROM}] Not from the user.\n${message}`)
+    const list = (sends.get(c.id) ?? []).filter((s) => at - s.at < HOUR_MS)
+    list.push({ at, kind: c.kind === 'error' ? 'continue' : 'note' })
+    sends.set(c.id, list)
+    acts.unshift(
+      c.kind === 'error'
+        ? { ...base, move: 'retry-error', did: 'continued', ...(error ? { error } : {}) }
+        : { ...base, move: 'watch', did: 'nudged', ...(error ? { error } : {}) }
+    )
+  }
+
+  /** The running chats due a judgment: Desk chats and Claude Desktop sessions not judged in PEEK_MS, and not one a
+   *  person wrote in within the last 10 minutes or one whose message waits in the send queue (`skip`). */
+  async function runningCandidates(now: number, skip: ReadonlySet<string>): Promise<Candidate[]> {
+    const [own, others] = await Promise.all([get<ChatSummary[]>('/api/chats'), get<ExternalSession[]>('/api/external/sessions')])
+    const live = [
+      ...(own ?? []).filter((ch) => !ch.archived && ch.status === 'working').map((ch) => ({ id: ch.id, title: ch.title, status: ch.status, source: 'desk' as const })),
+      ...(others ?? []).filter((x) => !x.archived && !x.fromPc && x.source === 'desktop' && x.status === 'working').map((x) => ({ id: x.id, title: x.title, status: x.status, source: 'desktop' as const }))
+    ]
+    const out: Candidate[] = []
+    for (const r of live) {
+      if (skip.has(r.id)) continue
+      const last = judgments.get(r.id)?.at
+      if (last !== undefined && now - last < PEEK_MS) continue
+      const id = encodeURIComponent(r.id)
+      const items = await get<TranscriptItem[]>(r.source === 'desk' ? `/api/chats/${id}/items` : `/api/external/sessions/${id}/items`)
+      if (!items || personRecent(items, now)) continue
+      const seen = peek(items, now, r.source === 'desk')
+      out.push({
+        id: r.id,
+        title: r.title,
+        source: r.source,
+        status: r.status,
+        kind: 'running',
+        items,
+        signals: seen.kind === 'ok' ? [] : [describe(seen)],
+        stalled: seen.kind === 'stalled',
+        count: 0
+      })
+    }
+    return out
+  }
+
+  /** A rule finding in words, for the judge. */
+  function describe(p: Peek): string {
+    return p.kind === 'ok' ? '' : `${p.kind}: ${p.detail}`
+  }
+
+  /** Runs each task, at most `width` at once. */
+  async function pool<T>(items: readonly T[], width: number, work: (item: T) => Promise<void>): Promise<void> {
+    let next = 0
+    const lane = async (): Promise<void> => {
+      while (next < items.length) await work(items[next++]!)
+    }
+    await Promise.all(Array.from({ length: Math.min(width, items.length) }, lane))
+  }
+
+  /** One look while armed; never two at once. Without a read of the send queue it judges nothing, and a disarm part-way
+   *  through stops it before its next send. */
   function tick(): Promise<void> {
     ticking ??= (async () => {
       if (!armed()) return
-      const { rows, blind, unread } = await read(DEFAULT_DAYS, false)
+      const now = Date.now()
+      const { rows, blind, unread, items } = await read(DEFAULT_DAYS, false)
       const queue = await get<QueueState>('/api/queue')
-      if (armed() && !blind && queue) {
-        const waiting = queue.items.flatMap((i) => (i.kind === 'message' && i.state !== 'failed' ? [i.chatId] : []))
-        for (const a of decide(rows, tries, new Set([...unread, ...waiting]))) {
-          if (!armed()) break
-          tries.set(a.row.id, a.count)
-          acts.unshift(await carry(a))
+      if (armed() && queue) {
+        const waiting = new Set(queue.items.flatMap((i) => (i.kind === 'message' && i.state !== 'failed' ? [i.chatId] : [])))
+        const skip = new Set([...unread, ...waiting])
+        const candidates: Candidate[] = []
+        // The hard limits first (act.ts): a chat given up on is recorded and never judged; a chat that may still be
+        // continued is judged, unless it was judged within PEEK_MS.
+        for (const a of blind ? [] : decide(rows, tries, skip)) {
+          if (a.kind === 'give-up') {
+            tries.set(a.row.id, a.count)
+            acts.unshift({ at: now, id: a.row.id, title: a.row.title, move: a.row.move, did: 'gave-up' })
+            continue
+          }
+          const last = judgments.get(a.row.id)?.at
+          if (last !== undefined && now - last < PEEK_MS) continue
+          candidates.push({
+            id: a.row.id,
+            title: a.row.title,
+            source: a.row.source,
+            status: a.row.status,
+            kind: 'error',
+            items: items.get(a.row.id) ?? [],
+            signals: [`error: ${a.row.reason}`],
+            stalled: false,
+            count: a.count
+          })
         }
+        candidates.push(...(await runningCandidates(now, skip)))
+        await pool(candidates, JUDGE_WIDTH, async (c) => {
+          if (armed()) await judgeOne(c)
+        })
+        for (const [id, j] of judgments) if (now - j.at > JUDGED_KEPT_MS) judgments.delete(id)
       }
-      if (armed()) await rounds()
       acts.splice(ACTS_KEPT)
     })()
       .catch((err: unknown) => console.error('[orchestrator] tick failed:', err))
@@ -234,6 +364,12 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
         return result
       })()
     )
+  })
+
+  // The model the judge asks for the setting, and the model id the SDK last reported for it (null until a judgment ran).
+  app.get('/api/orchestrator/model', (c) => {
+    const setting = ctx.settings().orchestratorModel
+    return c.json({ setting, resolved: resolved?.setting === setting ? resolved.model : null })
   })
 
   // Arm or disarm. Arming looks once at once, so the reply already holds what it did.

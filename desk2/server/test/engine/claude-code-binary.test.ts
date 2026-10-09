@@ -253,7 +253,7 @@ describe('a chat without the binary', () => {
     projectFolders: [],
     projectRoots: [],
     hiddenProjects: [],
-    babysitter: true, orchestrator: false,
+    babysitter: true, orchestrator: false, orchestratorModel: 'opus',
   }
 
   /** A Query that does nothing until it is closed. */

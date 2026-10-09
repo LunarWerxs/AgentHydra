@@ -486,6 +486,8 @@ export interface DeskSettings {
   babysitter: boolean
   /** The orchestrator, armed: it continues chats an error stopped and its foreman peeks at running ones (shared/orchestrator.ts). Off by default. */
   orchestrator: boolean
+  /** The model the orchestrator's judge asks: an alias (opus, sonnet, haiku: the newest of each) or a full model id (shared/orchestrator.ts). */
+  orchestratorModel: string
 }
 
 // REST request bodies (see SPEC.md "REST API" for the routes)

@@ -33,7 +33,7 @@ const SETTINGS: DeskSettings = {
   projectFolders: [],
   projectRoots: [],
   hiddenProjects: [],
-  babysitter: true, orchestrator: false,
+  babysitter: true, orchestrator: false, orchestratorModel: 'opus',
 }
 
 /** A Query whose messages the test pushes; records every control call and every prompt it reads. */
