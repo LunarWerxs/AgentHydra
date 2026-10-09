@@ -729,8 +729,14 @@ mod win {
         Some(h)
     }
 
-    /// Puts the sink over `r` (client pixels of the main window) above the window's page, or hides it.
+    /// Puts the sink over `r` (client pixels of the main window) above the window's page, or hides it. Hidden, it
+    /// is left as if the pointer had gone (Windows need not say so of a hidden window): no button stays hovered or
+    /// pressed for the next page, and the next pointer move over it tracks again.
     pub fn place_sink(h: Hwnd, r: Option<&Rect>) {
+        if r.is_none() {
+            const WM_NCMOUSELEAVE: u32 = 0x02A2;
+            unsafe { SendMessageW(h, WM_NCMOUSELEAVE, 0, 0) };
+        }
         place_page_host(h, r);
     }
 
@@ -2054,7 +2060,10 @@ mod tests {
         tab.shown("https://example.com/");
         assert!(tab.allows(main, desk));
         assert!(tab.allows(other, desk));
-        assert!(!tab.allows("file:///C:/Users/me/Project/tmp/review/never-shown.html", desk));
+        assert!(!tab.allows(
+            "file:///C:/Users/me/Project/tmp/review/never-shown.html",
+            desk
+        ));
         assert!(!tab.allows("file:///C:/Windows/win.ini", desk));
     }
 

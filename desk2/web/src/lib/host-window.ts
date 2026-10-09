@@ -44,7 +44,11 @@ export const dragWindow = () => send('drag')
 /** Tells the host where the window's buttons are (`r`, the page's pixels; null while there are none), so its caption
  *  sink goes over exactly them and nowhere else. The host works in the screen's pixels. */
 export function placeButtons(r: { left: number; top: number; width: number; height: number } | null): void {
-  if (!r) return void send('buttons')
+  if (!r) {
+    // No sink, so no word from it either: nothing stays drawn hovered or pressed.
+    captionHover.value = captionPressed.value = null
+    return void send('buttons')
+  }
   const px = (v: number) => Math.round(v * window.devicePixelRatio)
   send('buttons', { rect: [px(r.left), px(r.top), px(r.width), px(r.height)] })
 }
