@@ -2,7 +2,7 @@
 // the caller already has (callerPage in navigate.ts) with real mouse and key events, and answers with the same text and
 // errors as Connections' engine (browser.mjs browserActionClick :4085, browserActionHover :4093, browserActionSelect :4202,
 // browserActionType :4234, browserActionPress :4257), with the targeting they share (resolveTarget :2156, resolvePoint :2435).
-// Not ported: cross-origin (OOPIF) iframes, which the per-page link cannot follow, and the secret path of browser_type.
+// Not ported: cross-origin (OOPIF) iframes, which the per-page link cannot follow. A vault secret is typed through Connections.
 
 import type { ToolCaller } from './contract'
 import { ToolInputError } from './errors'
@@ -294,15 +294,11 @@ export const INPUT_TOOLS: ToolDef[] = [
   {
     name: 'browser_type',
     description:
-      "Type text into a field. Pass ref (from browser_snapshot) or selector to focus a specific input first (its existing value is replaced); omit both to type into whatever is focused. VALUE-BLIND CREDENTIAL FILL: to type a password or key, pass `secret:'<NAME>'` INSTEAD of `text`, plus a `selector` (required for a secret) that resolves to an input or textarea in the top page - the NAME is declared in ~/.connections/secret-bindings.json (a connected vault entry + the domains it may be typed on). The value is leased from the vault inside this process, typed only when the current page is https and on one of those domains (a lookalike or phishing page is refused before any lease), and every reply shows it as <secret>NAME</secret>. An unknown NAME lists the declared ones. Never browser_read a secret back.",
+      "Type text into a field. Pass ref (from browser_snapshot) or selector to focus a specific input first (its existing value is replaced); omit both to type into whatever is focused. This types the text you give; a password or key from the vault is typed by Connections instead (browser_type_secret, through connections_execute).",
     inputSchema: {
       type: 'object',
       properties: {
         text: { type: 'string' },
-        secret: {
-          type: 'string',
-          description: 'A declared secret NAME to type value-blind instead of `text` (see ~/.connections/secret-bindings.json).',
-        },
         ref: { type: 'string' },
         selector: { type: 'string' },
         ...ATTACH_AND_PROFILE,
@@ -311,12 +307,9 @@ export const INPUT_TOOLS: ToolDef[] = [
     run: (params, caller) => {
       if (params.secret != null && String(params.secret).trim())
         throw new ToolInputError(
-          'secret typing (value-blind credential fill) is not on AgentHydra yet: pass `text` instead',
+          "Typing a vault secret goes through Connections, which holds the vault: connections_execute { local:true, tool_name:'browser_type_secret', params:{ secret:'<NAME>', selector:'...' } }.",
         )
-      if (params.text == null)
-        throw new ToolInputError(
-          'pass `text` to type, or `secret` (a declared NAME) to type a credential value-blind.',
-        )
+      if (params.text == null) throw new ToolInputError('pass `text` to type.')
       const text = String(params.text)
       return withPage(params, caller, async (send) => {
         const ref = refOf(params)

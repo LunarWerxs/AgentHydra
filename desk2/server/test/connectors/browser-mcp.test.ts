@@ -15,6 +15,9 @@ function fakeClient(call: (name: string, params: Record<string, unknown>, caller
     },
     tools: async () => TOOLS,
     call: async (name, params, caller) => call(name, params, caller),
+    secret: async () => {
+      throw new Error('not used')
+    },
     stop: async () => {},
   }
 }

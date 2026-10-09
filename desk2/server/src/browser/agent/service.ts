@@ -12,6 +12,8 @@ import { REAL_HOME } from '../../real-home'
 import { isThrowawayHome } from '../../devservers/service'
 import { callTool, toolInfos } from './tools'
 import type { CallResult, ToolCaller } from './contract'
+import { ToolInputError } from './errors'
+import { runSecret, type SecretRequest } from './secret'
 
 export const STAMP = 'browser-agent-1'
 
@@ -120,6 +122,16 @@ export function startService(home: string, onStop: () => void = () => {}): Runni
         const caller = typeof body.caller === 'object' && body.caller !== null ? (body.caller as ToolCaller) : {}
         const result = await callTool(body.name, params, caller)
         return json(result, result.ok ? 200 : result.status)
+      }
+      if (req.method === 'POST' && url.pathname === '/api/secret') {
+        const body = (await req.json().catch(() => null)) as Partial<SecretRequest> | null
+        if (!body || typeof body !== 'object') return json({ ok: false, error: 'bad_request', detail: 'the body must be JSON' }, 400)
+        try {
+          return json(await runSecret({ ...body, caller: body.caller ?? {} } as SecretRequest))
+        } catch (err) {
+          if (err instanceof ToolInputError) return json({ ok: false, error: 'bad_request', detail: err.message }, 400)
+          return json({ ok: false, error: 'page_error', detail: err instanceof Error ? err.message : String(err) }, 200)
+        }
       }
       if (req.method === 'POST' && url.pathname === '/api/shutdown') {
         setTimeout(stop, 20)

@@ -178,6 +178,14 @@ export async function callerPage(params: Params, caller: ToolCaller): Promise<{ 
   return { browser, targetId }
 }
 
+/** The page the caller already has open, or null: unlike callerPage, it never creates one. */
+export async function knownPage(params: Params, caller: ToolCaller): Promise<{ browser: Browser; targetId: string } | null> {
+  const browser = await resolveBrowser(params, caller)
+  const targetId = pages.get(`${browser.key}|${callerKey(caller)}`)
+  if (!targetId || !(await pageTabs(browser.port).catch(() => [])).some((t) => t.id === targetId)) return null
+  return { browser, targetId }
+}
+
 export async function navigate(params: Params, caller: ToolCaller): Promise<string> {
   const url = stringParam(params.url)
   if (!url) throw new ToolInputError('url is required')

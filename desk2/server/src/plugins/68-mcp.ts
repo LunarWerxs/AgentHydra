@@ -12,6 +12,7 @@ import { createRedesignMcp } from '../connectors/redesign-mcp'
 import { createDevServersMcp } from '../devservers/mcp'
 import { createBrowserAgentClient } from '../browser/agent/client'
 import { createBrowserMcp } from '../browser/agent/mcp'
+import { secretRefusal } from '../browser/agent/secret'
 import type { ToolCaller } from '../browser/agent/contract'
 import { type CallerIds, type CallerSessionDeps, callerSession } from '../browser/agent/caller-session'
 import { createPeerSessionLookup, type PeerSession, resolvePeerSession } from '../browser/peer-session'
@@ -67,7 +68,7 @@ export async function browserCallerFor(
   return { caller: { cwd: peer.cwd, session: peer.sessionId, worker: owner?.id } }
 }
 
-type BunServerLike = { port?: number; requestIP(req: Request): { port: number } | null }
+type BunServerLike = { port?: number; requestIP(req: Request): { address: string; port: number } | null }
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
   // One handler per chat folder (the tools' default cwd) and one per ReDesign address: each is a few closures.
@@ -80,6 +81,25 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     return b.workers({ all: true }).catch(() => [])
   })
   const peerSession = createPeerSessionLookup(resolvePeerSession)
+  const sessionDeps = {
+    chatSessions: (id: string) => (ctx.deps.chatSessions as ((id: string) => string[]) | undefined)?.(id) ?? [],
+    workers: cachedWorkers,
+  }
+
+  app.post('/api/browser/secret', async (c) => {
+    const { server } = (c.env ?? {}) as { server?: BunServerLike }
+    const remote = server?.requestIP(c.req.raw)?.address ?? null
+    const refused = secretRefusal(c.req.raw.headers, remote)
+    if (refused) return c.json({ ok: false, error: 'forbidden', detail: refused }, 403)
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null
+    const caller = body?.caller
+    if (!body || typeof caller !== 'object' || caller === null)
+      return c.json({ ok: false, error: 'caller_required', detail: 'name the calling chat, worker or session in caller' }, 400)
+    const ids = caller as ToolCaller
+    const session = ids.session ?? (await callerSession({ chat: ids.chat, worker: ids.worker }, sessionDeps))
+    const reply = await browserClient.secret({ ...body, caller: { ...ids, session } })
+    return c.json(reply.body, reply.status as 200)
+  })
 
   app.all('/mcp/browser', async (c) => {
     const chat = c.req.query('chat')?.trim() || undefined
@@ -89,8 +109,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const { server } = (c.env ?? {}) as { server?: BunServerLike }
     const remote = server?.requestIP(c.req.raw) ?? null
     const { caller, unidentified } = await browserCallerFor(body, { chat, worker, cwd }, {
-      chatSessions: (id) => (ctx.deps.chatSessions as ((id: string) => string[]) | undefined)?.(id) ?? [],
-      workers: cachedWorkers,
+      ...sessionDeps,
       peer: () => (remote && server?.port ? peerSession(remote.port, server.port) : Promise.resolve(null)),
     })
     return serveMcpHttp(c.req.raw, createBrowserMcp({ client: browserClient, caller, unidentified }))

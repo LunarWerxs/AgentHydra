@@ -20,6 +20,7 @@ export interface BrowserAgentClient {
   ensure(): Promise<ServiceFile>
   call(name: string, params: Record<string, unknown>, caller?: ToolCaller): Promise<CallResult>
   tools(): Promise<ToolInfo[]>
+  secret(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>
   stop(): Promise<void>
 }
 
@@ -80,6 +81,17 @@ export function createBrowserAgentClient(deps: AgentClientDeps): BrowserAgentCli
     return ((await res.json()) as { tools: ToolInfo[] }).tools
   }
 
+  async function secret(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
+    const file = await ensure()
+    const res = await doFetch(`http://127.0.0.1:${file.port}/api/secret`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${file.token}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(60_000),
+    })
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> }
+  }
+
   async function stop(): Promise<void> {
     const file = readServiceFile(deps.home)
     if (!file) return
@@ -94,5 +106,5 @@ export function createBrowserAgentClient(deps: AgentClientDeps): BrowserAgentCli
     }
   }
 
-  return { probe, ensure, call, tools, stop }
+  return { probe, ensure, call, tools, secret, stop }
 }
