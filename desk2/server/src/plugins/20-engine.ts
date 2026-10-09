@@ -426,7 +426,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     }),
     cacheFile: join(ctx.home, 'projects.json'),
   })
-  app.get('/api/projects', (c) => answer(c, () => projects.list({ wait: c.req.query('wait') === '1' })))
+  app.get('/api/projects', (c) => answer(c, () => projects.list({ wait: c.req.query('wait') === '1', hidden: c.req.query('hidden') === '1' })))
   // Chats are filed into their project's group with New closed too (owner, 2026-10-08: "I wouldn't mind if Agent
   // Hydra automatically applies the right folders").
   const sweep = setInterval(() => void projects.sweep().catch(() => {}), PROJECTS_SWEEP_MS)

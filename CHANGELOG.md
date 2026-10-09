@@ -18,10 +18,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **A What's new pop-up lists what changed once the update's restart is done**
 - **The New screen shows Connections' logo, and reads a project's logo from its top-level icon too**
 - **The New screen highlights the project you picked**
+- **The New screen's View options menu shows hidden projects, and Manage folders says where each folder came from**
 - **The live browser pane keeps streaming when its Chrome window is covered**
 - **Drop any file in a chat: PDFs, notes, emails, zips**
 
 **Everything in Unreleased**
+
+- **The New screen's View options menu shows hidden projects.** The filter row has a View options button, with "Folders and git status" and "Show hidden projects" (with a count, disabled when nothing is hidden). With hidden projects shown they sit dimmed with a small hidden mark, and right-click offers Unhide instead of Hide. The choice is remembered.
+
+- **Manage folders lists where each folder came from.** Two sections, "From Project Hydra" and "From your chats", each with a count and a collapsible list of names and paths, and a Hide action on each. A project in both sources sits under Project Hydra only. Hand-added folders stay in their own sections.
 
 - **A What's new pop-up lists what changed once the update's restart is done.** After the row restarts onto a newer server, a dialog shows the changelog sections and Unreleased entries added since the last look, read from the CHANGELOG the release ships. Got it, Esc or a click outside clears it.
 

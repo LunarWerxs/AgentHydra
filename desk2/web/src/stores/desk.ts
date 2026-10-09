@@ -1066,8 +1066,9 @@ export function useDesk() {
 
     /** The New screen's project grid (GET /api/projects; `wait`: once its stale parts are read again); the answer is
      * kept in this browser. */
-    async projects(opts: { wait?: boolean } = {}): Promise<ProjectsResponse> {
-      const list = await fetchJson<ProjectsResponse>(opts.wait ? '/projects?wait=1' : '/projects')
+    async projects(opts: { wait?: boolean; hidden?: boolean } = {}): Promise<ProjectsResponse> {
+      const query = [opts.wait && 'wait=1', opts.hidden && 'hidden=1'].filter(Boolean).join('&')
+      const list = await fetchJson<ProjectsResponse>(query ? `/projects?${query}` : '/projects')
       writeCache('projects', list)
       return list
     },

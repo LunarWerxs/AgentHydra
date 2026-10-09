@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { addProjectFolder, PROJECT_ACTIONS, type ProjectMenuApi, runProjectAction } from '../../src/components/shell/projects'
+import { addProjectFolder, type ProjectMenuApi, projectActions, runProjectAction } from '../../src/components/shell/projects'
 
 function recorder(): { api: ProjectMenuApi; calls: string[] } {
   const calls: string[] = []
@@ -10,18 +10,19 @@ function recorder(): { api: ProjectMenuApi; calls: string[] } {
     newChat: (path) => void calls.push(`newChat ${path}`),
     copy: async (path) => void calls.push(`copy ${path}`),
     hide: async (path) => void calls.push(`hide ${path}`),
+    unhide: async (path) => void calls.push(`unhide ${path}`),
   }
   return { api, calls }
 }
 
 describe('project tile menu', () => {
   test('lists the four actions in the order the owner asked for', () => {
-    expect(PROJECT_ACTIONS.map((a) => a.label)).toEqual(['Open file location', 'New chat here', 'Copy path', 'Hide from Projects'])
+    expect(projectActions(false).map((a) => a.label)).toEqual(['Open file location', 'New chat here', 'Copy path', 'Hide from Projects'])
   })
 
   test('each action runs its own call with the tile path', async () => {
     const { api, calls } = recorder()
-    for (const { action } of PROJECT_ACTIONS) await runProjectAction(action, 'C:/Users/me/Desktop/Project/app', api)
+    for (const { action } of projectActions(false)) await runProjectAction(action, 'C:/Users/me/Desktop/Project/app', api)
     expect(calls).toEqual([
       'reveal C:/Users/me/Desktop/Project/app',
       'newChat C:/Users/me/Desktop/Project/app',

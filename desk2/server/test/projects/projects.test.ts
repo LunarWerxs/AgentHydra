@@ -89,6 +89,38 @@ describe('ProjectList', () => {
     expect(res.projects[0]!.sources).toEqual(['projecthydra', 'chats'])
   })
 
+  test('a hidden project is left out unless the list asks for hidden ones, and is then marked hidden', async () => {
+    const app = resolve(base, 'app')
+    const other = resolve(base, 'other')
+    mkdirSync(app)
+    mkdirSync(other)
+    const list = new ProjectList({
+      findHydra: () => ({ python: 'python', ph: join(base, 'ph.py'), root: base }),
+      readHydra: async () => ({
+        problem: null,
+        projects: [
+          { key: 'app', path: app, name: 'App', group: null, iconFile: null },
+          { key: 'other', path: other, name: 'Other', group: null, iconFile: null },
+        ],
+      }),
+      recent: () => [],
+      chats: () => [],
+      git: async () => null,
+      choices: () => ({ folders: [], roots: [], hidden: [app] }),
+      tempDir: resolve(base, 'scratch'),
+    })
+
+    const shown = await list.list({ wait: true })
+    expect(shown.projects.map((p) => p.name)).toEqual(['Other'])
+    expect(shown.projects[0]!.hidden).toBe(false)
+
+    const all = await list.list({ wait: true, hidden: true })
+    const byName = new Map(all.projects.map((p) => [p.name, p]))
+    expect(byName.get('App')?.hidden).toBe(true)
+    expect(byName.get('Other')?.hidden).toBe(false)
+    expect(all.choices.hidden).toEqual([app])
+  })
+
   const facts = (behind: number): GitFacts => ({ git: { branch: 'main', upstream: 'origin/main', ahead: 0, behind, dirty: 0, fetchedAt: null }, lastCommitAt: null })
 
   test('the grid answers before git does, says so, and wait answers with the fresh git state', async () => {

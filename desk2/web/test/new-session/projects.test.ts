@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test'
 import type { ProjectEntry, ProjectGit } from '@shared/protocol'
-import { filterProjects, syncLabel } from '../../src/components/shell/projects'
+import { filterProjects, projectActions, projectSourceGroups, shownProjects, syncLabel } from '../../src/components/shell/projects'
 
 const git = (over: Partial<ProjectGit>): ProjectGit => ({ branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, dirty: 0, fetchedAt: null, ...over })
 
-const project = (name: string, path: string): ProjectEntry => ({ path, name, group: null, icon: null, sources: ['chats'], git: null, lastCommitAt: null, lastChatAt: null, openChats: 0 })
+const project = (name: string, path: string, over: Partial<ProjectEntry> = {}): ProjectEntry => ({ path, name, group: null, icon: null, sources: ['chats'], git: null, lastCommitAt: null, lastChatAt: null, openChats: 0, hidden: false, ...over })
 
 describe('syncLabel', () => {
   it('says a clean, level checkout is up to date, and nothing for a folder that is no repo', () => {
@@ -29,5 +29,39 @@ describe('filterProjects', () => {
   it('matches the name or the path, ignoring case', () => {
     expect(filterProjects(list, 'AUDIO').map((p) => p.name)).toEqual(['Audio Lab'])
     expect(filterProjects(list, 'project/conn').map((p) => p.name)).toEqual(['connections'])
+  })
+})
+
+describe('shownProjects', () => {
+  const list = [project('visible', 'C:/a'), project('gone', 'C:/b', { hidden: true })]
+
+  it('leaves hidden projects out unless the owner asked to see them', () => {
+    expect(shownProjects(list, false).map((p) => p.name)).toEqual(['visible'])
+    expect(shownProjects(list, true).map((p) => p.name)).toEqual(['visible', 'gone'])
+  })
+})
+
+describe('projectSourceGroups', () => {
+  const list = [
+    project('both', 'C:/both', { sources: ['projecthydra', 'chats'] }),
+    project('registry', 'C:/registry', { sources: ['projecthydra'] }),
+    project('chatted', 'C:/chatted', { sources: ['chats'] }),
+    project('hiddenChat', 'C:/hc', { sources: ['chats'], hidden: true }),
+  ]
+
+  it('files a project in both sources under Project Hydra only, and leaves hidden ones out', () => {
+    const groups = projectSourceGroups(list)
+    expect(groups.hydra.map((p) => p.name)).toEqual(['both', 'registry'])
+    expect(groups.chats.map((p) => p.name)).toEqual(['chatted'])
+  })
+})
+
+describe('projectActions', () => {
+  it('offers Hide for a shown project and Unhide for a hidden one, after the same three actions', () => {
+    const shown = projectActions(false)
+    const hidden = projectActions(true)
+    expect(shown.map((a) => a.action)).toEqual(['reveal', 'newChat', 'copy', 'hide'])
+    expect(hidden.map((a) => a.action)).toEqual(['reveal', 'newChat', 'copy', 'unhide'])
+    expect(hidden[3]?.label).toBe('Unhide')
   })
 })

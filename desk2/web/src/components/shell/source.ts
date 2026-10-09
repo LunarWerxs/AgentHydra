@@ -79,7 +79,7 @@ export interface ShellSource {
    * with its git sync state; `wait` answers once what was stale (`pending`) is read again. `cachedProjects` is the last
    * answer kept in this browser. Optional: without them the screen shows no grid.
    */
-  projects?(opts?: { wait?: boolean }): Promise<ProjectsResponse>
+  projects?(opts?: { wait?: boolean; hidden?: boolean }): Promise<ProjectsResponse>
   cachedProjects?(): ProjectsResponse | null
   /**
    * The managed send queue (SPEC "Send queue"); null until the server reports one. Optional, like every

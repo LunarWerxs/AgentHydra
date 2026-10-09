@@ -12,6 +12,20 @@ export function syncLabel(git: ProjectGit | null): string | null {
   return parts.length ? parts.join(' · ') : 'up to date'
 }
 
+/** The projects the grid shows: hidden ones only when the owner asked to see them. */
+export function shownProjects(list: ProjectEntry[], showHidden: boolean): ProjectEntry[] {
+  return showHidden ? list : list.filter((p) => !p.hidden)
+}
+
+/** The automatic sources the Manage folders dialog lists: a project in both sources is under Project Hydra only. */
+export function projectSourceGroups(list: ProjectEntry[]): { hydra: ProjectEntry[]; chats: ProjectEntry[] } {
+  const visible = list.filter((p) => !p.hidden)
+  return {
+    hydra: visible.filter((p) => p.sources.includes('projecthydra')),
+    chats: visible.filter((p) => !p.sources.includes('projecthydra') && p.sources.includes('chats')),
+  }
+}
+
 /** The projects whose name or path holds the query (any case), in the order given. */
 export function filterProjects(list: ProjectEntry[], query: string): ProjectEntry[] {
   const q = query.trim().toLowerCase()
@@ -24,21 +38,24 @@ export function pickedFolder(selected: View, path: string): boolean {
   return selected.kind === 'new' && !!selected.cwd && sameFolder(selected.cwd, path)
 }
 
-export type ProjectAction = 'reveal' | 'newChat' | 'copy' | 'hide'
+export type ProjectAction = 'reveal' | 'newChat' | 'copy' | 'hide' | 'unhide'
 
-/** A project tile's right-click menu, in order. */
-export const PROJECT_ACTIONS: { action: ProjectAction; label: string }[] = [
-  { action: 'reveal', label: 'Open file location' },
-  { action: 'newChat', label: 'New chat here' },
-  { action: 'copy', label: 'Copy path' },
-  { action: 'hide', label: 'Hide from Projects' },
-]
+/** A project tile's right-click menu, in order: Hide, or Unhide for a hidden one. */
+export function projectActions(hidden: boolean): { action: ProjectAction; label: string }[] {
+  return [
+    { action: 'reveal', label: 'Open file location' },
+    { action: 'newChat', label: 'New chat here' },
+    { action: 'copy', label: 'Copy path' },
+    hidden ? { action: 'unhide', label: 'Unhide' } : { action: 'hide', label: 'Hide from Projects' },
+  ]
+}
 
 export interface ProjectMenuApi {
   reveal(path: string): Promise<unknown>
   newChat(path: string): void
   copy(path: string): Promise<unknown>
   hide(path: string): Promise<unknown>
+  unhide(path: string): Promise<unknown>
 }
 
 export function runProjectAction(action: ProjectAction, path: string, api: ProjectMenuApi): Promise<unknown> {
@@ -52,6 +69,8 @@ export function runProjectAction(action: ProjectAction, path: string, api: Proje
       return api.copy(path)
     case 'hide':
       return api.hide(path)
+    case 'unhide':
+      return api.unhide(path)
   }
 }
 

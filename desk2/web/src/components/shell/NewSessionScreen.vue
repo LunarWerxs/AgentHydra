@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
-import { Folder, FolderPlus, LayoutList, MessagesSquare } from '@lucide/vue'
+import { EyeOff, Folder, FolderPlus, ListFilter, MessagesSquare } from '@lucide/vue'
 import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import { focusFirstItem, MENU_CONTENT, MENU_ITEM } from '../sidebar/menuClasses'
 import ProjectFoldersDialog from './ProjectFoldersDialog.vue'
 import StatsCard from './StatsCard.vue'
 import { useShellSource } from './source'
-import { addProjectFolder, filterProjects, PROJECT_ACTIONS, pickedFolder, type ProjectAction, type ProjectMenuApi, runProjectAction, syncLabel } from './projects'
-import { showProjectDetails } from './projectDetails'
+import { addProjectFolder, filterProjects, pickedFolder, type ProjectAction, type ProjectMenuApi, projectActions, runProjectAction, shownProjects, syncLabel } from './projects'
+import { showHiddenProjects, showProjectDetails } from './projectDetails'
 
 // The new-session screen above the composer: greeting, then either the user's projects (the default; clicking one
 // starts a new chat in its folder) or the stats card behind a Stats tab (owner, 2026-10-08: "I click New Chat, and
@@ -39,7 +39,7 @@ function fail(err: unknown): void {
 let loads = 0
 function load(): void {
   if (!src.projects) return
-  const projects = (opts?: { wait?: boolean }) => src.projects!(opts)
+  const hidden = showHiddenProjects.value
   const n = ++loads
   const show = (res: ProjectsResponse) => {
     if (n !== loads) return
@@ -47,10 +47,11 @@ function load(): void {
     problem.value = null
   }
   loading.value = true
-  projects()
+  src
+    .projects!({ hidden })
     .then((res) => {
       show(res)
-      return res.pending ? projects({ wait: true }).then(show) : undefined
+      return res.pending ? src.projects!({ wait: true, hidden }).then(show) : undefined
     })
     .catch((err: unknown) => {
       if (n === loads) problem.value = err instanceof Error ? err.message : String(err)
@@ -60,8 +61,10 @@ function load(): void {
     })
 }
 onMounted(load)
+watch(showHiddenProjects, load)
 
-const listed = computed(() => filterProjects(answer.value?.projects ?? [], query.value))
+const hiddenCount = computed(() => choices.value.hidden.length)
+const listed = computed(() => filterProjects(shownProjects(answer.value?.projects ?? [], showHiddenProjects.value), query.value))
 
 // Six rows at most until the owner asks for all (owner, 2026-10-09). A row is as many tiles as the grid has columns,
 // read from the browser so the cap follows the width. A filter shows every match, with no cap and no button.
@@ -107,6 +110,10 @@ const menuApi: ProjectMenuApi = {
   copy: (path) => navigator.clipboard.writeText(path),
   hide: async (path) => {
     await src.changeProjectChoice?.('hidden', path, true)
+    load()
+  },
+  unhide: async (path) => {
+    await src.changeProjectChoice?.('hidden', path, false)
     load()
   },
 }
@@ -174,23 +181,37 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
       <template v-if="tab === 'projects'">
         <div class="mt-3 flex w-full items-center gap-1.5">
           <input v-model="query" type="search" placeholder="Filter projects" aria-label="Filter projects" class="h-8 min-w-0 flex-1 rounded-(--radius-8) bg-fill-5 px-3 text-[13px] leading-4.75 text-text placeholder:text-text-muted outline-none focus-visible:ring-1 focus-visible:ring-(--accent)" />
-          <Tip :label="showProjectDetails ? 'Hide folders and git status on every project' : 'Show folders and git status on every project'">
-            <button type="button" aria-label="Folders and git status on every project" :aria-pressed="showProjectDetails" :class="[TOGGLE, showProjectDetails ? 'bg-fill-hover text-text' : 'bg-fill-5 hover:bg-fill-hover']" @click="showProjectDetails = !showProjectDetails">
-              <LayoutList class="size-4" aria-hidden="true" />
-            </button>
+          <Tip label="View options">
+            <span class="inline-flex">
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <button type="button" aria-label="View options" :class="[TOGGLE, showProjectDetails || showHiddenProjects ? 'bg-fill-hover text-text' : 'bg-fill-5 hover:bg-fill-hover']">
+                    <ListFilter class="size-4" aria-hidden="true" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
+                  <DropdownMenuCheckboxItem :class="MENU_ITEM" :model-value="showProjectDetails" @update:model-value="(v: boolean) => (showProjectDetails = v)">Folders and git status</DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem :class="MENU_ITEM" :disabled="!hiddenCount" :model-value="showHiddenProjects" @update:model-value="(v: boolean) => (showHiddenProjects = v)">Show hidden projects ({{ hiddenCount || 'none' }})</DropdownMenuCheckboxItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </span>
           </Tip>
-          <DropdownMenu v-if="src.pickFolder && src.changeProjectChoice">
-            <DropdownMenuTrigger as-child>
-              <button type="button" aria-label="Choose project folders" title="Choose project folders" class="flex size-8 shrink-0 items-center justify-center rounded-(--radius-8) bg-fill-5 text-text-2 hover:bg-fill-hover">
-                <FolderPlus class="size-4" aria-hidden="true" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
-              <DropdownMenuItem :class="MENU_ITEM" @select="addFolder('folders')">Add a project folder…</DropdownMenuItem>
-              <DropdownMenuItem :class="MENU_ITEM" @select="addFolder('roots')">Add a folder of projects…</DropdownMenuItem>
-              <DropdownMenuItem :class="MENU_ITEM" @select="managing = true">Manage folders…</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Tip v-if="src.pickFolder && src.changeProjectChoice" label="Choose project folders">
+            <span class="inline-flex">
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <button type="button" aria-label="Choose project folders" class="flex size-8 shrink-0 items-center justify-center rounded-(--radius-8) bg-fill-5 text-text-2 hover:bg-fill-hover">
+                    <FolderPlus class="size-4" aria-hidden="true" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
+                  <DropdownMenuItem :class="MENU_ITEM" @select="addFolder('folders')">Add a project folder…</DropdownMenuItem>
+                  <DropdownMenuItem :class="MENU_ITEM" @select="addFolder('roots')">Add a folder of projects…</DropdownMenuItem>
+                  <DropdownMenuItem :class="MENU_ITEM" @select="managing = true">Manage folders…</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </span>
+          </Tip>
         </div>
         <p v-if="actionProblem" role="alert" class="mt-3 text-[12px] leading-4 text-danger">{{ actionProblem }}</p>
         <p v-if="problem && !answer" class="mt-4 text-[12px] leading-4 text-text-muted">Could not load your projects: {{ problem }}</p>
@@ -211,17 +232,24 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
           <div v-for="p in shown" :key="p.path" class="min-w-0">
             <ContextMenu>
               <ContextMenuTrigger as-child>
-                <button type="button" :title="p.path" :aria-pressed="picked(p)" :class="[TILE, picked(p) ? TILE_PICKED : TILE_BG, showProjectDetails ? 'flex-col p-3' : 'items-center px-2.5 py-1.5']" @click="open(p)">
-                  <span class="flex w-full min-w-0 items-center gap-2">
-                    <img v-if="p.icon" :src="p.icon" alt="" :class="[iconSize, 'shrink-0 rounded-(--radius-6)']" />
-                    <span v-else :class="[iconSize, 'flex shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted']">
-                      <Folder :class="folderSize" aria-hidden="true" />
+                <button type="button" :aria-pressed="picked(p)" :class="[TILE, picked(p) ? TILE_PICKED : TILE_BG, p.hidden ? 'opacity-60' : '', showProjectDetails ? 'flex-col p-3' : 'items-center px-2.5 py-1.5']" @click="open(p)">
+                  <Tip :label="p.path">
+                    <span class="flex w-full min-w-0 items-center gap-2">
+                      <img v-if="p.icon" :src="p.icon" alt="" :class="[iconSize, 'shrink-0 rounded-(--radius-6)']" />
+                      <span v-else :class="[iconSize, 'flex shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted']">
+                        <Folder :class="folderSize" aria-hidden="true" />
+                      </span>
+                      <span class="truncate text-[13px] font-semibold leading-4.75 text-text">{{ p.name }}</span>
+                      <Tip v-if="p.hidden" label="Hidden from Projects">
+                        <span class="inline-flex shrink-0 text-text-muted"><EyeOff class="size-3" aria-hidden="true" /></span>
+                      </Tip>
+                      <Tip v-if="p.openChats" :label="openChatsLabel(p.openChats)">
+                        <span :class="OPEN_CHATS" :aria-label="openChatsLabel(p.openChats)">
+                          <MessagesSquare class="size-3" aria-hidden="true" />{{ p.openChats }}
+                        </span>
+                      </Tip>
                     </span>
-                    <span class="truncate text-[13px] font-semibold leading-4.75 text-text">{{ p.name }}</span>
-                    <span v-if="p.openChats" :class="OPEN_CHATS" :title="openChatsLabel(p.openChats)" :aria-label="openChatsLabel(p.openChats)">
-                      <MessagesSquare class="size-3" aria-hidden="true" />{{ p.openChats }}
-                    </span>
-                  </span>
+                  </Tip>
                   <span :class="showProjectDetails ? 'flex min-w-0 flex-col gap-2' : DETAILS_HOVER">
                     <span class="truncate text-[11px] leading-4 text-text-muted">{{ p.path }}</span>
                     <span v-if="syncLabel(p.git)" class="self-start rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-[11px] leading-4 text-text-2">{{ syncLabel(p.git) }}</span>
@@ -229,7 +257,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
                 </button>
               </ContextMenuTrigger>
               <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
-                <ContextMenuItem v-for="item in PROJECT_ACTIONS" :key="item.action" :class="MENU_ITEM" @select="runAction(item.action, p.path)">
+                <ContextMenuItem v-for="item in projectActions(p.hidden)" :key="item.action" :class="MENU_ITEM" @select="runAction(item.action, p.path)">
                   {{ item.label }}
                 </ContextMenuItem>
               </ContextMenuContent>
@@ -238,7 +266,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
         </TransitionGroup>
         <button v-if="overflow" type="button" :aria-expanded="expanded" class="mt-3 h-7 rounded-(--radius-8) bg-fill-5 px-3 text-[12px] leading-4 text-text-2 hover:bg-fill-hover" @click="expanded = !expanded">{{ moreLabel }}</button>
         <p v-if="answer?.hydra.found && answer.hydra.problem" class="mt-3 text-[11px] leading-4 text-text-muted">Project Hydra: {{ answer.hydra.problem }}</p>
-        <ProjectFoldersDialog :open="managing" :choices="choices" @update:open="(o: boolean) => (managing = o)" @changed="load" @failed="fail" />
+        <ProjectFoldersDialog :open="managing" :choices="choices" :projects="answer?.projects ?? []" @update:open="(o: boolean) => (managing = o)" @changed="load" @failed="fail" />
       </template>
 
       <StatsCard v-else class="mt-6" :chats="chats" />

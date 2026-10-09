@@ -853,6 +853,8 @@ export interface ProjectEntry {
   /** A URL the page can load (Project Hydra's logo), or null for the folder glyph. */
   icon: string | null
   sources: ProjectSource[]
+  /** Taken off the New screen with Hide. Listed only by GET /api/projects?hidden=1 (Show hidden projects). */
+  hidden: boolean
   /** null when the folder is not a git checkout. */
   git: ProjectGit | null
   lastCommitAt: string | null

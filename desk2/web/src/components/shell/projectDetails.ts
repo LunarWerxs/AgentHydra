@@ -15,3 +15,8 @@ export function detailsOn(saved: string | null): boolean {
 /** On: every project tile shows its folder and git status in place. Remembered; off until the toggle turns it on. */
 export const showProjectDetails = ref(detailsOn(storage?.getItem(KEY) ?? null))
 watch(showProjectDetails, (v) => storage?.setItem(KEY, v ? '1' : '0'))
+
+const HIDDEN_KEY = 'hydra-desk.new.show-hidden-projects'
+/** On: hidden projects are listed on the New screen, dimmed, with Unhide. Remembered like the details toggle. */
+export const showHiddenProjects = ref(detailsOn(storage?.getItem(HIDDEN_KEY) ?? null))
+watch(showHiddenProjects, (v) => storage?.setItem(HIDDEN_KEY, v ? '1' : '0'))

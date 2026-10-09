@@ -579,7 +579,7 @@ export class ProjectList {
 
   /** The grid from what is known now; `wait` answers once Project Hydra, the sessions run elsewhere, the chats'
    * transcripts and the stale git states are read again. `git: false` leaves git as it is (the sweep). */
-  async list(opts: { wait?: boolean; git?: boolean } = {}): Promise<ProjectsResponse> {
+  async list(opts: { wait?: boolean; git?: boolean; hidden?: boolean } = {}): Promise<ProjectsResponse> {
     const wait = opts.wait ?? false
     const [{ location, read }, outside] = await Promise.all([this.hydra(wait), this.outside(wait)])
     let grid = this.build(read, outside)
@@ -591,7 +591,7 @@ export class ProjectList {
 
     const { choices } = grid
     const hidden = new Set(choices.hidden.map(folderKey))
-    const list = [...grid.rows.values()].filter((row) => !hidden.has(folderKey(row.path)))
+    const list = [...grid.rows.values()].filter((row) => opts.hidden || !hidden.has(folderKey(row.path)))
     const keys = list.map((row) => folderKey(row.path))
     this.listed = new Set(keys)
     const known = list.map((row, i) => (opts.git === false ? { facts: this.gitCache.get(keys[i]!)?.facts ?? null, reading: null } : this.gitOf(row.path)))
@@ -606,6 +606,7 @@ export class ProjectList {
         group: row.group,
         icon: row.icon,
         sources: [...row.sources],
+        hidden: hidden.has(folderKey(row.path)),
         git: f?.git ?? null,
         lastCommitAt: f?.lastCommitAt ?? null,
         lastChatAt: row.lastChatAt ? new Date(row.lastChatAt).toISOString() : null,

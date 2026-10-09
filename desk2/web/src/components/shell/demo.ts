@@ -283,6 +283,7 @@ function demoProjects(): ProjectsResponse {
     group,
     icon: null,
     sources,
+    hidden: false,
     git: g,
     lastCommitAt: null,
     lastChatAt: null,
