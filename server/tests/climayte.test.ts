@@ -1017,7 +1017,11 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
         prompt: 'call connections_execute',
       })
       expect(status).toBe('done')
-      expect([id, servers]).toEqual([id, ['climayte-worker', 'connections-local', 'hswarm']])
+      // `browser` is Desk's browser tools, which every worker that is not a chat gets.
+      expect([id, servers]).toEqual([
+        id,
+        ['browser', 'climayte-worker', 'connections-local', 'hswarm'],
+      ])
       // 440 settings files and 18 MCP files were left behind on the owner's machine (2026-10-02).
       expect([
         existsSync(join(HOOKS, `${wid}.json`)),
