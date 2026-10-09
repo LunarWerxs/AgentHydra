@@ -234,12 +234,12 @@ describe('useDesk store', () => {
       climayteActive: 0
     })
     /** The next fetch answers only when the test says so, with this chat. */
-    function answerLater(): (chat: ChatSummary) => void {
-      let answer: ((chat: ChatSummary) => void) | null = null
+    function answerLater(): (body: unknown) => void {
+      let answer: ((body: unknown) => void) | null = null
       mockFetch.mockImplementationOnce(
-        () => new Promise<Response>((resolve) => (answer = (chat) => resolve(new Response(JSON.stringify(chat), { status: 200 }))))
+        () => new Promise<Response>((resolve) => (answer = (body) => resolve(new Response(JSON.stringify(body), { status: 200 }))))
       )
-      return (chat) => answer!(chat)
+      return (body) => answer!(body)
     }
     const req = { cwd: 'C:/Users/me/project', prompt: 'Example first message' }
 
@@ -283,6 +283,100 @@ describe('useDesk store', () => {
       expect(desk.selected.value).toEqual({ kind: 'new' })
       expect(desk.chats.value.some((c) => c.id === 'fork-left')).toBe(true)
     })
+
+  describe('a message the window draws', () => {
+    it('draws the bubble before the POST answers, and the server echo takes its place', async () => {
+      const desk = useDesk()
+      await desk.init()
+      desk.itemsByChat.value.set('chat-echo', [])
+      const answer = answerLater()
+      const sending = desk.send('chat-echo', { text: 'Example hello' })
+      expect(desk.itemsByChat.value.get('chat-echo')).toEqual([expect.objectContaining({ kind: 'user', text: 'Example hello' })])
+      MockWebSocket.last!.simulateMessage({
+        type: 'item.upsert',
+        chatId: 'chat-echo',
+        item: { id: 'msg-echo', ts: 1, kind: 'user', text: 'Example hello' } as TranscriptItem
+      })
+      answer({ queued: false })
+      await sending
+      expect(desk.itemsByChat.value.get('chat-echo')).toEqual([expect.objectContaining({ id: 'msg-echo', text: 'Example hello' })])
+    })
+
+    it('keeps the text and marks the bubble Not sent when the POST fails', async () => {
+      const desk = useDesk()
+      desk.itemsByChat.value.set('chat-fail', [])
+      mockFetch.mockImplementationOnce(() => Promise.resolve(new Response('{"error":"down"}', { status: 500 })))
+      const result = await desk.send('chat-fail', { text: 'Example unsent' })
+      expect(result).toBeNull()
+      expect(desk.itemsByChat.value.get('chat-fail')).toEqual([
+        expect.objectContaining({ text: 'Example unsent', sendFailed: expect.any(String) })
+      ])
+    })
+
+    it('Retry clears Not sent and posts the same text again', async () => {
+      const desk = useDesk()
+      desk.itemsByChat.value.set('chat-retry', [])
+      mockFetch.mockImplementationOnce(() => Promise.resolve(new Response('{"error":"down"}', { status: 500 })))
+      await desk.send('chat-retry', { text: 'Example again' })
+      const failed = desk.itemsByChat.value.get('chat-retry')![0]
+      mockFetch.mockClear()
+      desk.retrySend('chat-retry', failed.id)
+      expect(desk.itemsByChat.value.get('chat-retry')).toEqual([
+        expect.objectContaining({ text: 'Example again', sendFailed: undefined })
+      ])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(mockFetch).toHaveBeenCalledWith('/api/chats/chat-retry/messages', expect.objectContaining({ method: 'POST' }))
+    })
+
+    it('opens a new chat at once and makes it the real chat in place', async () => {
+      const desk = useDesk()
+      desk.select({ kind: 'new', cwd: req.cwd })
+      const answer = answerLater()
+      const made = desk.createChat({ cwd: req.cwd, prompt: 'Example first message' })
+      const placeholder = desk.selected.value as { kind: 'chat'; id: string }
+      expect(placeholder.kind).toBe('chat')
+      expect(desk.chats.value.some((c) => c.id === placeholder.id)).toBe(true)
+      expect(desk.itemsByChat.value.get(placeholder.id)).toEqual([expect.objectContaining({ kind: 'user', text: 'Example first message' })])
+      answer(summary('chat-made'))
+      await made
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: 'chat-made' })
+      expect(desk.chats.value.some((c) => c.id === placeholder.id)).toBe(false)
+      expect(desk.itemsByChat.value.get('chat-made')).toEqual([expect.objectContaining({ kind: 'user', text: 'Example first message' })])
+    })
+
+    it('the server echo takes the oldest bubble when its text differs from the one sent', async () => {
+      const desk = useDesk()
+      await desk.init()
+      desk.itemsByChat.value.set('chat-trim', [])
+      const answer = answerLater()
+      const sending = desk.send('chat-trim', { text: 'Example  spaced ' })
+      MockWebSocket.last!.simulateMessage({
+        type: 'item.upsert',
+        chatId: 'chat-trim',
+        item: { id: 'msg-trim', ts: 1, kind: 'user', text: 'Example spaced' } as TranscriptItem
+      })
+      answer({ queued: false })
+      await sending
+      expect(desk.itemsByChat.value.get('chat-trim')).toEqual([expect.objectContaining({ id: 'msg-trim' })])
+    })
+
+    it('a message sent to a busy chat is drawn as queued', async () => {
+      const desk = useDesk()
+      await desk.init()
+      MockWebSocket.last!.simulateMessage({
+        type: 'chat.upsert',
+        chat: { ...summary('chat-busy'), status: 'working', turnStartedAt: 100 }
+      })
+      desk.itemsByChat.value.set('chat-busy', [])
+      const answer = answerLater()
+      const sending = desk.send('chat-busy', { text: 'Example queued' })
+      expect(desk.itemsByChat.value.get('chat-busy')).toEqual([
+        expect.objectContaining({ kind: 'user', text: 'Example queued', queued: true })
+      ])
+      answer({ queued: true })
+      await sending
+    })
+  })
   })
 
   describe('a Stop the window draws', () => {

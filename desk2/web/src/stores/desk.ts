@@ -307,8 +307,14 @@ const UNLOADED_UPSERTS_MAX = 200
 /** Background chats whose streamed items are kept; past it the chat that streamed first is dropped, and its history fetch has them anyway. */
 const UNLOADED_CHATS_MAX = 50
 
-/** Speed tracking: when Send was clicked in a chat whose bubble has not shown yet (performance.now()). */
-const sendClicks = new Map<string, number>()
+/** Messages the window drew before the server echoed them; a server user item with the same text takes the bubble's place. */
+const PENDING_MSG = 'pending-msg:'
+const PENDING_CHAT = 'pending-chat:'
+let pendingSeq = 0
+/** A placeholder chat's real id, once the POST that makes it has answered. */
+const placeholderAlias = new Map<string, string>()
+/** The POST that makes a placeholder chat, and the request it makes (kept for Retry). */
+const placeholderMakes = new Map<string, { req: CreateChatRequest; made: Promise<ChatSummary | null> }>()
 
 /** The chat's history with what streamed before and while it was fetched, now its whole cached transcript. */
 function landItems(id: string, snapshot: TranscriptItem[]): TranscriptItem[] {
@@ -400,23 +406,17 @@ function onChatRemoved(event: EventOf<'chat.removed'>) {
 }
 
 function onItemUpsert(event: EventOf<'item.upsert'>) {
-  // Speed tracking: the sent message's bubble is drawn at the next frame.
-  const clicked = event.item.kind === 'user' ? sendClicks.get(event.chatId) : undefined
-  if (clicked !== undefined) {
-    sendClicks.delete(event.chatId)
-    reportAtPaint('click_to_bubble', clicked, event.chatId)
-  }
-  // A chat whose history is not loaded keeps what streams aside: put in the cache, it would stand for
-  // the whole transcript and opening the chat would never fetch its history.
-  let items = chatItems(event.chatId)
-  if (!items) {
-    items = unloadedUpserts.get(event.chatId) ?? []
-    unloadedUpserts.set(event.chatId, items)
-    capMap(unloadedUpserts, UNLOADED_CHATS_MAX)
-  }
+  const items = streamedItems(event.chatId)
   const idx = indexOfItem(event.chatId, items, event.item.id)
-  if (idx >= 0) replaceItem(items, idx, event.item)
-  else appendItem(event.chatId, items, event.item)
+  if (idx >= 0) {
+    replaceItem(items, idx, event.item)
+  } else {
+    const pending = event.item.kind === 'user' ? pendingUserIndex(items, event.item.text) : -1
+    if (pending >= 0) {
+      replaceItem(items, pending, event.item)
+      indexes.delete(event.chatId)
+    } else appendItem(event.chatId, items, event.item)
+  }
   // Only the newest few are kept for an unloaded chat: the history fetch already holds the older ones.
   if (!chatItems(event.chatId) && items.length > UNLOADED_UPSERTS_MAX) {
     items.splice(0, items.length - UNLOADED_UPSERTS_MAX)
@@ -513,7 +513,7 @@ function handleServerEvent(event: ServerEvent) {
 // Upserts that land while the fetch is out are newer than its snapshot, so they are kept over it.
 function reloadOpenChat() {
   const sel = store.selected
-  if (sel.kind !== 'chat' || !store.chats.some((c) => c.id === sel.id)) return
+  if (sel.kind !== 'chat' || isPlaceholder(sel.id) || !store.chats.some((c) => c.id === sel.id)) return
   const id = sel.id
   fetchJson<TranscriptItem[]>(`/chats/${id}/items`)
     .then((items) => {
@@ -775,6 +775,158 @@ function landChat(chat: ChatSummary, from: View) {
 /** The view on screen now, copied: what landChat compares with when the chat it waits for lands. */
 const viewNow = (): View => ({ ...store.selected })
 
+const isPlaceholder = (id: string) => id.startsWith(PENDING_CHAT)
+const resolveChatId = (id: string) => placeholderAlias.get(id) ?? id
+
+/** The list a chat's streamed items go to: its loaded transcript, or the side list until its history loads. */
+function streamedItems(chatId: string): TranscriptItem[] {
+  let items = chatItems(chatId)
+  if (!items) {
+    items = unloadedUpserts.get(chatId) ?? []
+    unloadedUpserts.set(chatId, items)
+    capMap(unloadedUpserts, UNLOADED_CHATS_MAX)
+  }
+  return items
+}
+
+function reasonOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+function pendingUserItem(message: SendMessageRequest, queued = false): TranscriptItem {
+  return {
+    id: `${PENDING_MSG}${++pendingSeq}`,
+    ts: Date.now(),
+    kind: 'user',
+    text: message.text,
+    ...(message.images?.length ? { images: message.images } : {}),
+    ...(queued ? { queued: true } : {})
+  }
+}
+
+function pendingUserIndex(items: TranscriptItem[], text: string): number {
+  const pending: number[] = []
+  items.forEach((i, n) => {
+    if (i.kind === 'user' && i.id.startsWith(PENDING_MSG) && !i.sendFailed) pending.push(n)
+  })
+  return pending.find((n) => items[n].kind === 'user' && items[n].text === text) ?? pending[0] ?? -1
+}
+
+function chatBusy(chatId: string): boolean {
+  const chat = store.chats.find((c) => c.id === chatId)
+  if (!chat) return false
+  return chat.status === 'working' || chat.status === 'needs_you' || (chat.status === 'starting' && chat.turnStartedAt !== null) || chat.queuedCount > 0
+}
+
+function markSendFailed(chatId: string, itemId: string, reason: string) {
+  const key = resolveChatId(chatId)
+  const items = chatItems(key) ?? unloadedUpserts.get(key)
+  const at = items ? indexOfItem(key, items, itemId) : -1
+  const item = items?.[at]
+  if (items && item?.kind === 'user') replaceItem(items, at, { ...item, sendFailed: reason })
+}
+
+/** Posts a message whose bubble is already drawn; a failure marks the bubble Not sent and resolves null. */
+async function deliverPending(
+  chatId: string,
+  itemId: string,
+  message: SendMessageRequest,
+  clicked: number
+): Promise<{ queued: boolean } | null> {
+  const key = resolveChatId(chatId)
+  const realId = isPlaceholder(key) ? ((await placeholderMakes.get(key)?.made)?.id ?? null) : key
+  if (!realId) {
+    markSendFailed(key, itemId, 'The new chat was not made')
+    return null
+  }
+  try {
+    const sent = await fetchJson<{ queued: boolean }>(`/chats/${realId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(message)
+    })
+    reportTiming('click_to_server', performance.now() - clicked, realId)
+    return sent
+  } catch (err) {
+    markSendFailed(key, itemId, reasonOf(err))
+    return null
+  }
+}
+
+function placeholderSummary(id: string, req: CreateChatRequest): ChatSummary {
+  const now = Date.now()
+  return {
+    id,
+    sessionId: null,
+    title: req.title ?? 'New chat',
+    cwd: req.cwd,
+    account: { id: 'auto', label: 'Auto', configDir: null },
+    accountAuto: true,
+    model: req.model ?? null,
+    effort: req.effort ?? null,
+    permissionMode: req.permissionMode ?? 'default',
+    delegateToCliMayte: req.delegateToCliMayte ?? false,
+    status: 'starting',
+    activity: null,
+    turnStartedAt: null,
+    lastError: null,
+    limitResetsAt: null,
+    unread: false,
+    pinned: false,
+    archived: false,
+    group: null,
+    forkedFrom: null,
+    createdAt: now,
+    updatedAt: now,
+    costUsd: 0,
+    contextPct: null,
+    pendingCount: 0,
+    queuedCount: 0,
+    climayteActive: 0
+  }
+}
+
+/** The placeholder becomes the real chat in place; the view follows only while it still shows the placeholder. */
+function landPlaceholder(placeholder: string, chat: ChatSummary) {
+  placeholderAlias.set(placeholder, chat.id)
+  placeholderMakes.delete(placeholder)
+  const bubbles = itemsByChat.get(placeholder) ?? []
+  const streamed = unloadedUpserts.get(chat.id) ?? []
+  unloadedUpserts.delete(chat.id)
+  const kept = bubbles.filter((b) => !(b.kind === 'user' && streamed.some((s) => s.kind === 'user' && s.text === b.text)))
+  itemsByChat.delete(placeholder)
+  indexes.delete(placeholder)
+  itemsByChat.set(chat.id, shallowReactive([...kept, ...streamed]))
+  indexes.delete(chat.id)
+  if (store.chats.some((c) => c.id === chat.id)) {
+    store.chats = store.chats.filter((c) => c.id !== placeholder)
+  } else {
+    const at = store.chats.findIndex((c) => c.id === placeholder)
+    if (at >= 0) store.chats[at] = chat
+    else store.chats.push(chat)
+  }
+  if (sameView(store.selected, { kind: 'chat', id: placeholder })) store.selected = { kind: 'chat', id: chat.id }
+  touchChat(chat.id)
+}
+
+function makeChat(placeholder: string, req: CreateChatRequest): Promise<ChatSummary | null> {
+  const made = fetchJson<ChatSummary>('/chats', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req)
+  })
+    .then((chat) => {
+      landPlaceholder(placeholder, chat)
+      return chat
+    })
+    .catch((err: unknown) => {
+      markSendFailed(placeholder, itemsByChat.get(placeholder)?.[0]?.id ?? '', reasonOf(err))
+      return null
+    })
+  placeholderMakes.set(placeholder, { req, made })
+  return made
+}
+
 // Public API
 
 export function useDesk() {
@@ -822,29 +974,41 @@ export function useDesk() {
       store.selected = { kind: 'settings' }
     },
 
-    /** Creates the chat (its first message goes with it), lists it and opens it if the person is still where they sent it from. */
-    async createChat(req: CreateChatRequest): Promise<ChatSummary> {
-      const from = viewNow()
-      const chat = await fetchJson<ChatSummary>('/chats', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req)
-      })
-      landChat(chat, from)
-      return chat
+    /**
+     * Opens a placeholder chat at once, its first message drawn, and makes the real chat behind it. Resolves the
+     * real chat, or null when the POST failed (the placeholder's bubble then says Not sent).
+     */
+    createChat(req: CreateChatRequest): Promise<ChatSummary | null> {
+      const placeholder = `${PENDING_CHAT}${++pendingSeq}`
+      const first = req.prompt ? pendingUserItem({ text: req.prompt, ...(req.images?.length ? { images: req.images } : {}) }) : null
+      itemsByChat.set(placeholder, shallowReactive(first ? [first] : []))
+      store.chats.push(placeholderSummary(placeholder, req))
+      store.selected = { kind: 'chat', id: placeholder }
+      return makeChat(placeholder, req)
     },
 
-    async send(chatId: string, message: SendMessageRequest): Promise<{ queued: boolean }> {
+    /** Draws the message's bubble before the POST answers; a failed POST marks it Not sent and resolves null. */
+    async send(chatId: string, message: SendMessageRequest): Promise<{ queued: boolean } | null> {
       if (isExternalChatId(chatId)) return resumeExternal(sessionOfChatId(chatId), message)
       const clicked = performance.now()
-      sendClicks.set(chatId, clicked)
-      const sent = await fetchJson<{ queued: boolean }>(`/chats/${chatId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(message)
-      })
-      reportTiming('click_to_server', performance.now() - clicked, chatId)
-      return sent
+      const key = resolveChatId(chatId)
+      const item = pendingUserItem(message, chatBusy(key))
+      appendItem(key, streamedItems(key), item)
+      reportAtPaint('click_to_bubble', clicked, key)
+      return deliverPending(key, item.id, message, clicked)
+    },
+
+    /** Sends a Not sent bubble again; its text and images are kept. */
+    retrySend(chatId: string, itemId: string): void {
+      const key = resolveChatId(chatId)
+      const items = chatItems(key)
+      const at = items ? indexOfItem(key, items, itemId) : -1
+      const item = items?.[at]
+      if (!items || item?.kind !== 'user' || !item.sendFailed) return
+      replaceItem(items, at, { ...item, sendFailed: undefined })
+      const make = isPlaceholder(key) ? placeholderMakes.get(key) : undefined
+      if (make && items[0]?.id === itemId) makeChat(key, make.req)
+      else void deliverPending(key, itemId, { text: item.text, ...(item.images ? { images: item.images } : {}) }, performance.now())
     },
 
     async interrupt(chatId: string): Promise<{ ok: boolean }> {
@@ -1128,6 +1292,7 @@ export function useDesk() {
     },
 
     async loadItems(chatId: string): Promise<TranscriptItem[]> {
+      if (isPlaceholder(resolveChatId(chatId))) return chatItems(resolveChatId(chatId)) ?? []
       const opened = performance.now()
       const snapshot = await fetchJson<TranscriptItem[]>(`/chats/${chatId}/items`).catch((err: unknown) => {
         if (store.selected.kind === 'chat' && store.selected.id === chatId) retryOpenChat(chatId, err)

@@ -72,7 +72,7 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
 <template>
   <RedesignReplyChip v-if="chip" :chip="chip" :ts="item.ts" />
 
-  <UserMessage v-else-if="item.kind === 'user'" :id="item.id" :text="item.text" :ts="item.ts" :images="item.images" :queued="item.queued" />
+  <UserMessage v-else-if="item.kind === 'user'" :id="item.id" :text="item.text" :ts="item.ts" :images="item.images" :queued="item.queued" :send-failed="item.sendFailed" />
 
   <NoteRow v-else-if="item.kind === 'note'" :item="item" />
 

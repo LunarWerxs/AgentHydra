@@ -954,7 +954,8 @@ function stop(click = false) {
 async function sendToChat(id: string, body: string, refs: ImageRef[], enqueue: boolean) {
   const message = { text: body, ...(refs.length ? { images: refs } : {}) }
   if (enqueue) await shell.queueAdd?.({ kind: 'message', chatId: id, ...message })
-  else await desk.send(id, message)
+  else if (isExternalChatId(id)) desk.send(id, message).catch((e) => showNotice(`Not sent: ${errText(e)}`))
+  else void desk.send(id, message)
   lastSent.set(id, body)
   saveDraft(storage, id, '')
   saveDraftImages(id, [])
@@ -976,8 +977,8 @@ async function createNewChat(body: string, refs: ImageRef[], enqueue: boolean, s
     await shell.queueAdd?.({ kind: 'chat', ...req })
     showNotice('Queued: starts when an account has room', true)
   } else {
-    // The store lists the new chat and opens it.
-    await desk.createChat(req)
+    // The store opens the new chat at once; its POST makes the real one.
+    void desk.createChat(req)
   }
   lastSent.set('new', body)
   saveDraft(storage, sentSlot, '')

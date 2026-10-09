@@ -60,7 +60,7 @@ import { useTranscript } from '../context'
 import MessageActions from './MessageActions.vue'
 import ImageTiles from './ImageTiles.vue'
 
-const props = defineProps<{ id?: string; text: string; ts: number; images?: ImageRef[]; queued?: boolean }>()
+const props = defineProps<{ id?: string; text: string; ts: number; images?: ImageRef[]; queued?: boolean; sendFailed?: string }>()
 // Only a message that just arrived animates in; one scrolled back into view does not.
 const fresh = Date.now() - props.ts < 2000
 
@@ -70,6 +70,10 @@ const chat = computed(() => desk.chats.value.find((c) => c.id === ctx.chatId.val
 // A CliMayte chat whose worker waits for an account (or a launch) runs no turn: Send now has nothing to stop, and the
 // message already goes first when it starts (2026-10-06: Send now flipped back to itself for half an hour).
 const noTurnYet = computed(() => !!chat.value?.workerId && chat.value.status === 'starting')
+function retrySend() {
+  if (ctx.chatId.value && props.id) desk.retrySend(ctx.chatId.value, props.id)
+}
+
 const canSendNow = computed(() => !ctx.readOnly.value && !!ctx.chatId.value && !noTurnYet.value)
 const sendNowState = ref<'idle' | 'sending' | 'failed'>('idle')
 const sendNowError = ref('')
@@ -161,6 +165,13 @@ watch(() => props.text, () => nextTick(fit))
       <button v-if="long" type="button" class="tx-bubble-more" :aria-expanded="expanded" @click="expanded = !expanded">
         {{ expanded ? 'Show less' : 'Show more' }}
       </button>
+    </div>
+    <div v-if="sendFailed" class="flex min-h-6 max-w-[85%] items-center gap-1.5 text-end text-[13px] text-text-muted">
+      <Tip :label="sendFailed">
+        <span class="text-danger-text">Not sent</span>
+      </Tip>
+      <span aria-hidden="true">·</span>
+      <button type="button" class="cursor-pointer hover:text-text" @click="retrySend">Retry</button>
     </div>
     <div v-if="queued" class="flex min-h-6 max-w-[85%] items-center gap-1.5 text-end text-[13px] text-text-muted">
       <span v-if="sendNowState === 'failed'" class="text-danger-text">Send now failed{{ sendNowError ? `: ${sendNowError}` : '' }}</span>

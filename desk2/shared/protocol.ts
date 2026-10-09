@@ -135,7 +135,8 @@ interface ItemBase {
 }
 
 export type TranscriptItem =
-  | (ItemBase & { kind: 'user'; text: string; images?: ImageRef[]; queued?: boolean })
+  /** sendFailed is client-only: the window's own bubble for a message the POST did not reach the server. */
+  | (ItemBase & { kind: 'user'; text: string; images?: ImageRef[]; queued?: boolean; sendFailed?: string })
   /** A message another program typed into the session as a user turn (an AgentHydra ping): never the person's bubble. */
   | (ItemBase & { kind: 'note'; from: string; text: string })
   /** branchFrom: an outside Claude Code session's reply names its transcript line, where "Copy up to here into a new chat" cuts (ExternalBranchRequest). */
