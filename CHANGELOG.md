@@ -13,6 +13,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call**
 - **A new chat no longer pulls you back into it after you moved on**
 - **One click above the account pill restarts you onto an update**
+- **The New screen shows Connections' logo, and reads a project's logo from its top-level icon too**
 
 **Everything in Unreleased**
 

@@ -85,9 +85,12 @@ export function placedRows(rows: unknown): { key: string; path: string; group: s
 interface RegistryEntry {
   name: string
   icon: string | null
+  remote: string | null
 }
 
-/** Each registry entry's display name and logo file name, by key. A file that does not parse is skipped. */
+/** Each registry entry's display name and logo file name, by key. A file that does not parse is skipped. The logo is the
+ * first launch row's, else the entry's own; an entry with none takes another entry's for the same repo (a duplicate
+ * that `ph discover` added). */
 export function readRegistry(root: string): Map<string, RegistryEntry> {
   const dir = join(root, 'registry', 'projects')
   const out = new Map<string, RegistryEntry>()
@@ -103,16 +106,23 @@ export function readRegistry(root: string): Map<string, RegistryEntry> {
         key?: unknown
         name?: unknown
         display_name?: unknown
+        icon?: unknown
+        remote?: unknown
         launch?: { name?: unknown; icon?: unknown }[]
       } | null
       const key = typeof y?.key === 'string' ? y.key : f.slice(0, -'.yaml'.length)
       const launch = Array.isArray(y?.launch) ? y.launch[0] : undefined
       const name = [y?.display_name, launch?.name, y?.name].find((n): n is string => typeof n === 'string' && n.trim() !== '')
-      out.set(key, { name: name ?? key, icon: typeof launch?.icon === 'string' ? launch.icon : null })
+      const icon = [launch?.icon, y?.icon].find((i): i is string => typeof i === 'string' && i !== '') ?? null
+      const remote = typeof y?.remote === 'string' && y.remote.trim() ? y.remote.trim().toLowerCase() : null
+      out.set(key, { name: name ?? key, icon, remote })
     } catch {
       // floor-ok: one bad entry costs its own name and logo, not the list
     }
   }
+  const iconOfRemote = new Map<string, string>()
+  for (const e of out.values()) if (e.icon && e.remote && !iconOfRemote.has(e.remote)) iconOfRemote.set(e.remote, e.icon)
+  for (const e of out.values()) if (!e.icon && e.remote) e.icon = iconOfRemote.get(e.remote) ?? null
   return out
 }
 

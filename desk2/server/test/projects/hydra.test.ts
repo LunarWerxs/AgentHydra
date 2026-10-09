@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { iconFileIn, parseHelper, placedRows } from '../../src/projects/hydra'
+import { iconFileIn, parseHelper, placedRows, readRegistry } from '../../src/projects/hydra'
 
 let base: string
 beforeEach(() => {
@@ -48,5 +48,46 @@ describe('iconFileIn', () => {
     expect(iconFileIn(root, 'logo.png')).toBe(resolve(root, 'icons', 'logo.png'))
     expect(iconFileIn(root, '../secret.png')).toBeNull()
     expect(iconFileIn(root, null)).toBeNull()
+  })
+})
+
+describe('readRegistry logos', () => {
+  function registry(files: Record<string, string>): string {
+    const root = join(base, 'hydra')
+    mkdirSync(join(root, 'registry', 'projects'), { recursive: true })
+    mkdirSync(join(root, 'icons'), { recursive: true })
+    for (const [name, body] of Object.entries(files)) writeFileSync(join(root, 'registry', 'projects', name), body)
+    return root
+  }
+
+  test('uses the top-level icon when the project has no launch row', () => {
+    const root = registry({ 'example-app.yaml': 'key: example-app\nname: Example App\nicon: example.svg\n' })
+    writeFileSync(join(root, 'icons', 'example.svg'), '<svg/>')
+    const entry = readRegistry(root).get('example-app')
+    expect(iconFileIn(root, entry!.icon)).toBe(resolve(root, 'icons', 'example.svg'))
+  })
+
+  test('the launch row icon wins over the top-level one', () => {
+    const root = registry({
+      'example-app.yaml': 'key: example-app\nname: Example App\nicon: top.svg\nlaunch:\n- id: example-app\n  icon: launch.png\n',
+    })
+    expect(readRegistry(root).get('example-app')!.icon).toBe('launch.png')
+  })
+
+  test('a top-level icon that climbs out of the icons folder is refused', () => {
+    const root = registry({ 'example-app.yaml': 'key: example-app\nname: Example App\nicon: ../secret.png\n' })
+    writeFileSync(join(root, 'secret.png'), 'x')
+    expect(iconFileIn(root, readRegistry(root).get('example-app')!.icon)).toBeNull()
+  })
+
+  test('a duplicate entry for the same repo takes the logo of the entry that has one', () => {
+    const root = registry({
+      'example-tool.yaml': 'key: example-tool\nname: Example Tool\nremote: https://github.com/example/tool.git\nlaunch:\n- id: example-tool\n  icon: tool.png\n',
+      'example-tool-2.yaml': 'key: example-tool-2\nname: Example Tool\nremote: https://github.com/example/tool.git\nkind: app\n',
+    })
+    writeFileSync(join(root, 'icons', 'tool.png'), 'x')
+    const dup = readRegistry(root).get('example-tool-2')!
+    expect(dup.icon).toBe('tool.png')
+    expect(iconFileIn(root, dup.icon)).toBe(resolve(root, 'icons', 'tool.png'))
   })
 })
