@@ -126,8 +126,9 @@ export function trySaveWalls(): void {
 }
 
 /** `auth status` passes a login whose organization turned Claude Code off, or whose identity is not
- *  verified yet, so only a new login (the credential file changing) lifts those walls; the next
- *  attempt then tells. True when `a`'s wall is one of those and the signed-out recheck must skip it. */
+ *  verified yet, so a new login (the credential file changing) lifts those walls. An identity wall
+ *  also lifts once its recheck time passes, so the next attempt tests it again. True when `a`'s wall
+ *  is one of those and the signed-out recheck must skip it. */
 export function recheckCredentialWall(
   a: CliMayteAccount,
   wall: CliMayteWalls[string] | undefined,
@@ -139,6 +140,9 @@ export function recheckCredentialWall(
     wall.cred = credStamp(a.configDir)
     trySaveWalls()
   } else if (wall.cred !== credStamp(a.configDir)) {
+    delete walls[a.id]
+    trySaveWalls()
+  } else if (wall.reason === IDENTITY_WALL && wall.until <= Date.now()) {
     delete walls[a.id]
     trySaveWalls()
   }
@@ -160,7 +164,7 @@ export function climayteSignedOutReason(id: string, configDir: string): string |
   if (wall!.reason === ORG_DISABLED_WALL)
     return 'Claude Code is turned off for this account\'s organization ("Your organization has disabled Claude subscription access for Claude Code"), so CliMayte does not use it. Sign it in with a different login to use it again.'
   if (wall!.reason === IDENTITY_WALL)
-    return 'Identity verification is required for this account (sign in at claude.ai and verify it), so CliMayte does not use it until then.'
+    return 'Identity verification is required for this account (verify it at claude.ai). CliMayte does not use it until then, and tries it again every 6 hours.'
   return 'Signed out: its credential file is there, but the login failed when CliMayte used it and has not worked since. It is used again once it signs in again. Sign in again: Quick add, or Log in.'
 }
 

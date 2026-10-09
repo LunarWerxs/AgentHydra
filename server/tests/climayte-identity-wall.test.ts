@@ -16,8 +16,13 @@ import {
   setCliMayteClaudeCommand,
   startCliMayte,
 } from '../src/climayte'
-import { setSpendKit, walls } from '../src/climayte-core'
-import { IDENTITY_WALL, isIdentityRequired, isLoginWall } from '../src/climayte-lib'
+import { IDENTITY_RECHECK_MS, setSpendKit, walls } from '../src/climayte-core'
+import {
+  IDENTITY_WALL,
+  isIdentityRequired,
+  isLoginWall,
+  ORG_DISABLED_WALL,
+} from '../src/climayte-lib'
 import { credStamp, recheckCredentialWall } from '../src/climayte-stops'
 import { harnessKit } from './mocks/climayte-kit'
 
@@ -64,9 +69,9 @@ describe('recheckCredentialWall: the identity wall waits for a new login, never 
     rmSync(root, { recursive: true, force: true })
   })
 
-  test('an unchanged credential file keeps the wall, however long it has stood', () => {
+  test('an unchanged credential file keeps the wall before 6 hours have passed', () => {
     walls[acct.id] = {
-      until: Date.now() + 365 * 24 * 3_600_000,
+      until: Date.now() + IDENTITY_RECHECK_MS,
       reason: IDENTITY_WALL,
       cred: credStamp(configDir),
     }
@@ -74,7 +79,33 @@ describe('recheckCredentialWall: the identity wall waits for a new login, never 
     expect(walls[acct.id]?.reason).toBe(IDENTITY_WALL)
   })
 
+  test('after 6 hours with the same credential the wall lifts, so the account is tried again', () => {
+    walls[acct.id] = {
+      until: Date.now() - 1,
+      reason: IDENTITY_WALL,
+      cred: credStamp(configDir),
+    }
+    expect(recheckCredentialWall(acct, walls[acct.id])).toBe(true)
+    expect(walls[acct.id]).toBeUndefined()
+  })
+
+  test('an organization wall is not lifted by the 6-hour recheck', () => {
+    walls[acct.id] = {
+      until: Date.now() - 1,
+      reason: ORG_DISABLED_WALL,
+      cred: credStamp(configDir),
+    }
+    expect(recheckCredentialWall(acct, walls[acct.id])).toBe(true)
+    expect(walls[acct.id]?.reason).toBe(ORG_DISABLED_WALL)
+    delete walls[acct.id]
+  })
+
   test('a changed credential file lifts the wall', () => {
+    walls[acct.id] = {
+      until: Date.now() + IDENTITY_RECHECK_MS,
+      reason: IDENTITY_WALL,
+      cred: credStamp(configDir),
+    }
     const later = new Date(Date.now() + 5_000)
     utimesSync(join(configDir, '.credentials.json'), later, later)
     expect(recheckCredentialWall(acct, walls[acct.id])).toBe(true)
@@ -133,6 +164,8 @@ describe('integration: an identity-walled account moves its task and is not pick
       ['idn-move-b', 'done'],
     ])
     expect(walls['idn-move-a']?.reason).toBe(IDENTITY_WALL)
-    expect(walls['idn-move-a']?.until).toBeGreaterThan(Date.now() + 24 * 3_600_000)
+    const until = walls['idn-move-a']?.until ?? 0
+    expect(until).toBeGreaterThan(Date.now())
+    expect(until).toBeLessThanOrEqual(Date.now() + IDENTITY_RECHECK_MS)
   }, 35_000)
 })

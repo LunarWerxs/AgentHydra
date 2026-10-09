@@ -11,6 +11,7 @@ import {
   chargeAttempt,
   claudeCommand,
   configDirOf,
+  IDENTITY_RECHECK_MS,
   journal,
   latestUsage,
   ORG_WALL_MS,
@@ -113,7 +114,7 @@ function wallSignedOut(
   const org = isOrgDisabled(v.notice)
   const identity = isIdentityRequired(v.notice)
   walls[at.account.id] = {
-    until: org || identity ? now + ORG_WALL_MS : now,
+    until: org ? now + ORG_WALL_MS : identity ? now + IDENTITY_RECHECK_MS : now,
     reason: org ? ORG_DISABLED_WALL : identity ? IDENTITY_WALL : 'signed out',
     cred: dir ? credStamp(dir) : null,
   }

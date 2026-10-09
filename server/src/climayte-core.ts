@@ -468,6 +468,9 @@ export function latestUsage(
 
 /** An organization's switch is not on a clock: its wall waits for a new login (recheckSignedOut). */
 export const ORG_WALL_MS = 365 * 24 * 3_600_000
+/** An identity check is fixed in a browser, which leaves the credential file alone: the account is
+ *  tried again on this clock (recheckCredentialWall), and a refusal walls it for another stretch. */
+export const IDENTITY_RECHECK_MS = 6 * 3_600_000
 
 export let accountsProvider: () => CliMayteAccount[] = signedInAccounts
 
