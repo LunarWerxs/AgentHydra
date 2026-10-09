@@ -22,9 +22,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The live browser pane keeps streaming when its Chrome window is covered**
 - **Drop any file in a chat: PDFs, notes, emails, zips**
 - **Hovering a control shows one tip after a second, not two**
+- **Opening a chat lands on its newest message**
+- **The folder pill above the message box shows the project's logo**
 - **Sending and clicking no longer stall behind the server's background reading of running workers**
 
 **Everything in Unreleased**
+
+- **Opening a chat lands on its newest message.** Switching to a chat could leave it a screen or more above the latest message while its rows settled. A chat now opens at the bottom and stays there until you scroll up yourself.
+
+- **The folder pill above the message box shows the project's logo.** The pill and its folder menu show the same logo as the project's tile on the New screen, and the folder icon when a project has none.
 
 - **Opening a chat no longer re-reads its whole transcript on every request.** The server keeps a chat's answer as text for as long as its file is unchanged, so an unchanged chat is sent from memory. A worker's sessions are also read one at a time, so a request can run between two of them.
 
