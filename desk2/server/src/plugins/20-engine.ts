@@ -15,6 +15,7 @@ import type { ServerContext } from '../context'
 import { callerKind, describeCaller, logRestartAsk, OWNER_ONLY_RESTART } from '../caller'
 import { bridge } from '../bridge'
 import { findSessionJsonl } from '../bridge/session-jsonl'
+import { closeChatTabs, startTabSweep } from '../browser/tab-sweep'
 import { mainConfigFile, readAgentHydraMcp, type QueryImpl } from '../engine/chat-runtime'
 import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { listMcpServers } from '../engine/mcp-servers'
@@ -118,6 +119,10 @@ function createManager(ctx: ServerContext, toQueue: { fn: (event: ServerEvent) =
     settings: ctx.settings,
     deskUrl: () => ctx.url(),
     bridge: (deps.bridge as ManagerBridge | undefined) ?? bridge(),
+    onChatEnd: (sessions) =>
+      void closeChatTabs(sessions).catch((err) =>
+        console.warn(`[desk] the browser tabs of an ended chat could not be closed: ${err instanceof Error ? err.message : String(err)}`),
+      ),
     queryImpl: deps.queryImpl as QueryImpl | undefined,
     env: deps.env as Record<string, string | undefined> | undefined,
     agentHydraMcp: deps.agentHydraMcp as McpServerConfig | null | undefined,
@@ -492,9 +497,19 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   })
 
   const stopClimayte = pollClimayte(ctx, manager)
+  const stopSweep = startTabSweep({
+    deskSessions: async () => {
+      const ids = new Set<string>()
+      for (const chat of manager.list()) for (const id of manager.browserSessions(chat.id)) ids.add(id)
+      const workers = await ((deps.bridge as ReturnType<typeof bridge> | undefined) ?? bridge()).workers({ all: true })
+      for (const w of workers) if (w.active && w.sessionId) ids.add(w.sessionId)
+      return ids
+    },
+  })
 
   ctx.onStop(async () => {
     stopClimayte()
+    stopSweep()
     await hosts
     await manager.closeAll()
   })

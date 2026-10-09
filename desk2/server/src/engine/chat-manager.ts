@@ -78,6 +78,8 @@ export interface ChatManagerOptions {
   emit(event: ServerEvent): void
   settings: () => DeskSettings
   bridge: ManagerBridge
+  /** Called with a chat's session ids when the chat is deleted or archived; must not throw. */
+  onChatEnd?: (sessions: string[]) => void
   /** Default: chats run in chat hosts (SPEC "Chat hosts"), or in this process with HYDRA_DESK_HOSTS=0. */
   queryImpl?: QueryImpl
   env?: Record<string, string | undefined>
@@ -289,6 +291,7 @@ export class ChatManager {
   private readonly emitEvent: (event: ServerEvent) => void
   private readonly settingsOf: () => DeskSettings
   private readonly bridge: ManagerBridge
+  private readonly onChatEnd: ((sessions: string[]) => void) | undefined
   private readonly claudeHome: string | undefined
   private readonly handoffTokens: number
   private readonly deskUrl: () => string
@@ -321,6 +324,7 @@ export class ChatManager {
     this.emitEvent = o.emit
     this.settingsOf = o.settings
     this.bridge = o.bridge
+    this.onChatEnd = o.onChatEnd
     this.claudeHome = o.claudeHome
     this.handoffTokens = o.handoffTokens ?? (Number(process.env.HYDRA_DESK_HANDOFF_TOKENS) || HANDOFF_TOKENS)
     this.deskUrl = o.deskUrl ?? (() => `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`)
@@ -971,7 +975,9 @@ export class ChatManager {
       e.titled = true
     }
     if (p.pinned !== undefined) chat.pinned = p.pinned
+    const archiving = p.archived === true && !chat.archived
     if (p.archived !== undefined) chat.archived = p.archived
+    if (archiving) this.onChatEnd?.(this.browserSessions(id))
     if (p.group !== undefined) chat.group = p.group
     // Put in another folder by hand: the next turn resumes the session there (seedResume / the worker's next send).
     const relocated = p.cwd !== undefined && p.cwd.toLowerCase() !== chat.cwd.toLowerCase()
@@ -1012,6 +1018,7 @@ export class ChatManager {
   /** Drops the chat from Hydra Desk (its runtime closed, its history file removed). */
   async delete(id: string): Promise<void> {
     const e = this.entry(id)
+    this.onChatEnd?.(this.browserSessions(id))
     this.chats.delete(id)
     const rt = e.runtime
     e.runtime = null
