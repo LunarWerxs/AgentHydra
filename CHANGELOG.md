@@ -7,33 +7,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [2.0.4] - 2026-10-09
+
 **TL;DR**
 
-- **The Instances page has a search box**
-- **Each Instances tab's + creates its own kind**
-- **Click to restart and update really restarts**
+- **Your message shows the moment you press Send, and Stop stops at once**
+- **Chats open and answer without the server stalling, however long their transcripts are**
+- **Restart to update is one click above the account pill, takes seconds, and shows What's new afterwards**
+- **The orchestrator's judge is a frontier model you pick, signed in with any account that has room**
+- **The babysitter can wake a Desktop chat a usage limit stopped**
+- **The Instances page has a search box, and each tab's + creates its own kind**
 - **Login sync tells you when it brings in a new account**
 - **The CLI Tokens column says it counts this PC, and shows work running from your other PC**
-- **The orchestrator's judge is a frontier model, not fixed rules, and you pick which one**
-- **The babysitter can wake a Desktop chat a usage limit stopped**
-- **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call**
-- **A new chat no longer pulls you back into it after you moved on**
-- **Chats with long transcripts stop stalling the server on every poll**
-- **The timings log records every server stall over 200 ms**
-- **One click above the account pill restarts you onto an update**
-- **A What's new pop-up lists what changed once the update's restart is done**
-- **The New screen shows Connections' logo, and reads a project's logo from its top-level icon too**
-- **The New screen highlights the project you picked**
-- **The New screen's View options menu shows hidden projects, and Manage folders says where each folder came from**
-- **The live browser pane keeps streaming when its Chrome window is covered**
 - **Drop any file in a chat: PDFs, notes, emails, zips**
+- **Opening a chat lands on its newest message, and a new chat no longer pulls you back into it**
+- **The New screen highlights your pick, can show hidden projects, and finds more project logos**
+- **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call**
+- **The live browser pane keeps streaming when its Chrome window is covered**
 - **Hovering a control shows one tip after a second, not two**
-- **Opening a chat lands on its newest message**
-- **The folder pill above the message box shows the project's logo**
-- **Restart to update takes seconds and shows What's new afterwards**
-- **Sending and clicking no longer stall behind the server's background reading of running workers**
 
-**Everything in Unreleased**
+**Everything in 2.0.4**
 
 - **The Instances page has a search box.** The magnifier at the top right (or Ctrl+F) opens a box that narrows every
   table as you type, by instance number, name, account or plan: "#171" finds #171 and "20x" finds the Max 20× accounts.
