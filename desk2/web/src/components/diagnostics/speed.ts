@@ -24,7 +24,8 @@ export const STAGE_LABEL: Record<TimingStage, string> = {
   chat_open: 'Chat open (server)',
   title: 'Title generation',
   warm: 'Warm start',
-  loop_stall: 'Server event loop blocked'
+  loop_stall: 'Server event loop blocked',
+  sync_block: 'Server synchronous call held the thread'
 }
 
 export const stageLabel = (s: string): string => STAGE_LABEL[s as TimingStage] ?? s

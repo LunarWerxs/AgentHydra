@@ -390,7 +390,9 @@ function onChatUpsert(event: EventOf<'chat.upsert'>) {
   if (idx >= 0) {
     store.chats[idx] = chat
   } else {
-    store.chats.push(chat)
+    const placeholder = adoptablePlaceholder(chat)
+    if (placeholder) landPlaceholder(placeholder, chat)
+    else store.chats.push(chat)
   }
   cacheLater('chats', store.chats)
 }
@@ -551,8 +553,28 @@ function keepNewer(snapshot: TranscriptItem[], since: readonly TranscriptItem[] 
   const newer = new Map(since.map((i) => [i.id, i]))
   const out = snapshot.map((i) => newer.get(i.id) ?? i)
   const had = new Set(snapshot.map((i) => i.id))
-  for (const i of since) if (!had.has(i.id)) out.push(i)
+  const said = snapshot.flatMap((i) => (i.kind === 'user' ? [i] : []))
+  for (const i of since) {
+    if (had.has(i.id)) continue
+    if (i.kind === 'user' && isDrawnMessage(i) && said.some((s) => s.text === i.text && s.ts >= i.ts - 1000)) continue
+    out.push(i)
+  }
   return out
+}
+
+/** A bubble the window drew or a CliMayte stand-in: the server's own copy of the message replaces it. */
+function isDrawnMessage(item: TranscriptItem): boolean {
+  return item.id.startsWith(PENDING_MSG) || item.id.startsWith('desk-sent:')
+}
+
+/** The placeholder whose POST is still out and that this chat is: same folder, made no earlier than it. */
+function adoptablePlaceholder(chat: ChatSummary): string | null {
+  for (const [placeholder, make] of placeholderMakes) {
+    if (make.req.cwd !== chat.cwd) continue
+    const row = store.chats.find((c) => c.id === placeholder)
+    if (row && chat.createdAt >= row.createdAt) return placeholder
+  }
+  return null
 }
 
 function dispatchNotification(event: {
@@ -916,7 +938,7 @@ function makeChat(placeholder: string, req: CreateChatRequest): Promise<ChatSumm
     body: JSON.stringify(req)
   })
     .then((chat) => {
-      landPlaceholder(placeholder, chat)
+      if (placeholderAlias.get(placeholder) !== chat.id) landPlaceholder(placeholder, chat)
       return chat
     })
     .catch((err: unknown) => {
