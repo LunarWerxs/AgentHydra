@@ -1,10 +1,11 @@
 // Speed tracking's routes (SPEC "Speed (timings)"): the report, and the window's own measurements.
 
+import { join } from 'node:path'
 import type { Hono } from 'hono'
 import { CLIENT_STAGES, type TimingStage } from '@shared/timings'
 import type { ServerContext } from '../context'
 import { DIAGNOSTICS_API, diagnosticsRoute } from '../engine/diagnostics'
-import { watchLoopStalls } from '../engine/loop-stall'
+import { LOOP_STALL_MS, watchLoopStalls } from '../engine/loop-stall'
 import { setSyncBlockSink } from '../engine/sync-block'
 import { Timings } from '../engine/timings'
 
@@ -13,7 +14,7 @@ const MAX_CLIENT_MS = 600_000
 
 export default async function plugin(app: Hono, ctx: ServerContext): Promise<void> {
   const timings = Timings.for(ctx.home)
-  ctx.onStop(watchLoopStalls(timings))
+  ctx.onStop(watchLoopStalls(timings, LOOP_STALL_MS, { file: join(ctx.home, 'logs', 'loop-stalls.jsonl') }))
   setSyncBlockSink((b) => timings.span({ stage: 'sync_block', name: b.label, ms: b.ms }))
 
   diagnosticsRoute(app, 'timings', () => timings.report())

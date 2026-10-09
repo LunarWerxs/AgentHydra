@@ -300,6 +300,23 @@ describe('Free jobs and routes', () => {
     service.start(op({ command: 'chats' })); await tick()
     expect(service.threads()[0]!.updatedAt).toBe(used)
   })
+  test("an account's chat list saves the store as often for forty chats as for one", async () => {
+    // 2026-10-09: a save per listed chat, 1,493 for one account, each the whole store fsync'd, froze the server 16-80 s.
+    const savesFor = async (n: number) => {
+      const chats = Array.from({ length: n }, (_, i) => ({ chat_id: `11111111-2222-4333-8444-${String(i).padStart(12, '0')}`, is_temporary: true, name: `Example chat ${i}` }))
+      const { service, op } = fixture(async () => output({ ok: true, chats }))
+      const saves = jest.spyOn(FreeStorage.prototype, 'save')
+      try {
+        const job = service.start(op({ command: 'chats' }))
+        for (let i = 0; i < 50 && !job.result; i++) await tick()
+        expect(service.threads()).toHaveLength(n)
+        return saves.mock.calls.length
+      } finally {
+        saves.mockRestore()
+      }
+    }
+    expect(await savesFor(40)).toBe(await savesFor(1))
+  })
   test('cancel interrupts an owned operation and never retries it', async () => {
     let calls = 0
     const { service, op } = fixture(async (_c, _r, signal) => {

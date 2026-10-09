@@ -1,6 +1,6 @@
 // While at least one window is connected: every 3 s read outside sessions and CliMayte workers, every
 // 30 s the accounts, and broadcast each list only when it changed. bridge.status goes out when
-// AgentHydra goes up or down (and on the first poll after a window connects). Down = empty lists.
+// AgentHydra goes up or down (and on the first poll that reaches it after a window connects). Down = empty lists.
 // AgentHydra out of reach for less than DOWN_GRACE_MS is not down: its relaunch after an update or a
 // stalled event loop kept emptying the sidebar and filling it again (owner, 2026-10-09: chats "mass
 // disappear, then they mass reappear"), so the lists stand, answered from their last read meanwhile (a

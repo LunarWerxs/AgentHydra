@@ -895,6 +895,7 @@ Every stage (`TIMING_STAGES`):
 | `worker_turn` | sent -> the worker no longer at work; `stages` = the four worker stages | server, poll |
 | `account_move` | sent -> CliMayte moved the worker to another account, `name` = `#126>#61` | server, poll |
 | `sync_poll` | one read of the workers' status and transcripts; one line per minute (mean `ms`, `n` polls, `max`) | server |
+| `loop_stall` | the server's one thread ran nothing for over 200 ms (`ms`; `cpu`, the CPU it spent meanwhile). From the first stall of 2 s on, JSC's sampling profiler runs, and every later stall of 2 s or more is also written to `<home>/logs/loop-stalls.jsonl` with the functions that ran in it (`self`, `total`: name and file, by samples) (`engine/loop-stall.ts`) | server |
 | `title` | the generated title's request -> answer, `ok` = a title came | server |
 
 `GET /api/diagnostics/timings` (`TimingsResponse`, over the last 7 days): `today` and `week` (per stage: count, p50,

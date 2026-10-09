@@ -13,6 +13,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Live chats that continue an archived one stay in the session lists.** A chat moved to another account, or
   continued from a chat that was archived later, was left out of every unarchived list, the cloud list included,
   though it was live.
+- **AgentHydra's window no longer freezes for up to a minute while Free accounts refresh.** Reading a Free account's
+  list of chats saved all of Free's records once for every chat on it, which on a busy PC held the window's server for
+  seconds to over a minute at a time, many times an hour. It now saves once per list, and the server records what it
+  was doing whenever it does freeze.
 - **An account that needs identity verification no longer fails CliMayte tasks.** When Anthropic asks an account to
   verify its identity, CliMayte moves its task to another account and stops using it, and the instance list says
   "Needs identity verification". Verify it on claude.ai and sign in again to use it again.
