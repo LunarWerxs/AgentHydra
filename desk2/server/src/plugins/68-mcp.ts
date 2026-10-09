@@ -25,16 +25,24 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const redesign = new Map<string, McpHandler>()
   const outDir = join(ctx.home, 'design-options')
   const browserClient = createBrowserAgentClient({ home: ctx.home })
+  const workersCache = { at: 0, list: [] as readonly { id: string; sessionId: string | null }[] }
+  const cachedWorkers = async () => {
+    if (Date.now() - workersCache.at > 5_000) {
+      const b = (ctx.deps.bridge as Bridge | undefined) ?? bridge()
+      workersCache.list = await b.workers({ all: true }).catch(() => [])
+      workersCache.at = Date.now()
+    }
+    return workersCache.list
+  }
 
   app.all('/mcp/browser', async (c) => {
     const chat = c.req.query('chat')?.trim() || undefined
     const worker = c.req.query('worker')?.trim() || undefined
-    const b = (ctx.deps.bridge as Bridge | undefined) ?? bridge()
     const session = await callerSession(
       { chat, worker },
       {
         chatSessions: (id) => (ctx.deps.chatSessions as ((id: string) => string[]) | undefined)?.(id) ?? [],
-        workers: () => b.workers({ all: true }).catch(() => []),
+        workers: cachedWorkers,
       },
     )
     const caller: ToolCaller = { chat, worker, cwd: c.req.query('cwd')?.trim() || undefined, session }

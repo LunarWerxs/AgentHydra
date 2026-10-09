@@ -1,5 +1,5 @@
 // The call surface of AgentHydra's own browser tools: the names, the caller, and the answer of one call.
-// Read-only: none of these tools launches a Chrome or drives a page's input. The tool list itself lives in registry.ts.
+// browser_navigate is the only tool that starts a Chrome or drives a page; the others read. The tool list itself lives in registry.ts.
 
 export interface ToolParams {
   browser_profiles: Record<string, never>
@@ -9,6 +9,7 @@ export interface ToolParams {
   browser_frames: { attachPort?: number; profile?: string }
   browser_profile_note: { profile: string; note?: string; title?: string }
   browser_profile_claim: { profile: string; from?: string }
+  browser_navigate: { url: string; headed?: boolean; waitMs?: number; attachPort?: number; profile?: string }
 }
 
 export type ToolName = keyof ToolParams

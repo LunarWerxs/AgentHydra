@@ -13,8 +13,10 @@ import {
 import type { Listing } from '../store'
 import { listProfiles } from '../store'
 import type { ToolCaller, ToolName } from './contract'
+import { ToolInputError } from './errors'
+import { navigate } from './navigate'
 
-export class ToolInputError extends Error {}
+export { ToolInputError }
 
 const refused = async <T>(work: () => Promise<T>): Promise<T> => {
   try {
@@ -280,6 +282,23 @@ export const TOOL_DEFS: ToolDef[] = [
         }))
       return rows.length ? pretty(rows) : '(no targets)'
     },
+  },
+  {
+    name: 'browser_navigate',
+    description:
+      "Open a page in a saved browser (or an attached Chrome) and go to a URL. Reuses the page this chat already has in that browser, so repeated calls move one tab. Answers the page's title and final URL once it has loaded for waitMs (default 1500). Pick the profile first with browser_profile_find or browser_profiles; a profile with a live Chrome is driven as it is.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'the address to open, e.g. https://example.com' },
+        headed: { type: 'boolean', description: 'launch a visible window if no Chrome is open on this profile yet' },
+        waitMs: { type: 'number', description: 'milliseconds to wait after navigating before reading the title; default 1500' },
+        ...ATTACH_PORT_PROP,
+        ...PROFILE_PROP,
+      },
+      required: ['url'],
+    },
+    run: (params, caller) => navigate(params, caller),
   },
   {
     name: 'browser_frames',
