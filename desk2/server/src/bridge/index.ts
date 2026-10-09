@@ -8,8 +8,12 @@
 // so the sidebar can show every running task; everything that counts or acts on workers here (accounts in
 // use, a chat's workers, activeWorkersFor, lastWorkers) reads this PC's alone.
 //
-// AgentHydra down never throws out of a list: accounts fall back to the default login, sessions and
-// workers to []. Writes (cancel, send) and a single transcript read do throw a BridgeError.
+// AgentHydra down never throws out of a list. A list it did not answer (a relaunch after an update, a
+// stalled event loop, one read past its timeout) is answered with its last answer for KEEP_LAST_MS:
+// treating a missed read as "none" emptied the sidebar and put ids in place of titles for one poll
+// (owner, 2026-10-09: chats "mass disappear, then they mass reappear"). Past that, accounts fall back
+// to the default login, sessions and workers to []. Writes (cancel, send) and a single transcript read
+// do throw a BridgeError.
 
 import type { AccountInfo, AccountRef, CliMayteWorker, ExternalSession, SearchHit, SwarmJob, TranscriptItem } from '@shared/protocol'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
@@ -18,7 +22,10 @@ import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_F
 import {
   BridgeError,
   createClient,
+  type AhAgentStatus,
+  type AhChatRow,
   type AhCliInstance,
+  type AhLiveSession,
   type AhSearchResult,
   type AhSessionRow,
   type AhWorker,
@@ -67,8 +74,22 @@ const REMOTES_FRESH_MS = 30_000
 const SEARCH_ROWS_MAX = 300
 /** A worker id no worker has, asked to learn whether AgentHydra has deliver-now (canDeliverNow). */
 const DELIVER_NOW_PROBE_ID = 'desk-probe-no-such-worker'
+/**
+ * How long a list read that failed is answered with its last answer. Longer than the poller's DOWN_GRACE_MS, so
+ * the lists hold until the poller says AgentHydra is down. Measured 2026-10-09: AgentHydra's minute sweep held its
+ * event loop ~4 s (the read timeout) and its auto-update relaunched it 36 times that day.
+ */
+export const KEEP_LAST_MS = 2 * 60_000
+/** At most this many sessions' titles are remembered (knownTitle); the oldest go first. */
+const TITLES_KEPT = 2000
 
 const unreachable = (err: unknown): boolean => err instanceof BridgeError && err.unreachable
+
+/** One list's last answer: `ok` keeps an answer and returns it, `get` returns the kept one while it is KEEP_LAST_MS old at most. */
+interface Kept<T> {
+  ok(value: T): T
+  get(): T | undefined
+}
 
 /** True when `file` is inside `dir` (Windows compares the two without case). */
 const isUnder = (file: string, dir: string): boolean => {
@@ -79,6 +100,16 @@ const isUnder = (file: string, dir: string): boolean => {
 export function createBridge(opts: BridgeOptions = {}) {
   const client: HydraClient = createClient(opts)
   const now = opts.now ?? Date.now
+  function keepLast<T>(): Kept<T> {
+    let last: { at: number; value: T } | null = null
+    return {
+      ok(value) {
+        last = { at: now(), value }
+        return value
+      },
+      get: () => (last && now() - last.at < KEEP_LAST_MS ? last.value : undefined),
+    }
+  }
   let excludeSessionIds: () => Ids = opts.excludeSessionIds ?? (() => [])
   let extraWorkerIds: () => string[] = () => []
   let sessionMeta: (list: ExternalSession[]) => ExternalSession[] = (list) => list
@@ -172,6 +203,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
   }
 
+  const keptAccounts = keepLast<AccountInfo[]>()
   async function listAccounts(): Promise<AccountInfo[]> {
     try {
       const [instances, running] = await Promise.all([
@@ -179,9 +211,9 @@ export function createBridge(opts: BridgeOptions = {}) {
         // limit=0: only the active workers (the running ones make their account in use)
         client.workers({ limit: 0 }).catch(() => [] as AhWorker[]),
       ])
-      return mapAccounts(instances, running)
+      return keptAccounts.ok(mapAccounts(instances, running))
     } catch (err) {
-      if (unreachable(err)) return [DEFAULT_ACCOUNT_INFO]
+      if (unreachable(err)) return keptAccounts.get() ?? [DEFAULT_ACCOUNT_INFO]
       throw err
     }
   }
@@ -227,46 +259,76 @@ export function createBridge(opts: BridgeOptions = {}) {
     }),
   )
 
-  /** The other PCs' workers. An AgentHydra without the route (404), one that fails, or sharing off is none:
-   *  never a failure of this PC's list. Read at most every REMOTES_FRESH_MS. */
+  /** The other PCs' workers. An AgentHydra without the route (404) or sharing off is none, one that fails its last
+   *  answer (KEEP_LAST_MS) or none: never a failure of this PC's list. Read at most every REMOTES_FRESH_MS. */
+  const keptRemote = { recent: keepLast<CliMayteWorker[]>(), all: keepLast<CliMayteWorker[]>() }
   function remoteWorkers(all = false): Promise<CliMayteWorker[]> {
-    return cachedRemoteQueues().then((answer) => mapRemote(answer ?? undefined, { all })).catch(() => [])
+    const kept = all ? keptRemote.all : keptRemote.recent
+    return cachedRemoteQueues().then(
+      (answer) => kept.ok(mapRemote(answer ?? undefined, { all })),
+      () => kept.get() ?? [],
+    )
   }
 
   /** Chat id -> session id and title, from AgentHydra's /api/chats, archived chats included (a finished job's chat is
    *  often archived by now): how a job a Desktop chat started (it has a chat id and no session id) finds its row and
    *  its title. Read at most once per CHATS_FRESH_MS; a failed read keeps the last map. */
-  let chatIndex: { at: number; map: ChatIndex } | null = null
+  let chatIndex: { at: number; map: ChatIndex; titles: Map<string, string> } | null = null
   async function chatsIndex(): Promise<ChatIndex> {
     if (chatIndex && now() - chatIndex.at < CHATS_FRESH_MS) return chatIndex.map
     try {
       const rows = await client.chats('include')
-      chatIndex = { at: now(), map: new Map(rows.map((r) => [r.chatId, { sessionId: r.sessionId, title: r.title || null }])) }
+      // Every record's title by session: a chat moved to another account keeps its title on the archived copy
+      // it left behind, while its new record can be untitled for a moment.
+      const titles = new Map<string, string>()
+      for (const r of rows) if (r.sessionId && r.title && !titles.has(r.sessionId)) titles.set(r.sessionId, r.title)
+      chatIndex = { at: now(), map: new Map(rows.map((r) => [r.chatId, { sessionId: r.sessionId, title: r.title || null }])), titles }
     } catch {
-      chatIndex = { at: now(), map: chatIndex?.map ?? new Map() }
+      chatIndex = { at: now(), map: chatIndex?.map ?? new Map(), titles: chatIndex?.titles ?? new Map() }
     }
     return chatIndex.map
   }
 
+  /** The title each outside session was last listed with: the list never trades a known title for the id. The newest TITLES_KEPT. */
+  const shownTitles = new Map<string, string>()
+  function rememberTitles(list: ExternalSession[]): void {
+    for (const s of list) {
+      if (!s.title || s.title === s.id.slice(0, 8) || shownTitles.get(s.id) === s.title) continue
+      shownTitles.delete(s.id)
+      shownTitles.set(s.id, s.title)
+    }
+    while (shownTitles.size > TITLES_KEPT) shownTitles.delete(shownTitles.keys().next().value as string)
+  }
+  /** A title for a session whose chat record and index row have none: the one it was last listed with, else any
+   *  record's from the last read of every chat (archived included, read for the HSwarm jobs; never awaited here). */
+  const knownTitle = (id: string): string | undefined => shownTitles.get(id) ?? chatIndex?.titles.get(id)
+
   /** HSwarm's running jobs and its newest finished ones, then the other PCs' (`pc` set); HSwarm down, off or without
-   *  the route is none. One read serves every caller for SWARM_FRESH_MS (the poller asks on its 3 s timer). */
+   *  the route is none, AgentHydra out of reach the last answer (KEEP_LAST_MS). One read serves every caller for
+   *  SWARM_FRESH_MS (the poller asks on its 3 s timer). */
   let lastJobs: { at: number; jobs: Promise<SwarmJob[]> } | null = null
+  const keptJobs = keepLast<SwarmJob[]>()
   function swarmJobs(): Promise<SwarmJob[]> {
     if (lastJobs && now() - lastJobs.at < SWARM_FRESH_MS) return lastJobs.jobs
     const jobs = (async () => {
-      const [answer, remote, chats] = await Promise.all([
-        client.hswarmJobs(JOBS_ASKED).catch(() => null),
-        cachedRemoteQueues().catch(() => null),
-        chatsIndex(),
-      ])
-      return [...mapSwarmJobs(answer, chats), ...mapRemoteJobs(remote, chats)]
+      let missed = false
+      const miss = (err: unknown) => {
+        if (unreachable(err)) missed = true
+        return null
+      }
+      const [answer, remote, chats] = await Promise.all([client.hswarmJobs(JOBS_ASKED).catch(miss), cachedRemoteQueues().catch(miss), chatsIndex()])
+      const kept = missed ? keptJobs.get() : undefined
+      return kept ?? keptJobs.ok([...mapSwarmJobs(answer, chats), ...mapRemoteJobs(remote, chats)])
     })()
     lastJobs = { at: now(), jobs }
     return jobs
   }
 
-  /** This PC's workers and the other PCs' (`pc` set), as the window lists them. */
+  /** This PC's workers and the other PCs' (`pc` set), as the window lists them; AgentHydra out of reach, the last
+   *  answer (KEEP_LAST_MS), so a chat's running tasks do not read as finished for one poll. */
+  const keptWorkers = { recent: keepLast<CliMayteWorker[]>(), all: keepLast<CliMayteWorker[]>() }
   async function workers(o: { all?: boolean } = {}): Promise<CliMayteWorker[]> {
+    const kept = o.all ? keptWorkers.all : keptWorkers.recent
     const remote = remoteWorkers(o.all)
     try {
       // A copy: the read is shared by every caller of the tick, none may change it.
@@ -282,11 +344,13 @@ export function createBridge(opts: BridgeOptions = {}) {
       const stable = reuseWorkers(lastWorkers?.workers, list)
       lastWorkers = { at: now(), workers: stable }
       const others = await remote
-      return others.length ? [...stable, ...others].sort(byRecency) : stable
+      return kept.ok(others.length ? [...stable, ...others].sort(byRecency) : stable)
     } catch (err) {
       if (unreachable(err)) {
-        lastWorkers = { at: now(), workers: [] }
-        return []
+        const last = kept.get()
+        // lastWorkers is this PC's alone (the window's list carries the other PCs' too).
+        lastWorkers = { at: now(), workers: last?.filter((w) => !w.pc) ?? [] }
+        return last ?? []
       }
       throw err
     }
@@ -303,27 +367,47 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** The desktop chats, read at most every SESSIONS_FRESH_MS. */
   const chatsForExternal = sharedRead(SESSIONS_FRESH_MS, () => client.chats())
 
-  /** AgentHydra's reads behind the outside sessions, or null when every one failed to reach it (it is down).
-   *  With `strict`, the two reads that are never cached failing to reach it throws their unreachable BridgeError:
-   *  the poller reads that as down in place of a ping. */
+  const keptInputs = {
+    agentStatus: keepLast<AhAgentStatus[]>(),
+    live: keepLast<AhLiveSession[]>(),
+    chats: keepLast<AhChatRow[]>(),
+    sessions: keepLast<AhSessionRow[]>(),
+    workers: keepLast<AhWorker[]>(),
+  }
+
+  /**
+   * AgentHydra's reads behind the outside sessions, or null when none answered and none was kept (it is down).
+   * A read that failed, for any reason, is its last answer (KEEP_LAST_MS), else none: read as "no chats", one chat
+   * list past its 4 s timeout took every Desktop chat out of the list, or left the live ones with their ids for
+   * titles, until the next poll (2026-10-09, while AgentHydra's minute sweep held its event loop).
+   * With `strict`, the two reads that are never cached both failing to reach it throws their unreachable
+   * BridgeError: the poller reads that as down in place of a ping.
+   */
   async function externalInputs(strict = false): Promise<ExternalInputs | null> {
-    const settle = <T>(p: Promise<T>, empty: T) => p.catch((err) => (unreachable(err) ? Promise.reject(err) : empty))
-    const parts = await Promise.allSettled([
-      settle(client.agentStatus(), []),
-      settle(client.liveSessions(), []),
-      settle(chatsForExternal(), []),
-      settle(sessionsIndex(), []),
-      settle(rawWorkers(), []),
+    const [agentStatus, live, chats, sessions, workers] = await Promise.allSettled([
+      client.agentStatus(),
+      client.liveSessions(),
+      chatsForExternal(),
+      sessionsIndex(),
+      rawWorkers(),
     ])
-    if (strict && parts[0].status === 'rejected' && parts[1].status === 'rejected') throw parts[0].reason
-    if (parts.every((p) => p.status === 'rejected')) return null
-    const val = <T>(p: PromiseSettledResult<T>, empty: T): T => (p.status === 'fulfilled' ? p.value : empty)
+    if (strict && agentStatus.status === 'rejected' && live.status === 'rejected' && unreachable(agentStatus.reason) && unreachable(live.reason))
+      throw agentStatus.reason
+    const pick = <T>(p: PromiseSettledResult<T>, kept: Kept<T>): T | undefined => (p.status === 'fulfilled' ? kept.ok(p.value) : kept.get())
+    const got = {
+      agentStatus: pick(agentStatus, keptInputs.agentStatus),
+      live: pick(live, keptInputs.live),
+      chats: pick(chats, keptInputs.chats),
+      sessions: pick(sessions, keptInputs.sessions),
+      workers: pick(workers, keptInputs.workers),
+    }
+    if (Object.values(got).every((v) => v === undefined)) return null
     return {
-      agentStatus: val(parts[0], []),
-      live: val(parts[1], []),
-      chats: val(parts[2], []),
-      sessions: val(parts[3], []),
-      workers: val(parts[4], []),
+      agentStatus: got.agentStatus ?? [],
+      live: got.live ?? [],
+      chats: got.chats ?? [],
+      sessions: got.sessions ?? [],
+      workers: got.workers ?? [],
     }
   }
 
@@ -335,12 +419,27 @@ export function createBridge(opts: BridgeOptions = {}) {
     // A pinned session stays listed however old: the index answer is only the last 24 h, so a pinned id
     // missing from it is read by id, as externalSession(id) does. One AgentHydra does not know is left out.
     const pinned = pinnedIds()
+    for (const old of pinnedRows.keys()) if (!pinned.includes(old)) pinnedRows.delete(old)
     const known = new Set(inp.sessions.map((s) => s.session_id))
-    const extra = (await Promise.all(pinned.filter((id) => !known.has(id)).map((id) => client.session(id).catch(() => null)))).filter(
+    const extra = (await Promise.all(pinned.filter((id) => !known.has(id)).map((id) => pinnedRow(id)))).filter(
       (r): r is NonNullable<typeof r> => r !== null,
     )
     const withPinned: ExternalInputs = pinned.length ? { ...inp, sessions: [...inp.sessions, ...extra], wanted: new Set(pinned) } : inp
-    return sessionMeta(mapExternal(withPinned, exclude, now(), (q) => resumeAccount(q, who)))
+    const list = mapExternal({ ...withPinned, knownTitle }, exclude, now(), (q) => resumeAccount(q, who))
+    rememberTitles(list)
+    return sessionMeta(list)
+  }
+
+  /** A pinned session's index row read by id; a read that failed is its last row (KEEP_LAST_MS), so a pinned row
+   *  does not leave the list for one poll. A session AgentHydra answers it does not know is null. */
+  const pinnedRows = new Map<string, Kept<AhSessionRow | null>>()
+  function pinnedRow(id: string): Promise<AhSessionRow | null> {
+    const kept = pinnedRows.get(id) ?? keepLast<AhSessionRow | null>()
+    pinnedRows.set(id, kept)
+    return client.session(id).then(
+      (row) => kept.ok(row),
+      (err) => (err instanceof BridgeError && err.kind === 'http' && err.status === 404 ? kept.ok(null) : (kept.get() ?? null)),
+    )
   }
 
   /**
@@ -359,7 +458,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     const base: ExternalInputs = inp ?? { agentStatus: [], live: [], chats: [], sessions: [], workers: [] }
     const sessions = row ? [...base.sessions.filter((s) => s.session_id !== id), row] : base.sessions
     const who = await resumeData()
-    const found = mapExternal({ ...base, sessions, wanted: new Set([id]) }, new Set(), now(), (q) => resumeAccount(q, who)).find(
+    const found = mapExternal({ ...base, sessions, wanted: new Set([id]), knownTitle }, new Set(), now(), (q) => resumeAccount(q, who)).find(
       (s) => s.id === id,
     )
     if (!found) throw new BridgeError('http', `AgentHydra does not know session ${id}`, 404)

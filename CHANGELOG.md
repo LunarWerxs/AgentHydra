@@ -7,6 +7,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **The sidebar no longer empties and refills, or shows chats by their ID.** When AgentHydra was briefly busy or
+  restarting after an update, the sidebar dropped its chats and brought them back seconds later, and running chats
+  showed an 8-character ID instead of their title. It now keeps what it showed until AgentHydra answers again.
+- **Live chats that continue an archived one stay in the session lists.** A chat moved to another account, or
+  continued from a chat that was archived later, was left out of every unarchived list, the cloud list included,
+  though it was live.
+
 ## [2.0.4] - 2026-10-09
 
 **TL;DR**

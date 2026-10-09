@@ -404,7 +404,9 @@ Errors answer `{ error: string }` with a 4xx/5xx status, the real reason in the 
 `/ws`: on connect the server sends `hello`, then every `ServerEvent` as it happens. While at least one
 window is connected the bridge polls AgentHydra every 3 s and broadcasts `external.update`,
 `climayte.update` and (every 30 s) `accounts.update`. AgentHydra down = empty lists plus a `bridge.status { up: false }` event (the window shows a banner
-"AgentHydra is not running"), never a crash.
+"AgentHydra is not running"), never a crash. Down means out of reach for a minute (`DOWN_GRACE_MS`): a relaunch or
+a stalled read is not down, and a list read that fails is answered with its last answer for two minutes
+(`KEEP_LAST_MS`), so the sidebar never empties and refills over a blip (owner, 2026-10-09).
 
 ## The bridge (server/src/bridge)
 

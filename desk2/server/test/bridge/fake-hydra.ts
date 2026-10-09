@@ -17,6 +17,8 @@ export interface FakeState {
   agentStatus: any[]
   live: { count: number; sessions: any[] }
   chats: { rows: any[] }
+  /** Set: GET /api/chats answers this error with a 500 instead of `chats`. */
+  chatsError?: string
   sessions: any[]
   instances: any[]
   workers: any[]
@@ -244,7 +246,7 @@ function plainGet(state: FakeState, p: string): Response | null {
     case '/api/sessions/live':
       return json(state.live)
     case '/api/chats':
-      return json(state.chats)
+      return state.chatsError ? json({ error: state.chatsError }, 500) : json(state.chats)
     case '/api/sessions':
       return json(state.sessions)
     case '/api/cli-instances':

@@ -47,6 +47,8 @@ export interface ExternalInputs {
   workers: AhWorker[]
   /** Session ids listed from their index row however old they are (one session asked for by id). */
   wanted?: ReadonlySet<string>
+  /** A title the bridge knows for a session when neither its chat record nor its index row has one (index.ts knownTitle). */
+  knownTitle?: (id: string) => string | undefined
 }
 
 const STATUS_ORDER: Record<ExternalSession['status'], number> = { needs_you: 0, working: 1, idle: 2, stale: 3 }
@@ -166,7 +168,9 @@ export function mapExternal(
     })
     add({
       id,
-      title: base.title || row?.title || id.slice(0, 8),
+      // The id only when nothing ever titled it: a chat whose record is untitled for a moment (a move to another
+      // account) or missing from one read showed its id in place of the title it had (owner, 2026-10-09).
+      title: base.title || row?.title || inp.knownTitle?.(id) || id.slice(0, 8),
       cwd: base.cwd || row?.cwd || h?.cwd || null,
       source,
       instance: base.instance ?? row?.instance ?? (row?.instance_num ? `#${row.instance_num}` : null),
