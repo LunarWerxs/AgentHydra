@@ -151,7 +151,7 @@ function browserMajor(bin: string): number | null {
 }
 
 // Connections browser.mjs:46-71: the same candidates in the same order, so a profile keeps the browser it logged in with.
-function findBrowserBinary(): string | null {
+export function findBrowserBinary(): string | null {
   const e = process.env
   const candidates =
     process.platform === 'win32'
