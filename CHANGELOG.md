@@ -21,6 +21,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Background work reaches the Free accounts, and their answers count tokens**
 - **Open brings the account's Claude window to the front**
 - **The Free accounts' list keeps a backup, so a power cut cannot wipe it**
+- **A chat can move to another working folder on its own account**
 
 **Everything in Unreleased**
 
@@ -54,6 +55,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   look like nothing happened. AgentHydra also waits at most 3 seconds for login sync before launching.
 - **The Free accounts' list keeps a backup, so a power cut cannot wipe it.** If the list is ever found empty or
   unreadable, it comes back from a backup at most 10 minutes old, with its chats and token counts.
+- **A chat can move to another working folder on its own account.** It keeps its history, name, model, effort
+  and permissions under a new ID, and the old copy is archived, never deleted. A chat that is working, has a
+  background task, or was used in the last 10 minutes is left where it is.
 
 ## [2.0.2] - 2026-10-08
 

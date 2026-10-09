@@ -20,6 +20,8 @@ export interface NativeImportOutcome {
   reason?: string
   importedSessionId?: string
   permissionMode?: string | null
+  /** The folder the app's record landed with, read back from its manager (folder moves compare it). */
+  cwd?: string | null
 }
 
 export async function tryNativeImport(
@@ -59,6 +61,7 @@ export async function tryNativeImport(
         unavailable: false,
         importedSessionId: result.importedSessionId,
         permissionMode: result.session?.permissionMode ?? null,
+        cwd: result.session?.cwd ?? null,
       }
     return {
       ok: false,

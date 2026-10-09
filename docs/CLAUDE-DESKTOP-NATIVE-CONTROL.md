@@ -376,6 +376,65 @@ closed after verification; its AgentHydra automatic-launch opt-in remains enable
 These results establish automatic startup and native archive on the build they were measured on,
 not a fully native general migration/new/start/stop/resume implementation.
 
+## Moving a chat to another folder
+
+A Desktop Code chat's working folder (its `cwd`) cannot be changed in place: the
+running app takes the folder from the transcript when it lands, and a second import
+of the same CLI session id returns the existing record unchanged, even after an archive.
+So the move is a **fork** inside one profile, the same machinery a move between
+accounts uses (`server/src/desktop-folder-move.ts`):
+
+- `POST /api/sessions/:id/desktop-folder` with
+  `{"instance_ref":"desktop:<full profile directory>","cwd":"<absolute existing folder>"}`,
+  or the MCP tool `move_chat_folder {session_id, instance, cwd}`.
+- The transcript is copied under the new folder's project key with a **new CLI session
+  id** (every line's `sessionId` and `cwd` rewritten, the sidecar folder copied); the old
+  transcript is not touched. The response's `newSessionId` is the chat from then on.
+- Order: refuse every bad state first and write nothing; write the copy; import it through
+  the app (`tryNativeImport`) and require the landed folder to match; wait for the record;
+  stamp the title and the carried settings (model, effort, permission mode, cwd); carry the
+  daemon's done mark and the Desk group, pin and unread marks to the new id; then archive the
+  **old** copy with the production native archive. Success needs the archive's `ok` and
+  `verified`. Nothing is retried, and no UI is clicked.
+- Refusals, each a 4xx with `refused` set and nothing written unless noted:
+  - `folder-missing` (422): the folder does not exist.
+  - `bad-request` (400): `instance_ref` is not `desktop:<absolute dir>`, or `cwd` is not an absolute local folder.
+  - `same-folder` (409): the chat already works in that folder.
+  - `no-native-control` (409): the profile has no native configuration.
+  - `chat-not-found` (404), `no-cli-transcript` (409), `archived` (409), `no-real-title` (409).
+  - `engine-running` (409): the chat has a live engine in this AgentHydra.
+  - `native-unavailable` (409): the app does not hold the chat as exactly one session, or the process is not running.
+  - `chat-busy` (409): the app reports a running, stopping, starting, pending input, pending permission, pending dialog or losable work.
+  - `used-recently` (409): the app's last activity on the chat is within 10 minutes.
+  - `activity-unknown` (409): the last activity time cannot be read.
+  - `transcript-not-found` (422): the transcript is not in the CLI projects store.
+  - A refused import (`native-unavailable`, 409) also removes the files written for the copy.
+  - `import-unconfirmed` (502): the import was sent but not confirmed. The copy's files stay and nothing is retried.
+  - `landed-in-other-folder` (409): the app landed the copy elsewhere. The copy (only the new id) is archived and the old chat is untouched.
+  - `landing-unverified` (422): the copy did not appear in the app's store. The old chat is untouched.
+  - `old-copy-not-archived` (409): the new chat exists, the old one is still on screen, and the response carries `newSessionId`. No retry.
+
+What is **not** detectable: whether a person has the old chat open in a tab. The native
+snapshot has no open-tab flag, so the 10-minute activity rule stands in for it. The old
+transcript stays in its old folder on disk (the old chat is archived, not deleted), and the
+new chat has a new session id, which the owner accepted.
+
+Probe finding (2026-10-09, profile #187): the import is idempotent per CLI session id, so
+a copy under the same id in a new folder returned the old record with the old folder. That
+is why the move forks. **The live fork was not proven.** Two probe chats were created and
+both were removed by the app before the 10-minute quiet window let the move run: one was
+archived about a minute after its import, the other was deleted about eleven minutes after
+it (its `desktop-released.json` reason is `delete`). The move refused each time before
+writing anything (`archived`, then `chat-not-found`). Until a probe survives the quiet
+window, the end-to-end result (new session id, new folder, old copy archived) is unverified.
+
+The same day the move ran against five real chats on that profile and refused each one before
+writing anything, every refusal matching the app's own state: one was mid-turn (`chat-busy`,
+`isRunning`), two held a background task (`engine-running`; the app reports `losableWork:
+background_task`), and two had been left `isStopping` with no engine by an earlier move between
+accounts (`chat-busy`). The native archive refuses `isStopping` too, so going around that flag
+would land the copy and then fail to archive the old chat.
+
 ## Remaining migration work
 
 - Support for reviewed future Claude versions and explicit opt-in for new profiles.

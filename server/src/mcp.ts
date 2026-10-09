@@ -1869,6 +1869,37 @@ export const TOOLS: McpEngineTool[] = [
       })
     },
   },
+  {
+    name: 'move_chat_folder',
+    description:
+      'MUTATES: move ONE Claude Desktop Code chat to another working folder in its own profile. The thread keeps its transcript, title, model, effort and permission mode, but the copy gets a NEW session id (returned as newSessionId) and the old chat is archived, never deleted. Refuses a folder that does not exist, the same folder, a running or busy chat, a chat used in the last 10 minutes, or a profile without native control.',
+    inputSchema: S(
+      {
+        session_id: { type: 'string', description: 'The chat to move (its CLI session id).' },
+        instance: {
+          type: ['string', 'number'],
+          description: 'Which desktop instance holds the chat - number, name, label, email or dir.',
+        },
+        cwd: {
+          type: 'string',
+          description: 'The new working folder: an absolute path to an existing folder.',
+        },
+      },
+      ['session_id', 'instance', 'cwd'],
+    ),
+    run: async (a) => {
+      const row = await resolveRef(str(a.instance).trim())
+      if (row.kind !== 'desktop')
+        throw new Error(
+          `${instanceLabel(row)} is a ${row.kind} instance; desktop chats live only in Claude DESKTOP instances.`,
+        )
+      return api(`/api/sessions/${encodeURIComponent(str(a.session_id))}/desktop-folder`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ instance_ref: row.ref, cwd: str(a.cwd) }),
+      })
+    },
+  },
   // --- self-update ------------------------------------------------------------------
   {
     name: 'check_update',
