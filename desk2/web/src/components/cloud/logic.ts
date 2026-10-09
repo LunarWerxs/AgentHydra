@@ -138,6 +138,12 @@ export function toggle<T extends string>(selected: readonly T[], universe: reado
   return universe.filter((v) => next.has(v))
 }
 
+/** A click on one app in the Apps filter: with every app ticked (All), that app alone (owner, 2026-10-08: "if all are
+ * selected and I click on claude, just click claude, unselect the others"); otherwise it is ticked or unticked. */
+export function pickApp<T extends string>(selected: readonly T[], universe: readonly T[], value: T): T[] {
+  return universe.every((v) => selected.includes(v)) ? [value] : toggle(selected, universe, value)
+}
+
 const allOf = (selected: readonly string[], universe: readonly string[]) => universe.every((v) => selected.includes(v))
 const scope = (selected: readonly string[], universe: readonly string[]): string | undefined =>
   allOf(selected, universe) ? undefined : selected.length ? selected.join(',') : 'none'

@@ -4,7 +4,6 @@ import { accountLabel, pctText, resetText } from './format'
 
 export const AUTO_ID = 'auto'
 export const AUTO_LABEL = 'Auto (best available)'
-export const ACCOUNTS_HINT = 'Your chat runs here. CliMayte sends sub-agents to the others.'
 export const DEFAULT_ID = 'default'
 
 export interface AccountRow {

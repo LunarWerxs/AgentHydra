@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { CloudSession, ExternalSession } from '@shared/protocol'
-import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskOnPcs, deskPlaces, effectiveScopes, groupCloud, localOnly, parseScopes, pcKept, type RowLead, rowLead, ahSource, appShown } from '../../src/components/cloud/logic'
+import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskOnPcs, deskPlaces, effectiveScopes, groupCloud, localOnly, parseScopes, pcKept, pickApp, type RowLead, rowLead, ahSource, appShown } from '../../src/components/cloud/logic'
 import { dropHidden, groupChats, groupOrderKey, recordCloudOrder, recordDeskOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
 
 // The cloud list asks AgentHydra's GET /api/sessions (through Desk's /api/cloud/sessions) in AgentHydra's
@@ -36,6 +36,17 @@ describe('cloudQuery', () => {
 })
 
 // Owner, 2026-10-05: the saved filters had `source` with every app ticked; Apps comes back at Claude alone, the rest stays.
+describe('pickApp', () => {
+  const apps = ['claude', 'codex', 'opencode'] as const
+  test.each<[string, string[], string, string[]]>([
+    ['from All, a click keeps that app alone', [...apps], 'codex', ['codex']],
+    ['otherwise a click ticks an app', ['claude'], 'codex', ['claude', 'codex']],
+    ['and unticks a ticked one', ['claude', 'codex'], 'claude', ['codex']],
+  ])('%s', (_, selected, click, want) => {
+    expect(pickApp(selected, apps, click)).toEqual(want)
+  })
+})
+
 describe('parseScopes', () => {
   test('an old stored `source` list is dropped for the Apps default, the period kept', () => {
     const stored = JSON.stringify({ source: ['claude', 'codex', 'opencode', 'hermes', 'dsh'], period: '7d' })

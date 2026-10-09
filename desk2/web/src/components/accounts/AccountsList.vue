@@ -6,7 +6,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
 import { accountLabel, barColor, pctText, usageTone } from './format'
-import { ACCOUNTS_HINT, AUTO_ID, accountRows, chooseAccount, rowTip, type AccountRow } from './rows'
+import { AUTO_ID, accountRows, chooseAccount, rowTip, type AccountRow } from './rows'
 
 // Every account on one 28px row: Auto first with what it would pick now, Default login, then the
 // accounts by headroom (signed out last), each with its plan and two thin bars, 5-hour and weekly. The
@@ -163,6 +163,5 @@ const ROW =
       <component :is="shellIcons.settings" class="size-4 text-text-2" />
       Settings
     </button>
-    <p class="shrink-0 px-2 py-1 text-[12px] leading-4 text-text-muted">{{ ACCOUNTS_HINT }}</p>
   </div>
 </template>

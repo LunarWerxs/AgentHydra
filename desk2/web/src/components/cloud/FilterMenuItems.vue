@@ -34,6 +34,7 @@ import {
   SOURCE_VALUES,
   scopesNarrowed,
   summarize,
+  pickApp,
   toggle,
   type CloudScopes
 } from './logic'
@@ -173,7 +174,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
     :aria-checked="s.apps.includes(v)"
     :title="appTip(v, s.apps.includes(v))"
     :class="ITEM"
-    @select.prevent="set({ apps: toggle(s.apps, SOURCE_VALUES, v) })"
+    @select.prevent="set({ apps: pickApp(s.apps, SOURCE_VALUES, v) })"
   >
     <span class="flex-1">{{ SOURCE_LABELS[v] }}</span>
     <component :is="icons.check" v-if="s.apps.includes(v)" class="ms-3" />
