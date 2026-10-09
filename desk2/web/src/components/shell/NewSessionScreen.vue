@@ -10,7 +10,7 @@ import { focusFirstItem, MENU_CONTENT, MENU_ITEM } from '../sidebar/menuClasses'
 import ProjectFoldersDialog from './ProjectFoldersDialog.vue'
 import StatsCard from './StatsCard.vue'
 import { useShellSource } from './source'
-import { addProjectFolder, filterProjects, PROJECT_ACTIONS, type ProjectAction, type ProjectMenuApi, runProjectAction, syncLabel } from './projects'
+import { addProjectFolder, filterProjects, PROJECT_ACTIONS, pickedFolder, type ProjectAction, type ProjectMenuApi, runProjectAction, syncLabel } from './projects'
 import { showProjectDetails } from './projectDetails'
 
 // The new-session screen above the composer: greeting, then either the user's projects (the default; clicking one
@@ -99,6 +99,7 @@ const folderSize = computed(() => (showProjectDetails.value ? 'size-4' : 'size-3
 function open(p: ProjectEntry): void {
   src.select({ kind: 'new', cwd: p.path })
 }
+const picked = (p: ProjectEntry) => pickedFolder(src.selected.value, p.path)
 
 const menuApi: ProjectMenuApi = {
   reveal: (path) => src.revealFolder(path),
@@ -141,7 +142,10 @@ function pinLeaving(el: Element): void {
 // w-full: a button is only as wide as its content, so a long name ran into the next tile (owner, 2026-10-08: "they run
 // into each other"). The padding follows the toggle: roomy with the details in flow, tighter and one line without
 // (owner, 2026-10-09: "shorter vertically ... so that more fits vertically").
-const TILE = 'group/tile relative flex w-full min-w-0 gap-2 rounded-(--radius-12) bg-fill-5 text-start hover:bg-fill-hover'
+const TILE = 'group/tile relative flex w-full min-w-0 gap-2 rounded-(--radius-12) text-start'
+const TILE_BG = 'bg-fill-5 hover:bg-fill-hover'
+// The folder the next chat starts in: the hover fill stays, and an inset accent ring marks it without moving the tile.
+const TILE_PICKED = 'bg-fill-hover ring-1 ring-inset ring-(--accent)'
 const DETAILS_HOVER = 'pointer-events-none absolute inset-x-0 top-full z-20 mt-1 hidden min-w-0 flex-col gap-2 rounded-(--radius-8) bg-(--bg-popover) p-2 group-hover/tile:flex group-focus-visible/tile:flex'
 const TOGGLE = 'flex size-8 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2'
 // The project's open chats, at the end of its name (owner, 2026-10-08: "a little badge on them, with how many active
@@ -207,7 +211,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
           <div v-for="p in shown" :key="p.path" class="min-w-0">
             <ContextMenu>
               <ContextMenuTrigger as-child>
-                <button type="button" :title="p.path" :class="[TILE, showProjectDetails ? 'flex-col p-3' : 'items-center px-2.5 py-1.5']" @click="open(p)">
+                <button type="button" :title="p.path" :aria-pressed="picked(p)" :class="[TILE, picked(p) ? TILE_PICKED : TILE_BG, showProjectDetails ? 'flex-col p-3' : 'items-center px-2.5 py-1.5']" @click="open(p)">
                   <span class="flex w-full min-w-0 items-center gap-2">
                     <img v-if="p.icon" :src="p.icon" alt="" :class="[iconSize, 'shrink-0 rounded-(--radius-6)']" />
                     <span v-else :class="[iconSize, 'flex shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted']">

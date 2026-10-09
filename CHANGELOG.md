@@ -16,9 +16,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The timings log records every server stall over 200 ms**
 - **One click above the account pill restarts you onto an update**
 - **The New screen shows Connections' logo, and reads a project's logo from its top-level icon too**
+- **The New screen highlights the project you picked**
 
 **Everything in Unreleased**
 
+- **The New screen highlights the project you picked.** The tile for the folder your next chat starts in gets a thin accent ring and reads as pressed, however it was picked: a click, the composer's folder pill or New chat here.
 - **The server stops re-reading a CliMayte chat's transcripts on every poll.** A chat whose sessions added up to
   more than the 64 MB cache held was read again in full on each window poll, blocking the server for one to
   several seconds every time. Each session's file check is now kept with its items, so an unchanged session costs

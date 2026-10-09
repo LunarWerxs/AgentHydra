@@ -1,4 +1,6 @@
 import type { ProjectChoiceKind, ProjectEntry, ProjectGit } from '@shared/protocol'
+import { sameFolder } from '../composer/folders'
+import type { View } from './logic'
 
 /** The sync chip's words for a checkout's git state, or null when it is not a repo. */
 export function syncLabel(git: ProjectGit | null): string | null {
@@ -15,6 +17,11 @@ export function filterProjects(list: ProjectEntry[], query: string): ProjectEntr
   const q = query.trim().toLowerCase()
   if (!q) return list
   return list.filter((p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q))
+}
+
+/** Whether a tile is the folder the next chat starts in (the new-chat view's cwd, whichever way it was picked). */
+export function pickedFolder(selected: View, path: string): boolean {
+  return selected.kind === 'new' && !!selected.cwd && sameFolder(selected.cwd, path)
 }
 
 export type ProjectAction = 'reveal' | 'newChat' | 'copy' | 'hide'
