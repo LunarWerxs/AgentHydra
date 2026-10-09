@@ -85,6 +85,8 @@ export interface OrchestratorJudgment {
   message: string
   held: string | null
   error: string | null
+  /** How much of the transcript the deciding call read: `chars` of `of`, at `step` (0 is the first, smallest slice). */
+  read?: { chars: number; of: number; step: number; more: boolean } | null
 }
 
 /** The name on every message the armed orchestrator sends: Desk shows it as a note from it, never as the person's

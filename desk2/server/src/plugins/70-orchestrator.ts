@@ -22,7 +22,19 @@ import { afterGivingUp, decide } from '../orchestrator/act'
 import { askCreaitor, creaitorTool } from '../orchestrator/creaitor'
 import { DEFAULT_ACCOUNT } from '../bridge/accounts'
 import { pickHealthy } from '../engine/chat-manager'
-import { askOf, JUDGE_TIMEOUT_MS, judgeChat, recentText, sdkAskModel, type AskModel, type JudgeBrief, type JudgeResult } from '../orchestrator/judge'
+import {
+  askOf,
+  CONTEXT_STEPS,
+  JUDGE_TIMEOUT_MS,
+  judgeChat,
+  recentText,
+  sdkAskModel,
+  stepBudget,
+  transcriptChars,
+  type AskModel,
+  type JudgeBrief,
+  type JudgeResult
+} from '../orchestrator/judge'
 import { NOTES_PER_HOUR, PEEK_MS, peek, personRecent, type Peek } from '../orchestrator/foreman'
 import { classify, fromChat, fromExternal, rank } from '../orchestrator/plan'
 import { notOwnPage } from '../own-page'
@@ -174,18 +186,23 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     return null
   }
 
-  /** The brief the judge reads of one chat: its first message, its last transcript items, and the rules' findings. */
-  function briefOf(c: Candidate, now: number): JudgeBrief {
+  /** The brief the judge reads of one chat at one step: its first message, the newest slice of its transcript that step
+   *  allows (judge.ts CONTEXT_STEPS: about 1%, 3%, then 5%), and the rules' findings. */
+  function briefOf(c: Candidate, now: number, step: number): JudgeBrief {
     const since = minutesSincePerson(c.items, now)
     let started = c.items[0]?.ts ?? now
     for (const i of c.items) if (i.kind === 'user') started = i.ts
+    const total = transcriptChars(c.items)
+    const budget = stepBudget(step, total)
+    const recent = recentText(c.items, budget)
     return {
       id: c.id,
       title: c.title,
       source: c.source,
       status: c.status,
       ask: askOf(c.items),
-      recent: recentText(c.items),
+      recent,
+      read: { chars: Math.min(recent.length, total), of: total, step, more: budget < total && step < CONTEXT_STEPS.length - 1 },
       workingMinutes: c.items.length ? Math.max(0, Math.round((now - started) / 60_000)) : null,
       signals: [...c.signals, since === null ? 'no message from the person in view' : `the person last wrote ${since} min ago`],
       notesThisHour: sent(c.id, 'note', now),
@@ -221,7 +238,8 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       const account = pickHealthy(accounts, tried)
       if (!account && tried.length) break
       if (account) tried.push(account.id)
-      result = await judgeChat(briefOf(c, Date.now()), model, askModel(), JUDGE_TIMEOUT_MS, account?.configDir ?? null)
+      const now = Date.now()
+      result = await judgeChat((step) => briefOf(c, now, step), model, askModel(), JUDGE_TIMEOUT_MS, account?.configDir ?? null)
       if (result.ok || !account || !LOGIN_REFUSED.test(result.error)) break
     }
     return result!
@@ -235,11 +253,11 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const at = Date.now()
     if (result.resolved) resolved = { setting: model, model: result.resolved }
     if (!result.ok) {
-      judgments.set(c.id, { at, model, resolved: result.resolved, verdict: null, why: result.error, message: '', held: null, error: result.error })
+      judgments.set(c.id, { at, model, resolved: result.resolved, verdict: null, why: result.error, message: '', held: null, error: result.error, read: result.read })
       return
     }
     const { verdict, message, why } = result.judgment
-    const judgment: OrchestratorJudgment = { at, model, resolved: result.resolved, verdict, why, message, held: null, error: null }
+    const judgment: OrchestratorJudgment = { at, model, resolved: result.resolved, verdict, why, message, held: null, error: null, read: result.read }
     judgments.set(c.id, judgment)
     if (verdict === 'fine' || verdict === 'leave') return
     const base = { at, id: c.id, title: c.title, source: c.source, detail: why }

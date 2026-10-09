@@ -20,7 +20,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **A frontier model judges each running chat and each stopped one.** The orchestrator asks the model set in
   Settings > General > Watching chats (Opus by default, the newest one) what each chat needs next: nothing, a
-  check-in note, a continue, or a person. Its limits stay in code, and a failed call sends nothing.
+  check-in note, a continue, or a person. Its limits stay in code, and a failed call sends nothing. It reads the
+  newest slice of a chat first (about 1% of it) and asks for a bigger one (3%, then 5%) only when it cannot tell.
 
 ## [2.0.3] - 2026-10-09
 

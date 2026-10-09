@@ -3,11 +3,11 @@
 
 import { expect, test } from 'bun:test'
 import type { TranscriptItem } from '@shared/protocol'
-import { JUDGE_CHARS, JUDGE_INSTRUCTIONS, judgeChat, MESSAGE_CHARS, parseJudgment, recentText, type JudgeBrief } from '../../src/orchestrator/judge'
+import { CONTEXT_STEPS, JUDGE_CHARS, JUDGE_INSTRUCTIONS, judgeChat, MESSAGE_CHARS, parseJudgment, recentText, stepBudget, type JudgeBrief } from '../../src/orchestrator/judge'
 
 const brief: JudgeBrief = {
   id: 'chat-1', title: 'Example chat', source: 'desk', status: 'working', ask: 'Fix the example parser.', recent: '(no transcript yet)',
-  workingMinutes: 12, signals: ['spinning: the same Bash call failed 3 times'], notesThisHour: 0, continuesThisHour: 0
+  read: { chars: 19, of: 19, step: 0, more: false }, workingMinutes: 12, signals: ['spinning: the same Bash call failed 3 times'], notesThisHour: 0, continuesThisHour: 0
 }
 
 test('a well-formed answer parses into its verdict, message and why', () => {
@@ -54,14 +54,14 @@ test('judgeChat returns the parsed judgment and the model the SDK resolved', asy
     seen.push({ model: req.model, system: req.system })
     return { text: '{"verdict":"nudge","message":"Stop the loop.","why":"repeats a failing test"}', resolved: 'claude-opus-5-5' }
   }
-  const result = await judgeChat(brief, 'opus', ask)
-  expect(result).toEqual({ ok: true, judgment: { verdict: 'nudge', message: 'Stop the loop.', why: 'repeats a failing test' }, resolved: 'claude-opus-5-5' })
+  const result = await judgeChat(() => brief, 'opus', ask)
+  expect(result).toEqual({ ok: true, judgment: { verdict: 'nudge', message: 'Stop the loop.', why: 'repeats a failing test' }, resolved: 'claude-opus-5-5', read: brief.read })
   expect(seen).toEqual([{ model: 'opus', system: JUDGE_INSTRUCTIONS }])
 })
 
 test('a model call that never answers in time is an error and sends nothing', async () => {
   const hang = ({ signal }: { signal: AbortSignal }) => new Promise<never>((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))))
-  const result = await judgeChat(brief, 'opus', hang, 20)
+  const result = await judgeChat(() => brief, 'opus', hang, 20)
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('no answer within') })
 })
 
@@ -69,7 +69,7 @@ test('a failed model call is an error, never a guess', async () => {
   const down = async () => {
     throw new Error('model down')
   }
-  expect(await judgeChat(brief, 'opus', down)).toEqual({ ok: false, error: 'model down', resolved: null })
+  expect(await judgeChat(() => brief, 'opus', down)).toEqual({ ok: false, error: 'model down', resolved: null, read: brief.read })
 })
 
 test('the transcript read by the judge stays within its budget and keeps the newest items', () => {
@@ -80,4 +80,38 @@ test('the transcript read by the judge stays within its budget and keeps the new
   expect(text).toContain('message 29 ')
   expect(text).not.toContain('message 0 ')
   expect(recentText([])).toBe('(no transcript yet)')
+})
+
+test('a judge that cannot tell asks for more, and gets the next, longer slice while one is left', async () => {
+  // Owner, 2026-10-09: "the last 1%, then the last 3%, then the last 5% if it needs more context ... for token and speed".
+  const at = (step: number): JudgeBrief => ({ ...brief, recent: `slice ${step}`, read: { chars: 100 * (step + 1), of: 1_000, step, more: step < 2 } })
+  const steps: number[] = []
+  const answers = ['{"verdict":"more","message":"","why":"too little to tell"}', '{"verdict":"fine","message":"","why":"the tests pass now"}']
+  const ask = async (req: { brief: JudgeBrief }) => {
+    steps.push(req.brief.read.step)
+    return { text: answers[steps.length - 1]!, resolved: 'claude-opus-5-5' }
+  }
+  const result = await judgeChat(at, 'opus', ask)
+  expect(steps).toEqual([0, 1])
+  expect(result).toMatchObject({ ok: true, judgment: { verdict: 'fine' }, read: { step: 1, chars: 200 } })
+})
+
+test('asking for more when no longer slice is left is an error, not another call', async () => {
+  let calls = 0
+  const ask = async () => {
+    calls++
+    return { text: '{"verdict":"more","message":"","why":"still unsure"}', resolved: null }
+  }
+  expect(await judgeChat(() => brief, 'opus', ask)).toMatchObject({ ok: false, error: expect.stringContaining('more') })
+  expect(calls).toBe(1)
+})
+
+test('each step reads its share of the transcript, held between its floor and its cap', () => {
+  expect(CONTEXT_STEPS.map((s) => s.share)).toEqual([0.01, 0.03, 0.05])
+  expect(stepBudget(0, 50_000)).toBe(JUDGE_CHARS) // 1% of a short chat is under the floor
+  expect(stepBudget(0, 2_000_000)).toBe(20_000) // 1%
+  expect(stepBudget(0, 50_000_000)).toBe(40_000) // capped
+  expect(stepBudget(1, 2_000_000)).toBe(60_000) // 3%
+  expect(stepBudget(2, 2_000_000)).toBe(120_000) // 5% is 100,000, under the last step's floor
+  expect(stepBudget(2, 50_000_000)).toBe(250_000) // capped
 })
