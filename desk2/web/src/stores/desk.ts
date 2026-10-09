@@ -54,6 +54,7 @@ import { rememberView, restoreView } from '@/lib/view-memory'
 import { readCache, readListCache, writeCache } from '@/lib/list-cache'
 import { wantsDesktopNotice } from './notify'
 import { reportAtPaint, reportTiming } from '@/lib/timing'
+import { applyHeadlessAudio, loadHeadlessAudio } from '@/lib/chat-audio'
 
 const BASE_URL = '/api'
 
@@ -259,6 +260,7 @@ function connectWebSocket() {
     store.connected = true
     wsReconnectDelay = 1000
     sendVisibility()
+    void loadHeadlessAudio()
   }
 
   ws.onmessage = (event) => {
@@ -498,6 +500,10 @@ function handleServerEvent(event: ServerEvent) {
 
     case 'settings.update':
       store.settings = event.settings
+      break
+
+    case 'browser.audio':
+      applyHeadlessAudio(event.state)
       break
   }
 }
@@ -1246,9 +1252,3 @@ if (typeof window !== 'undefined' && !initialized) {
   const desk = useDesk()
   desk.init().catch(console.error)
 }
-import { applyHeadlessAudio, loadHeadlessAudio } from '@/lib/chat-audio'
-    void loadHeadlessAudio()
-
-    case 'browser.audio':
-      applyHeadlessAudio(event.state)
-      break

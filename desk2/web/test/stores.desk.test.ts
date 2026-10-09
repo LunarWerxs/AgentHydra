@@ -59,7 +59,7 @@ class MockWebSocket {
 // Mock fetch
 const mockFetch = vi.fn((path: string, init?: RequestInit) => {
   return Promise.resolve(
-    new Response(JSON.stringify({ ok: true }), { status: 200 })
+    new Response(JSON.stringify({ ok: true, audible: [], muted: [], unattributed: [], unattributedMuted: false }), { status: 200 })
   )
 })
 
