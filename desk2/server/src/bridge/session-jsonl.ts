@@ -194,6 +194,13 @@ interface Memo {
 type Settled = Pick<Memo, 'ino' | 'size' | 'mtimeMs' | 'items' | 'bytes'>
 const FINGERPRINT = 64
 
+/** The last FINGERPRINT bytes the file held before `start`; a short one goes on from the old tail. */
+function fingerprintTail(buf: Buffer, start: number, prevTail: Buffer): Buffer {
+  const seg = buf.subarray(Math.max(0, start - FINGERPRINT), start)
+  const joined = seg.length >= FINGERPRINT ? seg : Buffer.concat([prevTail, seg])
+  return Buffer.from(joined.subarray(Math.max(0, joined.length - FINGERPRINT)))
+}
+
 const unchanged = (m: Pick<Memo, 'ino' | 'size' | 'mtimeMs'>, st: { ino: number; size: number; mtimeMs: number }) =>
   m.size === st.size && m.mtimeMs === st.mtimeMs && m.ino === st.ino
 
@@ -333,6 +340,46 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
     settledBytes -= kept.bytes
   }
 
+  /** While memory is over its limits, the least recently read file moves to the settled set (answers kept, parse dropped). */
+  function settleOverflow(): void {
+    while (memo.size > 1 && (memo.size > o.maxFiles || memoBytes > o.maxBytes)) {
+      const [old, out] = memo.entries().next().value!
+      memo.delete(old)
+      memoBytes -= out.bytes
+      settled.set(old, { ino: out.ino, size: out.size, mtimeMs: out.mtimeMs, items: out.items, bytes: out.bytes })
+      settledBytes += out.bytes
+      while (settled.size > o.settledFiles || settledBytes > o.settledBytes) unsettle(settled.keys().next().value!)
+    }
+  }
+
+  /**
+   * The bytes after what the memo has read, when the bytes just before it are still the same: a file rewritten in
+   * place to the same size or more is read from the start, not continued (null then).
+   */
+  function* readContinuation(path: string, m: Memo, st: Stats): Generator<Io | undefined, Buffer | null, Stats | Buffer | undefined> {
+    const back = m.tail.length
+    const read = (yield { op: 'read', path, from: m.offset - back, to: st.size }) as Buffer
+    return read.length >= back && read.subarray(0, back).equals(m.tail) ? read.subarray(back) : null
+  }
+
+  /** Parses each complete line of `buf` from `start` into `fresh`; returns where the last complete line ends. */
+  function* appendLines(fresh: Memo, buf: Buffer, start: number, windowed: boolean): Generator<Io | undefined, number, Stats | Buffer | undefined> {
+    // Lines are cut on the bytes themselves, so the offset counts what the file holds even where a line is
+    // not valid UTF-8 (decoded, such a byte would count as three).
+    let parsed = 0
+    for (let nl = buf.indexOf(10, start); nl >= 0; start = nl + 1, nl = buf.indexOf(10, start)) {
+      if (++parsed % LINES_PER_SLICE === 0) yield
+      const bytes = nl + 1 - start
+      fresh.offset += bytes
+      sessionJsonlWork.parsedBytes += bytes
+      const recs = parseJsonl(buf.subarray(start, nl).toString('utf8'))
+      if (!recs.length) continue
+      fresh.recs.push({ rec: recs[0], bytes, ...(windowed ? marks(recs[0]) : {}) })
+      fresh.bytes += bytes
+    }
+    return start
+  }
+
   function* step(path: string, cwd?: string | null): Generator<Io | undefined, TranscriptItem[], Stats | Buffer | undefined> {
     const st = (yield { op: 'stat', path }) as Stats
     let m = memo.get(path)
@@ -348,14 +395,9 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
     let from = 0
     let buf: Buffer | null = null
     if (m) {
-      // The bytes just before where the last read stopped are read again and must still be the same: a file
-      // rewritten in place to the same size or more is read from the start, not continued.
-      const back = m.tail.length
-      const read = (yield { op: 'read', path, from: m.offset - back, to: st.size }) as Buffer
-      if (read.length >= back && read.subarray(0, back).equals(m.tail)) {
-        buf = read.subarray(back)
-        from = m.offset
-      } else m = undefined
+      buf = yield* readContinuation(path, m, st)
+      if (buf) from = m.offset
+      else m = undefined
     }
     if (!buf) {
       from = Math.max(0, st.size - o.tailBytes)
@@ -370,25 +412,10 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
       from += start
     }
     const fresh: Memo = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, recs: [], bytes: 0, items: [], tail: prevTail }
-    // Lines are cut on the bytes themselves, so the offset counts what the file holds even where a line is
-    // not valid UTF-8 (decoded, such a byte would count as three).
-    let parsed = 0
-    for (let nl = buf.indexOf(10, start); nl >= 0; start = nl + 1, nl = buf.indexOf(10, start)) {
-      if (++parsed % LINES_PER_SLICE === 0) yield
-      const bytes = nl + 1 - start
-      fresh.offset += bytes
-      sessionJsonlWork.parsedBytes += bytes
-      const recs = parseJsonl(buf.subarray(start, nl).toString('utf8'))
-      if (!recs.length) continue
-      fresh.recs.push({ rec: recs[0], bytes, ...(windowed ? marks(recs[0]) : {}) })
-      fresh.bytes += bytes
-    }
+    start = yield* appendLines(fresh, buf, start, windowed)
     // The last line may still be being written: it counts when it already parses, but is read again next time.
     const unfinished = parseJsonl(buf.subarray(start).toString('utf8'))
-    // buf[0, start) is what the file holds just before the new offset; a short one goes on from the old tail.
-    const seg = buf.subarray(Math.max(0, start - FINGERPRINT), start)
-    const joined = seg.length >= FINGERPRINT ? seg : Buffer.concat([prevTail, seg])
-    fresh.tail = Buffer.from(joined.subarray(Math.max(0, joined.length - FINGERPRINT)))
+    fresh.tail = fingerprintTail(buf, start, prevTail)
     fresh.size = st.size
     fresh.mtimeMs = st.mtimeMs
     fresh.ino = st.ino
@@ -405,14 +432,7 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
     memo.set(path, fresh)
     memoBytes += fresh.bytes - counted
     unsettle(path)
-    while (memo.size > 1 && (memo.size > o.maxFiles || memoBytes > o.maxBytes)) {
-      const [old, out] = memo.entries().next().value!
-      memo.delete(old)
-      memoBytes -= out.bytes
-      settled.set(old, { ino: out.ino, size: out.size, mtimeMs: out.mtimeMs, items: out.items, bytes: out.bytes })
-      settledBytes += out.bytes
-      while (settled.size > o.settledFiles || settledBytes > o.settledBytes) unsettle(settled.keys().next().value!)
-    }
+    settleOverflow()
     return answer
   }
 

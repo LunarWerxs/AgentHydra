@@ -339,38 +339,45 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
 
   /** One look while armed; never two at once. Without a read of the send queue it judges nothing, and a disarm part-way
    *  through stops it before its next send. */
+  type Looked = Awaited<ReturnType<typeof read>>
+
+  /** The hard limits first (act.ts): a chat given up on is recorded and never judged; a chat that may still be
+   *  continued is judged, unless it was judged within PEEK_MS. */
+  function limitCandidates(now: number, look: Looked, skip: Set<string>): Candidate[] {
+    const candidates: Candidate[] = []
+    for (const a of look.blind ? [] : decide(look.rows, tries, skip)) {
+      if (a.kind === 'give-up') {
+        tries.set(a.row.id, a.count)
+        acts.unshift({ at: now, id: a.row.id, title: a.row.title, move: a.row.move, did: 'gave-up' })
+        continue
+      }
+      const last = judgments.get(a.row.id)?.at
+      if (last !== undefined && now - last < PEEK_MS) continue
+      candidates.push({
+        id: a.row.id,
+        title: a.row.title,
+        source: a.row.source,
+        status: a.row.status,
+        kind: 'error',
+        items: look.items.get(a.row.id) ?? [],
+        signals: [`error: ${a.row.reason}`],
+        stalled: false,
+        count: a.count
+      })
+    }
+    return candidates
+  }
+
   function tick(): Promise<void> {
     ticking ??= (async () => {
       if (!armed()) return
       const now = Date.now()
-      const { rows, blind, unread, items } = await read(DEFAULT_DAYS, false)
+      const look = await read(DEFAULT_DAYS, false)
       const queue = await get<QueueState>('/api/queue')
       if (armed() && queue) {
         const waiting = new Set(queue.items.flatMap((i) => (i.kind === 'message' && i.state !== 'failed' ? [i.chatId] : [])))
-        const skip = new Set([...unread, ...waiting])
-        const candidates: Candidate[] = []
-        // The hard limits first (act.ts): a chat given up on is recorded and never judged; a chat that may still be
-        // continued is judged, unless it was judged within PEEK_MS.
-        for (const a of blind ? [] : decide(rows, tries, skip)) {
-          if (a.kind === 'give-up') {
-            tries.set(a.row.id, a.count)
-            acts.unshift({ at: now, id: a.row.id, title: a.row.title, move: a.row.move, did: 'gave-up' })
-            continue
-          }
-          const last = judgments.get(a.row.id)?.at
-          if (last !== undefined && now - last < PEEK_MS) continue
-          candidates.push({
-            id: a.row.id,
-            title: a.row.title,
-            source: a.row.source,
-            status: a.row.status,
-            kind: 'error',
-            items: items.get(a.row.id) ?? [],
-            signals: [`error: ${a.row.reason}`],
-            stalled: false,
-            count: a.count
-          })
-        }
+        const skip = new Set([...look.unread, ...waiting])
+        const candidates = limitCandidates(now, look, skip)
         candidates.push(...(await runningCandidates(now, skip)))
         await pool(candidates, JUDGE_WIDTH, async (c) => {
           if (armed()) await judgeOne(c)

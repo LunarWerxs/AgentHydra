@@ -14,6 +14,7 @@ import {
   BROWSER_LIVE_TARGETED,
   browserLiveRequest,
   type LiveError,
+  type LiveRequest,
 } from './request'
 import {
   browserLiveFindTag,
@@ -63,72 +64,79 @@ async function runLive(args: Record<string, unknown>): Promise<ToolReply> {
   if (book.error && (request.action === 'tag' || request.action === 'untag'))
     throw refusal('browser_live_tags_unreadable', book.error)
 
-  if (request.action === 'untag') {
-    const hit = browserLiveFindTag(book.tags, request.tag)
-    if (!hit) throw refusal('browser_live_tag_not_found', `No browser is tagged '${String(request.tag)}'.`, 'action:list shows every tag.')
-    writeLiveTags(book.tags.filter((t) => t !== hit))
-    return JSON.stringify({ ok: true, removed: hit.tag, browser: hit.browser, profile: hit.profileName || hit.profileDir }, null, 2)
-  }
+  if (request.action === 'untag') return untagReply(book.tags, request)
 
   const tagged = typeof request.window === 'string' ? browserLiveFindTag(book.tags, request.window) : null
   if (tagged) {
     delete request.window
     request.profileMatch = { tag: tagged.tag, browser: tagged.browser, profileDir: tagged.profileDir, userDataDir: tagged.userDataDir || '' }
   }
-
-  if (request.action === 'tag') {
-    const who = await runBrowserLiveEngine({
-      action: 'identify',
-      ...(request.window ? { window: request.window } : {}),
-      ...(request.profileMatch ? { profileMatch: request.profileMatch } : {}),
-    })
-    if (who.ok === false) throw failure(who, 'browser_live_failed')
-    if (!who.profileDir)
-      throw refusal(
-        'browser_live_profile_unknown',
-        `The ${String(who.browser)} window '${String(who.title)}' does not say which profile it belongs to, so a tag could never find it again.`,
-        'Tag a normal browser window; app windows carry no profile.',
-      )
-    const browser = String(who.browser)
-    const profileDir = String(who.profileDir)
-    const userDataDir = String(who.userDataDir || '')
-    const root = browserLiveRoot(browser, userDataDir)
-    const entry: LiveTag = {
-      tag: String(request.tag),
-      browser,
-      userDataDir,
-      root,
-      profileDir,
-      profileName: browserLiveProfileName(root, profileDir),
-      ...(request.note ? { note: String(request.note) } : {}),
-      taggedAt: new Date().toISOString(),
-    }
-    const previous = browserLiveFindTag(book.tags, entry.tag)
-    const tags = [...book.tags.filter((t) => t !== previous), entry]
-    writeLiveTags(tags)
-    return JSON.stringify(
-      {
-        ok: true,
-        tag: entry.tag,
-        browser,
-        profile: entry.profileName || profileDir,
-        profileDir,
-        window: who.hwnd,
-        ...(previous && !browserLiveSameProfile(previous, entry)
-          ? { movedFrom: `${previous.browser} profile '${previous.profileName || previous.profileDir}'` }
-          : {}),
-        tagsOnThisBrowser: tags.filter((t) => browserLiveSameProfile(t, entry)).map((t) => t.tag),
-        use: `browser_live { window: '${entry.tag}', ... } drives it; browser_profile_find { for: '${entry.tag}' } finds it.`,
-      },
-      null,
-      2,
-    )
-  }
+  if (request.action === 'tag') return tagReply(book, request)
 
   if (request.action === 'screenshot' && !request.path)
     request.path = join(tmpdir(), `browser-live-${Date.now()}.${request.format === 'png' ? 'png' : 'jpg'}`)
-  const out = await runBrowserLiveEngine(request)
+  return answerOf(await runBrowserLiveEngine(request), request, book)
+}
 
+function untagReply(tags: LiveTag[], request: LiveRequest): string {
+  const hit = browserLiveFindTag(tags, request.tag)
+  if (!hit) throw refusal('browser_live_tag_not_found', `No browser is tagged '${String(request.tag)}'.`, 'action:list shows every tag.')
+  writeLiveTags(tags.filter((t) => t !== hit))
+  return JSON.stringify({ ok: true, removed: hit.tag, browser: hit.browser, profile: hit.profileName || hit.profileDir }, null, 2)
+}
+
+/** Names the profile of the window the engine identifies, and keeps the tag for it (a tag that moves profile says so). */
+async function tagReply(book: ReturnType<typeof readLiveTags>, request: LiveRequest): Promise<string> {
+  const who = await runBrowserLiveEngine({
+    action: 'identify',
+    ...(request.window ? { window: request.window } : {}),
+    ...(request.profileMatch ? { profileMatch: request.profileMatch } : {}),
+  })
+  if (who.ok === false) throw failure(who, 'browser_live_failed')
+  if (!who.profileDir)
+    throw refusal(
+      'browser_live_profile_unknown',
+      `The ${String(who.browser)} window '${String(who.title)}' does not say which profile it belongs to, so a tag could never find it again.`,
+      'Tag a normal browser window; app windows carry no profile.',
+    )
+  const browser = String(who.browser)
+  const profileDir = String(who.profileDir)
+  const userDataDir = String(who.userDataDir || '')
+  const root = browserLiveRoot(browser, userDataDir)
+  const entry: LiveTag = {
+    tag: String(request.tag),
+    browser,
+    userDataDir,
+    root,
+    profileDir,
+    profileName: browserLiveProfileName(root, profileDir),
+    ...(request.note ? { note: String(request.note) } : {}),
+    taggedAt: new Date().toISOString(),
+  }
+  const previous = browserLiveFindTag(book.tags, entry.tag)
+  const tags = [...book.tags.filter((t) => t !== previous), entry]
+  writeLiveTags(tags)
+  return JSON.stringify(
+    {
+      ok: true,
+      tag: entry.tag,
+      browser,
+      profile: entry.profileName || profileDir,
+      profileDir,
+      window: who.hwnd,
+      ...(previous && !browserLiveSameProfile(previous, entry)
+        ? { movedFrom: `${previous.browser} profile '${previous.profileName || previous.profileDir}'` }
+        : {}),
+      tagsOnThisBrowser: tags.filter((t) => browserLiveSameProfile(t, entry)).map((t) => t.tag),
+      use: `browser_live { window: '${entry.tag}', ... } drives it; browser_profile_find { for: '${entry.tag}' } finds it.`,
+    },
+    null,
+    2,
+  )
+}
+
+/** What the engine answered, as the person reads it: the steps' outline, a screenshot, an outline, or the JSON. */
+function answerOf(out: EngineAnswer, request: LiveRequest, book: ReturnType<typeof readLiveTags>): ToolReply {
   // steps answers every step it ran, the failed one included, and the page after; a failed step makes the call an
   // error that still carries what the steps before it did.
   if (request.action === 'steps' && Array.isArray(out.steps)) {
@@ -140,40 +148,42 @@ async function runLive(args: Record<string, unknown>): Promise<ToolReply> {
     const extra = out.requested != null ? ` (requested ${String(out.requested)}, landed ${String(out.landed)})` : ''
     throw failure(out, 'browser_live_failed', extra)
   }
-
-  if (request.action === 'screenshot') {
-    const path = String(out.path)
-    const data = readFileSync(path).toString('base64')
-    const shown = Number(out.shownWidth)
-    const size = shown
-      ? `${shown}x${String(out.shownHeight)}px${Number(out.windowWidth) > shown ? ` of ${String(out.windowWidth)}x${String(out.windowHeight)}` : ''} ${String(request.format)}${request.format === 'png' ? '' : ` q${String(request.quality)}`}, `
-      : ''
-    return {
-      text: `window ${String(out.window)}, ${size}saved to ${path}`,
-      image: { data, mimeType: request.format === 'png' ? 'image/png' : 'image/jpeg' },
-    }
-  }
-
+  if (request.action === 'screenshot') return screenshotReply(out, request)
   if (request.action === 'read' || BROWSER_LIVE_TARGETED.has(request.action)) return outlineText(out, request.action !== 'read')
-
-  if (request.action === 'list' && Array.isArray(out.windows)) {
-    const windows = out.windows as (LiveWindowProfile & { profile?: string; tags?: string[] })[]
-    for (const w of windows) {
-      if (!w.profileDir) continue
-      w.profile = browserLiveProfileName(browserLiveRoot(w.browser, w.userDataDir), w.profileDir) || w.profileDir
-      const mine = book.tags.filter((t) => browserLiveSameProfile(t, w)).map((t) => t.tag)
-      if (mine.length) w.tags = mine
-    }
-    out.tags = book.tags.map((t) => ({
-      tag: t.tag,
-      browser: t.browser,
-      profile: t.profileName || t.profileDir,
-      open: windows.some((w) => Boolean(w.profileDir) && browserLiveSameProfile(t, w)),
-      ...(t.note ? { note: t.note } : {}),
-    }))
-    if (book.error) out.tagsError = book.error
-  }
+  if (request.action === 'list' && Array.isArray(out.windows)) tagWindows(out, book)
   return JSON.stringify(out, null, 2)
+}
+
+function screenshotReply(out: EngineAnswer, request: LiveRequest): ToolReply {
+  const path = String(out.path)
+  const data = readFileSync(path).toString('base64')
+  const shown = Number(out.shownWidth)
+  const size = shown
+    ? `${shown}x${String(out.shownHeight)}px${Number(out.windowWidth) > shown ? ` of ${String(out.windowWidth)}x${String(out.windowHeight)}` : ''} ${String(request.format)}${request.format === 'png' ? '' : ` q${String(request.quality)}`}, `
+    : ''
+  return {
+    text: `window ${String(out.window)}, ${size}saved to ${path}`,
+    image: { data, mimeType: request.format === 'png' ? 'image/png' : 'image/jpeg' },
+  }
+}
+
+/** The window list with each window's profile name and tags, and the tag book with which tags are open. */
+function tagWindows(out: EngineAnswer, book: ReturnType<typeof readLiveTags>): void {
+  const windows = out.windows as (LiveWindowProfile & { profile?: string; tags?: string[] })[]
+  for (const w of windows) {
+    if (!w.profileDir) continue
+    w.profile = browserLiveProfileName(browserLiveRoot(w.browser, w.userDataDir), w.profileDir) || w.profileDir
+    const mine = book.tags.filter((t) => browserLiveSameProfile(t, w)).map((t) => t.tag)
+    if (mine.length) w.tags = mine
+  }
+  out.tags = book.tags.map((t) => ({
+    tag: t.tag,
+    browser: t.browser,
+    profile: t.profileName || t.profileDir,
+    open: windows.some((w) => Boolean(w.profileDir) && browserLiveSameProfile(t, w)),
+    ...(t.note ? { note: t.note } : {}),
+  }))
+  if (book.error) out.tagsError = book.error
 }
 
 const ACTION_LIST = [...BROWSER_LIVE_ACTIONS]

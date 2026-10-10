@@ -162,57 +162,66 @@ export function decide(look: Look, memory: Memory): Decision {
   const stopped = new Set(stops.map((s) => s.id))
 
   for (const stop of stops) {
-    const prior = memory[stop.id]
-    let tries = prior?.tries ?? 0
-    const lastResumeAt = prior?.lastResumeAt ?? null
-    // A new stop well after the last continue: the chat did real work in between, so its count starts again.
-    if (prior?.stoppedAt !== stop.stoppedAt && lastResumeAt !== null && stop.stoppedAt - lastResumeAt >= QUICK_MS) tries = 0
-    const t: Tracked = { ...stop.base, stoppedAt: stop.stoppedAt, tries, lastResumeAt, gaveUpOn: prior?.gaveUpOn ?? null, state: 'waiting', reason: '' }
-    next[stop.id] = t
-
-    if (t.gaveUpOn === stop.stoppedAt) {
-      Object.assign(t, { state: 'gave-up', reason: prior?.reason ?? `continued ${tries} times in a row and it stopped again each time: left to a person` })
-      continue
-    }
-    if (lastResumeAt !== null && lastResumeAt >= stop.stoppedAt && now - lastResumeAt < SETTLE_MS) {
-      Object.assign(t, { state: 'resumed', reason: `continued at ${time(lastResumeAt)}; waiting for it to move` })
-      continue
-    }
-    if (stop.base.source === 'cli') {
-      Object.assign(t, { state: 'no-engine', reason: 'a terminal session: only its own terminal can continue it' })
-      continue
-    }
-    const dueAt = stop.roomNow ? now : (stop.base.resetsAt ?? stop.stoppedAt + FIVE_HOURS_MS) + RESET_BUFFER_MS
-    if (now < dueAt) {
-      nextDueAt = nextDueAt === null ? dueAt : Math.min(nextDueAt, dueAt)
-      Object.assign(t, {
-        state: 'waiting',
-        reason: stop.base.resetsAt !== null ? `its limit resets at ${time(stop.base.resetsAt)}` : `no reset was named; looked at again at ${time(dueAt)}`,
-      })
-      continue
-    }
-    if (stop.base.source === 'desk' && look.queued.has(stop.id)) {
-      Object.assign(t, { state: 'waiting', reason: 'a message already waits for it in the send queue' })
-      continue
-    }
-    if (tries >= MAX_TRIES) {
-      Object.assign(t, { state: 'gave-up', gaveUpOn: stop.stoppedAt, reason: `continued ${tries} times in a row and it stopped again each time: left to a person` })
-      acts.push({ id: stop.id, kind: 'give-up' })
-      continue
-    }
-    // Carried out by the plugin, which records how it went (carried()).
-    Object.assign(t, { reason: 'its limit has reset: continuing it' })
-    acts.push({ id: stop.id, kind: 'resume', text: continueText() })
+    const v = judgeStop(stop, memory[stop.id], look)
+    next[stop.id] = v.t
+    if (v.act) acts.push(v.act)
+    if (v.dueAt !== null) nextDueAt = nextDueAt === null ? v.dueAt : Math.min(nextDueAt, v.dueAt)
   }
 
-  // The chats no longer at a stop. One a list that did not load would have held is kept as it was. One that moved on
-  // is kept, off the list, while a continue is recent enough to tell a quick stop again; the rest are forgotten.
   for (const [id, t] of Object.entries(memory)) {
-    if (stopped.has(id)) continue
-    if ((t.source === 'desk' && look.own === null) || (t.source !== 'desk' && look.outside === null)) next[id] = t
-    else if (t.lastResumeAt !== null && now - t.lastResumeAt < FORGET_MS) next[id] = { ...t, stoppedAt: null, state: 'resumed', reason: 'moved on' }
+    if (!stopped.has(id)) keepOffList(id, t, look, next)
   }
   return { memory: next, acts, nextDueAt }
+}
+
+/** One stopped chat's verdict this look: its memory, the act to carry out, and when it is next due while it waits. */
+function judgeStop(stop: Stop, prior: Tracked | undefined, look: Look): { t: Tracked; act: Act | null; dueAt: number | null } {
+  const { now } = look
+  let tries = prior?.tries ?? 0
+  const lastResumeAt = prior?.lastResumeAt ?? null
+  // A new stop well after the last continue: the chat did real work in between, so its count starts again.
+  if (prior?.stoppedAt !== stop.stoppedAt && lastResumeAt !== null && stop.stoppedAt - lastResumeAt >= QUICK_MS) tries = 0
+  const t: Tracked = { ...stop.base, stoppedAt: stop.stoppedAt, tries, lastResumeAt, gaveUpOn: prior?.gaveUpOn ?? null, state: 'waiting', reason: '' }
+  const held = (act: Act | null = null, dueAt: number | null = null) => ({ t, act, dueAt })
+
+  if (t.gaveUpOn === stop.stoppedAt) {
+    Object.assign(t, { state: 'gave-up', reason: prior?.reason ?? `continued ${tries} times in a row and it stopped again each time: left to a person` })
+    return held()
+  }
+  if (lastResumeAt !== null && lastResumeAt >= stop.stoppedAt && now - lastResumeAt < SETTLE_MS) {
+    Object.assign(t, { state: 'resumed', reason: `continued at ${time(lastResumeAt)}; waiting for it to move` })
+    return held()
+  }
+  if (stop.base.source === 'cli') {
+    Object.assign(t, { state: 'no-engine', reason: 'a terminal session: only its own terminal can continue it' })
+    return held()
+  }
+  const dueAt = stop.roomNow ? now : (stop.base.resetsAt ?? stop.stoppedAt + FIVE_HOURS_MS) + RESET_BUFFER_MS
+  if (now < dueAt) {
+    Object.assign(t, {
+      state: 'waiting',
+      reason: stop.base.resetsAt !== null ? `its limit resets at ${time(stop.base.resetsAt)}` : `no reset was named; looked at again at ${time(dueAt)}`,
+    })
+    return held(null, dueAt)
+  }
+  if (stop.base.source === 'desk' && look.queued.has(stop.id)) {
+    Object.assign(t, { state: 'waiting', reason: 'a message already waits for it in the send queue' })
+    return held()
+  }
+  if (tries >= MAX_TRIES) {
+    Object.assign(t, { state: 'gave-up', gaveUpOn: stop.stoppedAt, reason: `continued ${tries} times in a row and it stopped again each time: left to a person` })
+    return held({ id: stop.id, kind: 'give-up' })
+  }
+  // Carried out by the plugin, which records how it went (carried()).
+  Object.assign(t, { reason: 'its limit has reset: continuing it' })
+  return held({ id: stop.id, kind: 'resume', text: continueText() })
+}
+
+/** A chat no longer at a stop. One a list that did not load would have held is kept as it was. One that moved on is
+ *  kept, off the list, while a continue is recent enough to tell a quick stop again; the rest are forgotten. */
+function keepOffList(id: string, t: Tracked, look: Look, next: Memory): void {
+  if ((t.source === 'desk' && look.own === null) || (t.source !== 'desk' && look.outside === null)) next[id] = t
+  else if (t.lastResumeAt !== null && look.now - t.lastResumeAt < FORGET_MS) next[id] = { ...t, stoppedAt: null, state: 'resumed', reason: 'moved on' }
 }
 
 /** The memory after one act was carried out: `ok`, or refused for want of anything running the chat, or failed. */

@@ -94,6 +94,43 @@ export interface RunningService {
   stop(): void
 }
 
+/** One request to the service: its health probe is open, every other route needs the token. */
+async function answer(req: Request, token: string, stop: () => void): Promise<Response> {
+  const url = new URL(req.url)
+  if (req.method === 'GET' && url.pathname === '/health') return json({ ok: true, pid: process.pid, stamp: STAMP, running: true })
+  if (!authorized(req, token)) return json({ ok: false, error: 'unauthorized' }, 401)
+  if (req.method === 'GET' && url.pathname === '/api/tools') return json({ tools: toolInfos() })
+  if (req.method === 'POST' && url.pathname === '/api/call') return callRoute(req)
+  if (req.method === 'POST' && url.pathname === '/api/secret') return secretRoute(req)
+  if (req.method === 'POST' && url.pathname === '/api/shutdown') {
+    setTimeout(stop, 20)
+    return json({ ok: true })
+  }
+  return json({ ok: false, error: 'not found' }, 404)
+}
+
+/** A tool call: its name is required; the answer carries the tool's own status. */
+async function callRoute(req: Request): Promise<Response> {
+  const body = (await req.json().catch(() => ({}))) as CallBody
+  if (typeof body.name !== 'string') return json({ ok: false, status: 400, error: 'name is required' } satisfies CallResult, 400)
+  const params = typeof body.params === 'object' && body.params !== null ? (body.params as Record<string, unknown>) : {}
+  const caller = typeof body.caller === 'object' && body.caller !== null ? (body.caller as ToolCaller) : {}
+  const result = await callTool(body.name, params, caller)
+  return json(result, result.ok ? 200 : result.status)
+}
+
+/** A secret request: a refused body or input is a 400; a page that failed answers 200 with the detail. */
+async function secretRoute(req: Request): Promise<Response> {
+  const body = (await req.json().catch(() => null)) as Partial<SecretRequest> | null
+  if (!body || typeof body !== 'object') return json({ ok: false, error: 'bad_request', detail: 'the body must be JSON' }, 400)
+  try {
+    return json(await runSecret({ ...body, caller: body.caller ?? {} } as SecretRequest))
+  } catch (err) {
+    if (err instanceof ToolInputError) return json({ ok: false, error: 'bad_request', detail: err.message }, 400)
+    return json({ ok: false, error: 'page_error', detail: err instanceof Error ? err.message : String(err) }, 200)
+  }
+}
+
 /** Serves the tools on a fresh loopback port and writes service.json; the caller owns the lock. */
 export function startService(home: string, onStop: () => void = () => {}): RunningService {
   const token = randomBytes(24).toString('hex')
@@ -108,37 +145,7 @@ export function startService(home: string, onStop: () => void = () => {}): Runni
     port: 0,
     hostname: '127.0.0.1',
     idleTimeout: 255,
-    fetch: async (req) => {
-      const url = new URL(req.url)
-      if (req.method === 'GET' && url.pathname === '/health') {
-        return json({ ok: true, pid: process.pid, stamp: STAMP, running: true })
-      }
-      if (!authorized(req, token)) return json({ ok: false, error: 'unauthorized' }, 401)
-      if (req.method === 'GET' && url.pathname === '/api/tools') return json({ tools: toolInfos() })
-      if (req.method === 'POST' && url.pathname === '/api/call') {
-        const body = (await req.json().catch(() => ({}))) as CallBody
-        if (typeof body.name !== 'string') return json({ ok: false, status: 400, error: 'name is required' } satisfies CallResult, 400)
-        const params = typeof body.params === 'object' && body.params !== null ? (body.params as Record<string, unknown>) : {}
-        const caller = typeof body.caller === 'object' && body.caller !== null ? (body.caller as ToolCaller) : {}
-        const result = await callTool(body.name, params, caller)
-        return json(result, result.ok ? 200 : result.status)
-      }
-      if (req.method === 'POST' && url.pathname === '/api/secret') {
-        const body = (await req.json().catch(() => null)) as Partial<SecretRequest> | null
-        if (!body || typeof body !== 'object') return json({ ok: false, error: 'bad_request', detail: 'the body must be JSON' }, 400)
-        try {
-          return json(await runSecret({ ...body, caller: body.caller ?? {} } as SecretRequest))
-        } catch (err) {
-          if (err instanceof ToolInputError) return json({ ok: false, error: 'bad_request', detail: err.message }, 400)
-          return json({ ok: false, error: 'page_error', detail: err instanceof Error ? err.message : String(err) }, 200)
-        }
-      }
-      if (req.method === 'POST' && url.pathname === '/api/shutdown') {
-        setTimeout(stop, 20)
-        return json({ ok: true })
-      }
-      return json({ ok: false, error: 'not found' }, 404)
-    },
+    fetch: (req) => answer(req, token, stop),
   })
   if (server.port === undefined) throw new Error('the browser tools service has no port')
   const file: ServiceFile = {

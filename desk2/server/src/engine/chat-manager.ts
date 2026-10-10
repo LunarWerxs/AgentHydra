@@ -975,6 +975,20 @@ export class ChatManager {
     if (chat.workerId !== undefined) p = { ...p, accountId: undefined, model: undefined, effort: undefined, permissionMode: undefined }
     const resolved = p.accountId !== undefined ? await this.resolveAccount(p.accountId) : null
     const live = e.runtime?.running ? e.runtime : null
+    const relocated = this.applyMarks(id, e, p, resolved)
+    await this.applyRuntimeSettings(e, live, p)
+    // The process keeps the login it started under: it ends once its turn is over (a limited or idle
+    // one at once), so the next send starts under the chosen account and resumes the session there.
+    if (live && (relocated || (live.startedAs && live.startedAs.id !== chat.account.id))) await live.closeWhenIdle()
+    chat.updatedAt = this.now()
+    this.changed(chat)
+    this.accountNote(id, resolved?.note ?? null)
+    return { ...chat }
+  }
+
+  /** The chat's own fields a patch sets at once; true when it was put in another folder by hand. */
+  private applyMarks(id: string, e: Entry, p: ChatPatch, resolved: ResolvedAccount | null): boolean {
+    const chat = e.chat
     if (p.title !== undefined) {
       chat.title = p.title.trim().slice(0, 200)
       e.titled = true
@@ -1000,6 +1014,12 @@ export class ChatManager {
       if (e.runtime) e.runtime.markViewed()
       else chat.unread = false
     } else if (p.unread === true) chat.unread = true
+    return relocated
+  }
+
+  /** The model, effort and permission mode: a running chat takes them through its runtime, a closed one keeps them on the chat. */
+  private async applyRuntimeSettings(e: Entry, live: ChatRuntime | null, p: ChatPatch): Promise<void> {
+    const chat = e.chat
     if (p.model !== undefined) {
       const model = normalizeModel(p.model)
       if (live) await live.setModel(model)
@@ -1011,13 +1031,6 @@ export class ChatManager {
     }
     // Through the runtime even when closed: it remembers the mode a switch to Plan leaves, for the plan's approval.
     if (p.permissionMode !== undefined) await this.runtimeOf(e).setPermissionMode(p.permissionMode)
-    // The process keeps the login it started under: it ends once its turn is over (a limited or idle
-    // one at once), so the next send starts under the chosen account and resumes the session there.
-    if (live && (relocated || (live.startedAs && live.startedAs.id !== chat.account.id))) await live.closeWhenIdle()
-    chat.updatedAt = this.now()
-    this.changed(chat)
-    this.accountNote(id, resolved?.note ?? null)
-    return { ...chat }
   }
 
   /** Drops the chat from Hydra Desk (its runtime closed, its history file removed). */

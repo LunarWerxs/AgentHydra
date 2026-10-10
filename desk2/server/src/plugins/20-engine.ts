@@ -218,40 +218,8 @@ function pollClimayte(ctx: ServerContext, manager: ChatManager): () => void {
   }
 }
 
-export default async function plugin(app: Hono, ctx: ServerContext): Promise<void> {
-  const deps = ctx.deps
-  // The send queue sees every chat event; it is built after the manager it sends through.
-  const toQueue = { fn: (_event: ServerEvent): void => {} }
-  const manager = createManager(ctx, toQueue)
-  // Taken over behind the server's start, so /api/health does not wait on it; the hello and every route on the
-  // chats wait for it, so no window sees an adopted chat as stopped.
-  const hosts = adoptHosts(manager)
-  const afterHosts = async (_c: Context, next: () => Promise<void>): Promise<void> => {
-    await hosts
-    await next()
-  }
-  for (const path of ['/api/chats', '/api/chats/*', '/api/sessions/*', '/api/queue', '/api/queue/*']) app.use(path, afterHosts)
-  // The browser plugin (65) reads a chat's session ids here: which browser pages are the chat's own.
-  ctx.deps.chatSessions = (chatId: string): string[] => manager.browserSessions(chatId)
-  // The headless audio plugin (67) names the chat that owns a Claude Code session.
-  ctx.deps.chatForSession = (sessionId: string): string | null => manager.chatForSession(sessionId)
-  const queue = new QueueManager({
-    home: ctx.home,
-    manager,
-    emit: ctx.broadcast,
-    settleMs: typeof deps.queueSettleMs === 'number' ? deps.queueSettleMs : undefined,
-    retryMs: typeof deps.queueRetryMs === 'number' ? deps.queueRetryMs : undefined,
-  })
-  toQueue.fn = (event) => queue.observe(event)
-  // Stop hooks run in order: this one before closeAll (below), so the chats closing do not read as their turns ending.
-  ctx.onStop(() => queue.stop())
-
-  ctx.registerHello(async () => {
-    await hosts
-    return { type: 'hello', version: ctx.version, chats: manager.list({ archived: true }), settings: ctx.settings(), queue: queue.state() }
-  })
-
-  // The send queue (SPEC "Send queue"); static paths before /api/queue/:id.
+/** The send queue's routes (SPEC "Send queue"); static paths before /api/queue/:id. */
+function queueRoutes(app: Hono, queue: QueueManager): void {
   app.get('/api/queue', (c) => c.json(queue.state()))
   app.post('/api/queue', (c) => answer(c, async () => queue.add(parseQueueAdd(await body(c)))))
   app.patch('/api/queue', (c) => answer(c, async () => queue.configure(parseQueueSettings(await body(c)))))
@@ -266,17 +234,10 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   )
   app.post('/api/queue/:id/send-now', (c) => answer(c, () => queue.sendNow(c.req.param('id'))))
   app.post('/api/queue/:id/retry', (c) => answer(c, () => queue.retry(c.req.param('id'))))
+}
 
-  // Diagnostics (SPEC "Diagnostics"): ?since= (epoch ms or a date), ?cause=, ?limit= (default 100, at most 1000).
-  diagnosticsRoute(app, 'failures', (c) => {
-    const limit = Number(c.req.query('limit'))
-    return manager.failures.read({
-      since: sinceParam(c.req.query('since')),
-      cause: c.req.query('cause') || undefined,
-      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 1000) : 100,
-    })
-  })
-
+/** Every chat route: its list, its messages and answers, its items and transcript, and the models and commands. */
+function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void {
   app.get('/api/chats', (c) => {
     const flag = c.req.query('archived')
     return c.json(manager.list({ archived: flag === '1' || flag === 'true' }))
@@ -387,6 +348,81 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   )
   app.get('/api/chats/:id/commands', (c) => answer(c, () => manager.commands(c.req.param('id'))))
   app.get('/api/models', (c) => answer(c, () => manager.models()))
+}
+
+/** The project list, its folders, roots and hidden choices, and each project's icon. */
+function projectRoutes(app: Hono, ctx: ServerContext, projects: ProjectList): void {
+  const choiceFields = { folders: 'projectFolders', roots: 'projectRoots', hidden: 'hiddenProjects' } as const
+  for (const kind of Object.keys(choiceFields) as (keyof typeof choiceFields)[]) {
+    const field = choiceFields[kind]
+    app.post(`/api/projects/${kind}`, (c) =>
+      answer(c, async () => {
+        const path = localFolderPath(((await body(c)) as { path?: unknown } | null)?.path)
+        ctx.updateSettings({ [field]: withPath(ctx.settings()[field], path) } as Partial<DeskSettings>)
+        return { ok: true }
+      }),
+    )
+    app.delete(`/api/projects/${kind}`, (c) =>
+      answer(c, () => {
+        const path = c.req.query('path') ?? ''
+        if (!path) throw new ChatError(400, 'path is required')
+        ctx.updateSettings({ [field]: withoutPath(ctx.settings()[field], path) } as Partial<DeskSettings>)
+        return { ok: true }
+      }),
+    )
+  }
+  app.get('/api/projects/icon', (c) => {
+    const file = projects.iconFile(c.req.query('key') ?? '')
+    return file ? serveProjectIcon(c.req.raw, file, ctx.home, c.req.query('v') !== undefined) : c.notFound()
+  })
+}
+
+export default async function plugin(app: Hono, ctx: ServerContext): Promise<void> {
+  const deps = ctx.deps
+  // The send queue sees every chat event; it is built after the manager it sends through.
+  const toQueue = { fn: (_event: ServerEvent): void => {} }
+  const manager = createManager(ctx, toQueue)
+  // Taken over behind the server's start, so /api/health does not wait on it; the hello and every route on the
+  // chats wait for it, so no window sees an adopted chat as stopped.
+  const hosts = adoptHosts(manager)
+  const afterHosts = async (_c: Context, next: () => Promise<void>): Promise<void> => {
+    await hosts
+    await next()
+  }
+  for (const path of ['/api/chats', '/api/chats/*', '/api/sessions/*', '/api/queue', '/api/queue/*']) app.use(path, afterHosts)
+  // The browser plugin (65) reads a chat's session ids here: which browser pages are the chat's own.
+  ctx.deps.chatSessions = (chatId: string): string[] => manager.browserSessions(chatId)
+  // The headless audio plugin (67) names the chat that owns a Claude Code session.
+  ctx.deps.chatForSession = (sessionId: string): string | null => manager.chatForSession(sessionId)
+  const queue = new QueueManager({
+    home: ctx.home,
+    manager,
+    emit: ctx.broadcast,
+    settleMs: typeof deps.queueSettleMs === 'number' ? deps.queueSettleMs : undefined,
+    retryMs: typeof deps.queueRetryMs === 'number' ? deps.queueRetryMs : undefined,
+  })
+  toQueue.fn = (event) => queue.observe(event)
+  // Stop hooks run in order: this one before closeAll (below), so the chats closing do not read as their turns ending.
+  ctx.onStop(() => queue.stop())
+
+  ctx.registerHello(async () => {
+    await hosts
+    return { type: 'hello', version: ctx.version, chats: manager.list({ archived: true }), settings: ctx.settings(), queue: queue.state() }
+  })
+
+  queueRoutes(app, queue)
+
+  // Diagnostics (SPEC "Diagnostics"): ?since= (epoch ms or a date), ?cause=, ?limit= (default 100, at most 1000).
+  diagnosticsRoute(app, 'failures', (c) => {
+    const limit = Number(c.req.query('limit'))
+    return manager.failures.read({
+      since: sinceParam(c.req.query('since')),
+      cause: c.req.query('cause') || undefined,
+      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 1000) : 100,
+    })
+  })
+
+  chatRoutes(app, manager, queue)
   const folders = new RecentFolders(join(ctx.home, 'folders.json'))
   const recent = () => folders.list(manager.list({ archived: true }))
   const pickFolder = (deps.pickFolder as PickFolder | undefined) ?? nativeFolderPicker(ctx.home)
@@ -436,7 +472,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     }),
     cacheFile: join(ctx.home, 'projects.json'),
   })
-  app.get('/api/projects', (c) => answer(c, () => projects.list({ wait: c.req.query('wait') === '1', hidden: c.req.query('hidden') === '1' })))
+  projectRoutes(app, ctx, projects)
   // Chats are filed into their project's group with New closed too (owner, 2026-10-08: "I wouldn't mind if Agent
   // Hydra automatically applies the right folders").
   const sweep = setInterval(() => void projects.sweep().catch(() => {}), PROJECTS_SWEEP_MS)
@@ -445,29 +481,6 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     clearInterval(sweep)
     projects.flushSync()
     folders.flushSync()
-  })
-  const choiceFields = { folders: 'projectFolders', roots: 'projectRoots', hidden: 'hiddenProjects' } as const
-  for (const kind of Object.keys(choiceFields) as (keyof typeof choiceFields)[]) {
-    const field = choiceFields[kind]
-    app.post(`/api/projects/${kind}`, (c) =>
-      answer(c, async () => {
-        const path = localFolderPath(((await body(c)) as { path?: unknown } | null)?.path)
-        ctx.updateSettings({ [field]: withPath(ctx.settings()[field], path) } as Partial<DeskSettings>)
-        return { ok: true }
-      }),
-    )
-    app.delete(`/api/projects/${kind}`, (c) =>
-      answer(c, () => {
-        const path = c.req.query('path') ?? ''
-        if (!path) throw new ChatError(400, 'path is required')
-        ctx.updateSettings({ [field]: withoutPath(ctx.settings()[field], path) } as Partial<DeskSettings>)
-        return { ok: true }
-      }),
-    )
-  }
-  app.get('/api/projects/icon', (c) => {
-    const file = projects.iconFile(c.req.query('key') ?? '')
-    return file ? serveProjectIcon(c.req.raw, file, ctx.home, c.req.query('v') !== undefined) : c.notFound()
   })
   app.get('/api/mcp-servers', (c) => answer(c, () => mcpServersRoute(c, deps)))
   app.get('/api/chats/:id/mcp', (c) => answer(c, () => manager.mcpStatus(c.req.param('id'))))

@@ -42,6 +42,8 @@ export interface HeadlessAudioDeps {
 }
 
 const UNATTRIBUTED = '*unattributed'
+type ChatOf = (sessionId: string) => string | null
+type ProfileOf = ReturnType<typeof profilesOf>[number]
 const RESTART_MIN_MS = 1000
 const RESTART_MAX_MS = 30000
 const HEALTHY_MS = 60000
@@ -202,41 +204,53 @@ export class HeadlessAudio {
     const unattributed: { profile: string; url: string }[] = []
     const audibleOf = new Map<string, (string | null)[]>()
     for (const prof of profiles) {
-      if (prof.peak <= 0 && !profileHoldsChats(prof.dir, muted, chatOf)) continue
-      const port = this.deps.readPort(prof.dir)
-      if (port === null) continue
-      let tabs: BrowserTab[]
-      try {
-        tabs = await this.deps.page.tabs(port)
-      } catch {
-        continue
-      }
-      const owners = pageOwners(
-        tabs.map((t) => t.id),
-        prof.dir,
-        chatOf,
-      )
-      const found: (string | null)[] = []
-      for (const tab of tabs) {
-        const chat = owners.get(tab.id) ?? null
-        if (prof.peak <= 0 && (chat === null || !muted.has(chat))) continue
-        const sound = await this.sound(port, tab.id)
-        if (sound === null || !pageIsAudible(sound)) continue
-        found.push(chat)
-        if (chat === null) {
-          unattributed.push({ profile: prof.dir, url: tab.url })
-          if (this.unattributedMuted) await this.muteOne(prof.dir, port, tab.id, UNATTRIBUTED)
-        } else {
-          audible.add(chat)
-          if (muted.has(chat)) await this.muteOne(prof.dir, port, tab.id, chat)
-        }
-      }
-      audibleOf.set(prof.dir, found)
+      const found = await this.scanProfile(prof, { muted, chatOf, audible, unattributed })
+      if (found) audibleOf.set(prof.dir, found)
     }
     this.audibleOf = audibleOf
     this.audible = [...audible].sort()
     this.unattributed = unattributed
     this.publish()
+  }
+
+  /**
+   * One profile's audible tabs, each answering to the chat that owns it (null for none). Null when the profile is
+   * not read this time: it has no debugger port, or its tabs cannot be listed.
+   */
+  private async scanProfile(
+    prof: ProfileOf,
+    s: { muted: Set<string>; chatOf: ChatOf; audible: Set<string>; unattributed: { profile: string; url: string }[] },
+  ): Promise<(string | null)[] | null> {
+    if (prof.peak <= 0 && !profileHoldsChats(prof.dir, s.muted, s.chatOf)) return null
+    const port = this.deps.readPort(prof.dir)
+    if (port === null) return null
+    let tabs: BrowserTab[]
+    try {
+      tabs = await this.deps.page.tabs(port)
+    } catch {
+      return null
+    }
+    const owners = pageOwners(
+      tabs.map((t) => t.id),
+      prof.dir,
+      s.chatOf,
+    )
+    const found: (string | null)[] = []
+    for (const tab of tabs) {
+      const chat = owners.get(tab.id) ?? null
+      if (prof.peak <= 0 && (chat === null || !s.muted.has(chat))) continue
+      const sound = await this.sound(port, tab.id)
+      if (sound === null || !pageIsAudible(sound)) continue
+      found.push(chat)
+      if (chat === null) {
+        s.unattributed.push({ profile: prof.dir, url: tab.url })
+        if (this.unattributedMuted) await this.muteOne(prof.dir, port, tab.id, UNATTRIBUTED)
+      } else {
+        s.audible.add(chat)
+        if (s.muted.has(chat)) await this.muteOne(prof.dir, port, tab.id, chat)
+      }
+    }
+    return found
   }
 
   private async sound(port: number, id: string): Promise<PageSound | null> {

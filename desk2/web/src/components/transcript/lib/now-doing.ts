@@ -28,50 +28,47 @@ const host = (url: string) => {
   }
 }
 
+type ToolInput = Record<string, unknown>
+/** A known tool's words, from its input; `path` shortens a path field against the working folder. */
+type Words = (i: ToolInput, path: (key: string) => string) => string
+
+const runCommand: Words = (i) => (i.command ? `Running ${firstLine(str(i.command))}` : 'Running a command')
+// A Map, not an object literal: a tool called like an Object property ("constructor") is just an unknown tool.
+const TOOL_WORDS = new Map<string, Words>([
+  ['Bash', runCommand],
+  ['PowerShell', runCommand],
+  ['Read', (i, path) => (i.file_path ? `Reading ${path('file_path')}` : 'Reading a file')],
+  ['Edit', (i, path) => (i.file_path ? `Editing ${path('file_path')}` : 'Editing a file')],
+  ['MultiEdit', (i, path) => (i.file_path ? `Editing ${path('file_path')}` : 'Editing a file')],
+  ['NotebookEdit', (i, path) => (i.notebook_path ? `Editing ${path('notebook_path')}` : 'Editing a notebook')],
+  ['Write', (i, path) => (i.file_path ? `Writing ${path('file_path')}` : 'Writing a file')],
+  ['Grep', (i) => (i.pattern ? `Searching for ${str(i.pattern)}` : 'Searching')],
+  ['Glob', (i) => (i.pattern ? `Finding ${str(i.pattern)}` : 'Finding files')],
+  ['WebSearch', (i) => (i.query ? `Searching the web for ${str(i.query)}` : 'Searching the web')],
+  ['WebFetch', (i) => (i.url ? `Fetching ${host(str(i.url))}` : 'Fetching a page')],
+  ['TodoWrite', (i) => todoWords(i.todos)],
+  ['Agent', () => 'Running a sub-agent'],
+  ['Task', () => 'Running a sub-agent'],
+  ['Skill', (i) => (i.skill ? `Using the ${str(i.skill)} skill` : 'Using a skill')],
+  ['ToolSearch', () => 'Loading tools'],
+  ['AskUserQuestion', () => 'Asking you a question'],
+  ['ExitPlanMode', () => 'Proposing a plan'],
+])
+
+/** The to-do list's step is its in-progress item, else the list itself. */
+function todoWords(todos: unknown): string {
+  const list = Array.isArray(todos) ? (todos as { status?: unknown; activeForm?: unknown; content?: unknown }[]) : []
+  const now = list.find((x) => x?.status === 'in_progress')
+  return (now && (str(now.activeForm) || str(now.content))) || 'Updating the to-do list'
+}
+
 /** One step in words: its own description when the call gave one, else what kind of step it is. */
 export function stepLine(t: Pick<Tool, 'name' | 'input'>, cwd?: string | null): string {
   const i = t.input ?? {}
   const own = firstLine(str(i.description))
   if (own) return own
-  const path = (key: string) => shortPath(str(i[key]), cwd)
-  switch (t.name) {
-    case 'Bash':
-    case 'PowerShell':
-      return i.command ? `Running ${firstLine(str(i.command))}` : 'Running a command'
-    case 'Read':
-      return i.file_path ? `Reading ${path('file_path')}` : 'Reading a file'
-    case 'Edit':
-    case 'MultiEdit':
-      return i.file_path ? `Editing ${path('file_path')}` : 'Editing a file'
-    case 'NotebookEdit':
-      return i.notebook_path ? `Editing ${path('notebook_path')}` : 'Editing a notebook'
-    case 'Write':
-      return i.file_path ? `Writing ${path('file_path')}` : 'Writing a file'
-    case 'Grep':
-      return i.pattern ? `Searching for ${str(i.pattern)}` : 'Searching'
-    case 'Glob':
-      return i.pattern ? `Finding ${str(i.pattern)}` : 'Finding files'
-    case 'WebSearch':
-      return i.query ? `Searching the web for ${str(i.query)}` : 'Searching the web'
-    case 'WebFetch':
-      return i.url ? `Fetching ${host(str(i.url))}` : 'Fetching a page'
-    case 'TodoWrite': {
-      const todos = Array.isArray(i.todos) ? (i.todos as { status?: unknown; activeForm?: unknown; content?: unknown }[]) : []
-      const now = todos.find((x) => x?.status === 'in_progress')
-      return (now && (str(now.activeForm) || str(now.content))) || 'Updating the to-do list'
-    }
-    case 'Agent':
-    case 'Task':
-      return 'Running a sub-agent'
-    case 'Skill':
-      return i.skill ? `Using the ${str(i.skill)} skill` : 'Using a skill'
-    case 'ToolSearch':
-      return 'Loading tools'
-    case 'AskUserQuestion':
-      return 'Asking you a question'
-    case 'ExitPlanMode':
-      return 'Proposing a plan'
-  }
+  const words = TOOL_WORDS.get(t.name)
+  if (words) return words(i, (key) => shortPath(str(i[key]), cwd))
   const mcp = parseMcpName(t.name)
   return mcp ? `Using ${mcp.server} ${mcp.tool.replace(/_/g, ' ')}` : `Using ${t.name}`
 }

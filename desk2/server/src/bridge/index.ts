@@ -605,6 +605,11 @@ export function createBridge(opts: BridgeOptions = {}) {
     mtimeMs: number
     items: TranscriptItem[]
   }
+  /** Which of a worker's session files to read: the rescan asks for every file again; `writing` names the session it writes now. */
+  interface WorkerScan {
+    rescan?: boolean
+    writing?: { sessionId: string; accountId: string }
+  }
   /** Each worker's list as last answered, with the part each session was read as: while none changed, the same list goes back. The newest few. */
   const workerReads = new Map<string, { cwd: string | null; parts: Map<string, WorkerPart>; items: TranscriptItem[] }>()
   const WORKER_READS_KEPT = 16
@@ -655,6 +660,33 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
   }
 
+  /** A worker session's part, read from the newest file that holds it; null when no file does yet (a miss is remembered). */
+  async function partOf(sid: string, cwd: string | null, o: WorkerScan, ownRoot: string | null, allRoots: () => Promise<string[]>): Promise<WorkerPart | null> {
+    let known = o.rescan ? null : foundAt.get(sid)
+    if (ownRoot && sid === o.writing?.sessionId && !(known && isUnder(known, ownRoot))) {
+      const ownKey = `${ownRoot}|${sid}`
+      const own = !o.rescan && searchedLately(ownKey) ? null : await findSessionJsonlAsync(sid, [ownRoot], cwd)
+      if (own) {
+        notFound.delete(ownKey)
+        rememberFile(sid, own)
+        known = own
+      } else if (!o.rescan) rememberMiss(ownKey)
+    }
+    const part = known ? ((await unchangedPart(sid, known, cwd)) ?? (await readPart(known, cwd))) : null
+    if (part) return part
+    // A session with no file yet: every project folder of every account is looked in, so not on every poll.
+    if (!o.rescan && searchedLately(sid)) return null
+    const file = await findSessionJsonlAsync(sid, await allRoots(), cwd)
+    if (file) rememberFile(sid, file)
+    const found = file ? await readPart(file, cwd) : null
+    if (!found) {
+      rememberMiss(sid)
+      return null
+    }
+    notFound.delete(sid)
+    return found
+  }
+
   /**
    * A worker's transcript from its own .jsonl files, in session order (`sessions` then `sessionId`). A move
    * to another account copies the session into that account's folder, so the newest copy of each is read
@@ -667,45 +699,17 @@ export function createBridge(opts: BridgeOptions = {}) {
    * rule tied and could keep the old account's copy, and nothing looked again: a chat moved #109 to #124
    * on 2026-10-05 showed none of the four replies that followed ("I've sent like seven chats ... nothing happens").
    */
-  async function workerItems(
-    sessionIds: string[],
-    cwd: string | null,
-    o: { rescan?: boolean; writing?: { sessionId: string; accountId: string } } = {},
-  ): Promise<TranscriptItem[]> {
-    let roots: string[] | null = null
+  async function workerItems(sessionIds: string[], cwd: string | null, o: WorkerScan = {}): Promise<TranscriptItem[]> {
+    let rootsOnce: Promise<string[]> | null = null
+    const allRoots = () => (rootsOnce ??= projectRoots())
     const ownDir = o.writing ? (await instanceDirs()).get(o.writing.accountId) : undefined
     const ownRoot = ownDir ? join(ownDir, 'projects') : null
     const parts = new Map<string, WorkerPart>()
     for (const sid of new Set(sessionIds)) {
       // One session's parse at a time: the requests and timers run between two sessions, not after all of them.
       await new Promise((done) => setImmediate(done))
-      let known = o.rescan ? null : foundAt.get(sid)
-      if (ownRoot && sid === o.writing?.sessionId && !(known && isUnder(known, ownRoot))) {
-        const ownKey = `${ownRoot}|${sid}`
-        const own = !o.rescan && searchedLately(ownKey) ? null : await findSessionJsonlAsync(sid, [ownRoot], cwd)
-        if (own) {
-          notFound.delete(ownKey)
-          rememberFile(sid, own)
-          known = own
-        } else if (!o.rescan) rememberMiss(ownKey)
-      }
-      let part = known ? ((await unchangedPart(sid, known, cwd)) ?? (await readPart(known, cwd))) : null
-      if (!part) {
-        // A session with no file yet: every project folder of every account is looked in, so not on every poll.
-        if (!o.rescan && searchedLately(sid)) continue
-        roots ??= await projectRoots()
-        const file = await findSessionJsonlAsync(sid, roots, cwd)
-        if (file) {
-          rememberFile(sid, file)
-          part = await readPart(file, cwd)
-        }
-        if (!part) {
-          rememberMiss(sid)
-          continue
-        }
-        notFound.delete(sid)
-      }
-      parts.set(sid, part)
+      const part = await partOf(sid, cwd, o, ownRoot, allRoots)
+      if (part) parts.set(sid, part)
     }
     const key = `${sessionIds.join(',')}|${cwd ?? ''}`
     const last = workerReads.get(key)

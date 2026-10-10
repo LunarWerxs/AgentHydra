@@ -21,7 +21,7 @@ import {
   type BabysitterStatus,
 } from '@shared/babysitter'
 import type { ServerContext } from '../context'
-import { carried, decide, type Memory, shown, type Tracked } from '../babysitter/decide'
+import { carried, decide, type Act, type Memory, shown, type Tracked } from '../babysitter/decide'
 import { AsyncFile } from '../async-file'
 
 /** Acts kept for the page. */
@@ -61,6 +61,24 @@ export function byAccount(chats: readonly BabysitterChat[]): BabysitterAccount[]
     out.set(c.account, a)
   }
   return [...out.values()].sort((x, y) => (x.resetsAt ?? Number.POSITIVE_INFINITY) - (y.resetsAt ?? Number.POSITIVE_INFINITY) || x.firstStoppedAt - y.firstStoppedAt)
+}
+
+/** The Desk chats with a message already waiting in the send queue (a failed one is not waiting). */
+function queuedChats(queue: QueueState | null): Set<string> {
+  return new Set((queue?.items ?? []).flatMap((i) => (i.kind === 'message' && i.state !== 'failed' ? [i.chatId] : [])))
+}
+
+/** What a look could not read, for the page; null when both lists loaded. */
+function missingNote(ownRead: ChatSummary[] | null, outside: ExternalSession[] | null): string | null {
+  const missing = [ownRead === null ? "Desk's chats" : null, outside === null ? "AgentHydra's sessions" : null].filter((m): m is string => m !== null)
+  return missing.length ? `${missing.join(' and ')} did not load; the chats they hold were left as they were` : null
+}
+
+/** How a continue went. An outside chat AgentHydra cannot reach (no live engine, its app closed, not a Desktop chat,
+ *  AgentHydra itself not answering) is no try: it is continued once something runs it again. */
+function outcomeOf(t: Tracked, r: { status: number; error: string | null }): 'ok' | 'no-engine' | 'failed' {
+  if (r.error === null) return 'ok'
+  return t.source !== 'desk' && [404, 409, 503].includes(r.status) ? 'no-engine' : 'failed'
 }
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
@@ -120,6 +138,30 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     saved.acts.splice(ACTS_KEPT)
   }
 
+  /** Carries out one act the look judged. A give-up is noted; a continue is sent, or waits while the babysitter is off. */
+  async function actOn(a: Act, before: Memory): Promise<void> {
+    const t = saved.memory[a.id]
+    if (!t) return
+    // Off (or switched off part-way through): it waits, as if the look had not reached it.
+    if (!enabled()) {
+      saved.memory[a.id] = { ...t, gaveUpOn: before[a.id]?.gaveUpOn ?? null, state: 'waiting', reason: 'its limit has reset; the babysitter is off, so it waits' }
+      return
+    }
+    if (a.kind === 'give-up') {
+      act(t, a.id, 'gave-up', t.reason)
+      return
+    }
+    const r =
+      t.source === 'desk'
+        ? await post('/api/queue', { kind: 'message', chatId: a.id, text: a.text })
+        : await post(`/api/external/sessions/${encodeURIComponent(a.id)}/message`, { text: a.text })
+    const outcome = outcomeOf(t, r)
+    saved.memory[a.id] = carried(t, outcome, r.error ?? '', Date.now())
+    // A chat still unreachable is noted once, not on every look.
+    if (outcome === 'no-engine' && before[a.id]?.state === 'no-engine') return
+    act(t, a.id, outcome === 'ok' ? 'resumed' : outcome, r.error ?? (t.source === 'desk' ? 'queued in its send queue' : 'delivered into the chat'))
+  }
+
   /** One look; never two at once. While off it only reads and judges, so the page still shows what waits. */
   function look(): Promise<void> {
     looking ??= (async () => {
@@ -134,37 +176,12 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
         ])
         // Without the send queue a message already waiting for a Desk chat is unknown: Desk's chats are then not judged.
         const ownRead = queue ? own : null
-        const queued = new Set((queue?.items ?? []).flatMap((i) => (i.kind === 'message' && i.state !== 'failed' ? [i.chatId] : [])))
-        const missing = [ownRead === null ? "Desk's chats" : null, outside === null ? "AgentHydra's sessions" : null].filter((m): m is string => m !== null)
-        lastError = missing.length ? `${missing.join(' and ')} did not load; the chats they hold were left as they were` : null
-        const d = decide({ own: ownRead, outside, accounts, queued, now }, saved.memory)
+        lastError = missingNote(ownRead, outside)
+        const d = decide({ own: ownRead, outside, accounts, queued: queuedChats(queue), now }, saved.memory)
         nextDueAt = d.nextDueAt
         const before = saved.memory
         saved.memory = d.memory
-        for (const a of d.acts) {
-          const t = saved.memory[a.id]
-          if (!t) continue
-          // Off (or switched off part-way through): it waits, as if the look had not reached it.
-          if (!enabled()) {
-            saved.memory[a.id] = { ...t, gaveUpOn: before[a.id]?.gaveUpOn ?? null, state: 'waiting', reason: 'its limit has reset; the babysitter is off, so it waits' }
-            continue
-          }
-          if (a.kind === 'give-up') {
-            act(t, a.id, 'gave-up', t.reason)
-            continue
-          }
-          const r =
-            t.source === 'desk'
-              ? await post('/api/queue', { kind: 'message', chatId: a.id, text: a.text })
-              : await post(`/api/external/sessions/${encodeURIComponent(a.id)}/message`, { text: a.text })
-          // An outside chat AgentHydra cannot reach (no live engine, its app closed, not a Desktop chat, AgentHydra
-          // itself not answering) is no try: it is continued once something runs it again.
-          const outcome = r.error === null ? 'ok' : t.source !== 'desk' && [404, 409, 503].includes(r.status) ? 'no-engine' : 'failed'
-          saved.memory[a.id] = carried(t, outcome, r.error ?? '', Date.now())
-          // A chat still unreachable is noted once, not on every look.
-          if (outcome === 'no-engine' && before[a.id]?.state === 'no-engine') continue
-          act(t, a.id, outcome === 'ok' ? 'resumed' : outcome, r.error ?? (t.source === 'desk' ? 'queued in its send queue' : 'delivered into the chat'))
-        }
+        for (const a of d.acts) await actOn(a, before)
         checkedAt = now
         save()
       } catch (err) {

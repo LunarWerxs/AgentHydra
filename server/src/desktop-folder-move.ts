@@ -165,65 +165,119 @@ function matchNativeChat(sessions: unknown[], cliSessionId: string): Record<stri
   return matches.length === 1 ? matches[0] : null
 }
 
+/** The chat's folder move, as the checks before any write make it: the instance, the chat, and what it is doing. */
+type Ready = {
+  profile: string
+  cwd: string
+  meta: Record<string, unknown>
+  oldCli: string
+  title: string
+  recordCwd: string
+}
+
 /** The move itself. Every refusal is a status and a reason, and returns before anything is written. */
 export async function moveDesktopChatFolder(
   input: FolderMoveInput,
   deps: FolderMoveDeps = defaultFolderMoveDeps(),
 ): Promise<FolderMoveOutcome> {
+  const target = targetOf(input, deps)
+  if ('refused' in target) return target.refused
+  const { profile, cwd } = target
+  const record = deps.findRecord(profile, input.sessionId)
+  if (!record)
+    return refuse(404, 'chat-not-found', 'no chat with that id is on screen in this profile')
+  const chat = chatOf(record.meta, cwd, deps)
+  if ('refused' in chat) return chat.refused
+  const state = await deps.inspect(profile, chat.oldCli)
+  if (state.kind === 'unavailable') return refuse(409, 'native-unavailable', state.reason)
+  const idle = idleRefusal(state.session as Record<string, unknown>, deps)
+  if (idle) return idle
+
+  // Nothing above has written anything. From here on, a refusal must undo what this call wrote.
+  return writeMove(input, deps, { profile, cwd, ...chat, meta: record.meta })
+}
+
+/** The instance profile and the folder a move goes to, or the refusal for one that is missing or not usable. */
+function targetOf(
+  input: FolderMoveInput,
+  deps: FolderMoveDeps,
+): { profile: string; cwd: string } | { refused: FolderMoveOutcome } {
   const ref = typeof input.instanceRef === 'string' ? input.instanceRef.trim() : ''
   const profileRaw = ref.startsWith('desktop:') ? ref.slice('desktop:'.length) : ''
   if (!/^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|\/)/i.test(profileRaw))
-    return refuse(400, 'bad-request', "instance_ref must be 'desktop:<full profile directory>'")
+    return {
+      refused: refuse(
+        400,
+        'bad-request',
+        "instance_ref must be 'desktop:<full profile directory>'",
+      ),
+    }
   if (!SESSION_ID.test(input.sessionId))
-    return refuse(400, 'bad-request', 'session id is not a valid session identifier')
+    return { refused: refuse(400, 'bad-request', 'session id is not a valid session identifier') }
   let cwd: string
   try {
     cwd = validateCwd(input.cwd)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return message.includes('not an existing folder')
-      ? refuse(422, 'folder-missing', message)
-      : refuse(400, 'bad-request', message)
+    return {
+      refused: message.includes('not an existing folder')
+        ? refuse(422, 'folder-missing', message)
+        : refuse(400, 'bad-request', message),
+    }
   }
   const profile = normalizeClaudeNativeProfile(profileRaw)
   if (!deps.nativeConfigured(profile))
-    return refuse(
-      409,
-      'no-native-control',
-      'native control is not configured for this profile, so the chat cannot be moved natively',
-    )
+    return {
+      refused: refuse(
+        409,
+        'no-native-control',
+        'native control is not configured for this profile, so the chat cannot be moved natively',
+      ),
+    }
+  return { profile, cwd }
+}
 
-  const record = deps.findRecord(profile, input.sessionId)
-  if (!record)
-    return refuse(404, 'chat-not-found', 'no chat with that id is on screen in this profile')
-  const meta = record.meta
+/** The chat as it can move: it has a CLI transcript, is not archived, has a real name, and is not in that folder already. */
+function chatOf(
+  meta: Record<string, unknown>,
+  cwd: string,
+  deps: FolderMoveDeps,
+): { oldCli: string; title: string; recordCwd: string } | { refused: FolderMoveOutcome } {
   const oldCli =
     typeof meta.cliSessionId === 'string' && SESSION_ID.test(meta.cliSessionId)
       ? meta.cliSessionId
       : null
-  if (!oldCli) return refuse(409, 'no-cli-transcript', 'this chat has no CLI transcript to move')
+  if (!oldCli)
+    return { refused: refuse(409, 'no-cli-transcript', 'this chat has no CLI transcript to move') }
   if (meta.isArchived === true)
-    return refuse(409, 'archived', 'the chat is archived; unarchive it in the app first')
+    return {
+      refused: refuse(409, 'archived', 'the chat is archived; unarchive it in the app first'),
+    }
   const title = typeof meta.title === 'string' ? meta.title.trim() : ''
   if (!title || isGenericChatTitle(title))
-    return refuse(
-      409,
-      'no-real-title',
-      'the chat has no real name; rename it before moving its folder',
-    )
+    return {
+      refused: refuse(
+        409,
+        'no-real-title',
+        'the chat has no real name; rename it before moving its folder',
+      ),
+    }
   const recordCwd = typeof meta.cwd === 'string' ? meta.cwd : ''
   if (recordCwd && samePathKey(recordCwd, cwd))
-    return refuse(409, 'same-folder', 'the chat already works in that folder')
+    return { refused: refuse(409, 'same-folder', 'the chat already works in that folder') }
   if (deps.liveEngine(oldCli))
-    return refuse(
-      409,
-      'engine-running',
-      'the chat has a running engine; let its turn finish before moving it',
-    )
+    return {
+      refused: refuse(
+        409,
+        'engine-running',
+        'the chat has a running engine; let its turn finish before moving it',
+      ),
+    }
+  return { oldCli, title, recordCwd }
+}
 
-  const state = await deps.inspect(profile, oldCli)
-  if (state.kind === 'unavailable') return refuse(409, 'native-unavailable', state.reason)
-  const s = state.session as Record<string, unknown>
+/** The refusal when the chat is busy with live work or was used in the last few minutes; null when it may move. */
+function idleRefusal(s: Record<string, unknown>, deps: FolderMoveDeps): FolderMoveOutcome | null {
   const busy = [
     'isRunning',
     'isStopping',
@@ -255,8 +309,16 @@ export async function moveDesktopChatFolder(
         'the chat was used in the last 10 minutes; move it once it has been quiet',
       )
   }
+  return null
+}
 
-  // Nothing above has written anything. From here on, a refusal must undo what this call wrote.
+/** Copies the chat into the folder, then archives the old one. Every refusal after the first write says what was undone. */
+async function writeMove(
+  input: FolderMoveInput,
+  deps: FolderMoveDeps,
+  ready: Ready,
+): Promise<FolderMoveOutcome> {
+  const { profile, cwd, meta, oldCli, title, recordCwd } = ready
   const newCli = deps.newSessionId()
   const fork = deps.forkTranscript(oldCli, newCli, cwd)
   if ('missing' in fork)
@@ -319,12 +381,7 @@ export async function moveDesktopChatFolder(
   const carried: CarriedSettings = { ...pickCarriedSettings(meta), cwd }
   const titled = await deps.stampLanded(profile, newCli, title, carried)
   deps.carryDaemonState(oldCli, newCli, profile, carried)
-  let deskCarried: 'ok' | 'none' | 'unreachable' | 'not-written' = 'none'
-  if (desk.state === 'unreachable') deskCarried = 'unreachable'
-  else if (desk.state === 'ok' && (desk.marks.group || desk.marks.pinned || desk.marks.unread)) {
-    const written = await deps.deskMarksWrite(newCli, desk.marks)
-    deskCarried = written.ok ? 'ok' : 'not-written'
-  }
+  const deskCarried = await carryDeskMarks(deps, desk, newCli)
 
   const archived = await deps.archiveChat(profile, oldCli)
   deps.invalidate()
@@ -366,6 +423,19 @@ export async function moveDesktopChatFolder(
       },
     },
   }
+}
+
+/** The desk marks (group, pin, unread) carried to the new chat, or why they were not. */
+async function carryDeskMarks(
+  deps: FolderMoveDeps,
+  desk: Awaited<ReturnType<FolderMoveDeps['deskMarksRead']>>,
+  newCli: string,
+): Promise<'ok' | 'none' | 'unreachable' | 'not-written'> {
+  if (desk.state === 'unreachable') return 'unreachable'
+  if (desk.state !== 'ok' || !(desk.marks.group || desk.marks.pinned || desk.marks.unread))
+    return 'none'
+  const written = await deps.deskMarksWrite(newCli, desk.marks)
+  return written.ok ? 'ok' : 'not-written'
 }
 
 // --- the real effects ---------------------------------------------------------------------------

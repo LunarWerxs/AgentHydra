@@ -239,37 +239,7 @@ async function login(params: Params, caller: ToolCaller): Promise<string> {
   const note = typeof params.note === 'string' ? params.note : undefined
   const { key, dir } = await profileLocation(name, caller.cwd)
 
-  if (params.verify === true) {
-    const scan = profileCookieScan(dir) ?? { hosts: [], sessionHosts: [] }
-    const hit = host
-      ? scan.sessionHosts.some((h) => h === host || h.endsWith(`.${host}`) || host.endsWith(`.${h}`))
-      : null
-    const now = new Date().toISOString()
-    const serves = mutateRegistry((reg: Json) => {
-      const entry = registryEntry(reg, key)
-      entry.hosts = scan.hosts
-      entry.sessionHosts = scan.sessionHosts
-      entry.hostsAt = safeMtime(cookieStorePath(dir))
-      if (hit && host) {
-        const prior = Array.isArray(entry.serves) ? (entry.serves as string[]) : []
-        entry.serves = [...new Set([...prior, host])]
-        entry.loginVerifiedAt = now
-      }
-      if (note !== undefined) applyNote(entry, note)
-      return Array.isArray(entry.serves) ? (entry.serves as string[]) : []
-    })
-    const verdict =
-      host === null
-        ? 'pass url so this can say WHICH site it verified.'
-        : hit
-          ? `'${name}' now holds cookies for ${host} - drive it with profile:'${name}' on any browser_* call. Cookie VALUES were never read.`
-          : `no cookies for ${host} in '${name}' yet - finish the sign-in in the window, then call verify again.`
-    return JSON.stringify(
-      { profile: name, verified: hit, host, hostCount: scan.hosts.length, serves, note: verdict },
-      null,
-      2,
-    )
-  }
+  if (params.verify === true) return verifyLogin(name, key, dir, host, note)
 
   const handed = await handOff(name, normalizeHandoffUrls(url ? [url] : []), true, caller.cwd)
   mutateRegistry((reg: Json) => {
@@ -279,6 +249,39 @@ async function login(params: Params, caller: ToolCaller): Promise<string> {
     if (note !== undefined) applyNote(entry, note)
   })
   return `${handed}\n\nSIGN IN IN THAT WINDOW${host ? ` (${host})` : ''}, then confirm it landed:\n  browser_profile_login { profile: "${name}"${url ? `, url: ${JSON.stringify(url)}` : ''}, verify: true }\nNothing is attached while you type - no debugger, so bot checks behave. After it verifies, every browser_* call with profile:"${name}" reuses this login, on this machine, for as long as the site's session lasts.`
+}
+
+/** Reads the profile's cookie store (host names only) and records whether the login landed on `host`. */
+function verifyLogin(name: string, key: string, dir: string, host: string | null, note: string | undefined): string {
+  const scan = profileCookieScan(dir) ?? { hosts: [], sessionHosts: [] }
+  const hit = host
+    ? scan.sessionHosts.some((h) => h === host || h.endsWith(`.${host}`) || host.endsWith(`.${h}`))
+    : null
+  const now = new Date().toISOString()
+  const serves = mutateRegistry((reg: Json) => {
+    const entry = registryEntry(reg, key)
+    entry.hosts = scan.hosts
+    entry.sessionHosts = scan.sessionHosts
+    entry.hostsAt = safeMtime(cookieStorePath(dir))
+    if (hit && host) {
+      const prior = Array.isArray(entry.serves) ? (entry.serves as string[]) : []
+      entry.serves = [...new Set([...prior, host])]
+      entry.loginVerifiedAt = now
+    }
+    if (note !== undefined) applyNote(entry, note)
+    return Array.isArray(entry.serves) ? (entry.serves as string[]) : []
+  })
+  const verdict =
+    host === null
+      ? 'pass url so this can say WHICH site it verified.'
+      : hit
+        ? `'${name}' now holds cookies for ${host} - drive it with profile:'${name}' on any browser_* call. Cookie VALUES were never read.`
+        : `no cookies for ${host} in '${name}' yet - finish the sign-in in the window, then call verify again.`
+  return JSON.stringify(
+    { profile: name, verified: hit, host, hostCount: scan.hosts.length, serves, note: verdict },
+    null,
+    2,
+  )
 }
 
 const HANDOFF_DESCRIPTION =

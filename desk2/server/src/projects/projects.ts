@@ -470,77 +470,25 @@ export class ProjectList {
   /** The grid's rows from Project Hydra's answer, the chosen folders, the chats and the Recent list, as known now. */
   private build(read: HydraRead | null, outside: OutsideChat[]): Grid {
     const rows = new Map<string, Row>()
-    const hydraRows: { key: string; prefix: string; row: Row }[] = []
-    for (const p of read?.projects ?? []) {
-      if (isRemotePath(p.path) || !isDir(p.path)) continue
-      const row = hydraRow(p)
-      const key = folderKey(p.path)
-      if (rows.has(key)) continue
-      rows.set(key, row)
-      hydraRows.push({ key, prefix: key + sep, row })
-    }
-    // The longest folder first, so a project nested in another one (a package in a monorepo) takes its own chats.
-    hydraRows.sort((a, b) => b.key.length - a.key.length)
-
+    const hydra = hydraEntries(read, rows)
     const choices = this.deps.choices?.() ?? { folders: [], roots: [], hidden: [] }
-    const newRow = (path: string): Row => ({ path, name: basename(path) || path, group: null, icon: null, hydraKey: null, sources: new Set(), lastChatAt: null, openChats: 0 })
-    const addFolder = (path: string, source: ProjectSource) => {
-      if (isRemotePath(path) || !isDir(path)) return
-      const key = folderKey(path)
-      let row = rows.get(key)
-      if (!row) {
-        row = newRow(resolve(path))
-        rows.set(key, row)
-      }
-      row.sources.add(source)
-    }
-    for (const folder of choices.folders) addFolder(folder, 'added')
-    for (const root of choices.roots) for (const folder of subfolders(root)) addFolder(folder, 'folder')
-    const spots = [...rows.keys()].map((key) => ({ key, prefix: key + sep }))
-
-    // A chat or Recent folder inside a Hydra project counts for that project; any other is its own row, as the
-    // checkout that holds it.
-    const temp = folderKey(this.deps.tempDir ?? tmpdir()) + sep
-    const usable = (dir: string) => !!dir && isAbsolute(dir) && !isRemotePath(dir) && !folderKey(dir).startsWith(temp)
-    const own = (dir: string): Row | null => {
-      if (!usable(dir)) return null
-      const key = folderKey(dir)
-      const hydra = hydraRows.find((h) => key === h.key || key.startsWith(h.prefix))
-      if (hydra) return hydra.row
-      if (!isDir(dir)) return null
-      const top = checkoutOf(dir)
-      const topKey = folderKey(top)
-      const inHydra = hydraRows.find((h) => topKey === h.key || topKey.startsWith(h.prefix))
-      if (inHydra) return inHydra.row
-      let row = rows.get(topKey)
-      if (!row) {
-        row = newRow(top)
-        rows.set(topKey, row)
-      }
-      return row
-    }
-    // A chat is placed by what it did when it started in a folder that holds projects, or in one that is in no
-    // project and no checkout; every other chat is its folder's.
-    const placeable = (dir: string): boolean => {
-      if (!usable(dir)) return false
-      const key = folderKey(dir)
-      if (spots.some((s) => s.key.startsWith(key + sep))) return true
-      if (spots.some((s) => key === s.key || key.startsWith(s.prefix))) return false
-      return isDir(dir) && !existsSync(join(checkoutOf(dir), '.git'))
-    }
-    const count = (row: Row | null, chat: Chat) => {
-      if (!row) return
-      row.sources.add('chats')
-      row.lastChatAt = Math.max(row.lastChatAt ?? 0, chat.at)
-      if (chat.open) row.openChats++
-    }
+    addChoices(rows, choices)
+    const places = placesOf(rows, hydra, folderKey(this.deps.tempDir ?? tmpdir()) + sep)
 
     const chats = this.chatsOf(outside)
     this.seen = new Set(chats.flatMap((c) => (c.sessionId ? [c.sessionId] : [])))
+    const { placing, placedAway } = this.placeChats(chats, rows, places)
+    for (const dir of this.deps.recent()) places.own(dir)?.sources.add('recent')
+    return { rows, choices, hydraPlaced: hydra.length, placing, placedAway }
+  }
+
+  /** A chat is placed by what it did when it started in a folder that holds projects, or in one that is in no project
+   *  and no checkout; every other chat is its folder's. */
+  private placeChats(chats: Chat[], rows: Map<string, Row>, places: Places): { placing: Promise<void>[]; placedAway: Grid['placedAway'] } {
     const toPlace: Chat[] = []
     for (const chat of chats) {
-      if (placeable(chat.cwd)) toPlace.push(chat)
-      else count(own(chat.cwd), chat)
+      if (places.placeable(chat.cwd)) toPlace.push(chat)
+      else countChat(places.own(chat.cwd), chat)
     }
     const placing: Promise<void>[] = []
     const placedAway: Grid['placedAway'] = []
@@ -550,12 +498,11 @@ export class ProjectList {
         const p = this.place(chat, rows, index)
         if (p.reading) placing.push(p.reading)
         const away = p.row && folderKey(p.row.path) !== folderKey(chat.cwd) ? p.row : null
-        count(away ?? own(chat.cwd), chat)
+        countChat(away ?? places.own(chat.cwd), chat)
         if (away && p.settled) placedAway.push({ chat, row: away })
       }
     }
-    for (const dir of this.deps.recent()) own(dir)?.sources.add('recent')
-    return { rows, choices, hydraPlaced: hydraRows.length, placing, placedAway }
+    return { placing, placedAway }
   }
 
   /** Files each chat placed away from its folder, open and in no group yet, into its project's sidebar group, once:
@@ -641,4 +588,93 @@ function hydraRow(p: HydraProject): Row {
     lastChatAt: null,
     openChats: 0,
   }
+}
+
+/** A Project Hydra project's row, under the folder it is in. */
+interface HydraEntry {
+  key: string
+  prefix: string
+  row: Row
+}
+
+/** Where a folder's chats go: the row that holds the folder, or whether a chat there is placed by what it did. */
+interface Places {
+  own(dir: string): Row | null
+  placeable(dir: string): boolean
+}
+
+function newRow(path: string): Row {
+  return { path, name: basename(path) || path, group: null, icon: null, hydraKey: null, sources: new Set(), lastChatAt: null, openChats: 0 }
+}
+
+/** One row per Project Hydra project folder that exists. The longest folder first, so a project nested in another one (a
+ *  package in a monorepo) takes its own chats. */
+function hydraEntries(read: HydraRead | null, rows: Map<string, Row>): HydraEntry[] {
+  const entries: HydraEntry[] = []
+  for (const p of read?.projects ?? []) {
+    if (isRemotePath(p.path) || !isDir(p.path)) continue
+    const row = hydraRow(p)
+    const key = folderKey(p.path)
+    if (rows.has(key)) continue
+    rows.set(key, row)
+    entries.push({ key, prefix: key + sep, row })
+  }
+  return entries.sort((a, b) => b.key.length - a.key.length)
+}
+
+/** The chosen folders, and the subfolders of the chosen roots, each a row with its source. */
+function addChoices(rows: Map<string, Row>, choices: ProjectChoices): void {
+  const addFolder = (path: string, source: ProjectSource) => {
+    if (isRemotePath(path) || !isDir(path)) return
+    const key = folderKey(path)
+    let row = rows.get(key)
+    if (!row) {
+      row = newRow(resolve(path))
+      rows.set(key, row)
+    }
+    row.sources.add(source)
+  }
+  for (const folder of choices.folders) addFolder(folder, 'added')
+  for (const root of choices.roots) for (const folder of subfolders(root)) addFolder(folder, 'folder')
+}
+
+/** The row a folder counts under: its Hydra project, else its checkout (made a row when new). `temp` is the temp folder's
+ *  key with its separator; a chat started there is in no row. */
+function placesOf(rows: Map<string, Row>, hydra: HydraEntry[], temp: string): Places {
+  const spots = [...rows.keys()].map((key) => ({ key, prefix: key + sep }))
+  const usable = (dir: string) => !!dir && isAbsolute(dir) && !isRemotePath(dir) && !folderKey(dir).startsWith(temp)
+  const hydraOf = (key: string) => hydra.find((h) => key === h.key || key.startsWith(h.prefix))
+  const own = (dir: string): Row | null => {
+    if (!usable(dir)) return null
+    const key = folderKey(dir)
+    const inHydra = hydraOf(key)
+    if (inHydra) return inHydra.row
+    if (!isDir(dir)) return null
+    const top = checkoutOf(dir)
+    const topKey = folderKey(top)
+    const inTop = hydraOf(topKey)
+    if (inTop) return inTop.row
+    let row = rows.get(topKey)
+    if (!row) {
+      row = newRow(top)
+      rows.set(topKey, row)
+    }
+    return row
+  }
+  const placeable = (dir: string): boolean => {
+    if (!usable(dir)) return false
+    const key = folderKey(dir)
+    if (spots.some((s) => s.key.startsWith(key + sep))) return true
+    if (spots.some((s) => key === s.key || key.startsWith(s.prefix))) return false
+    return isDir(dir) && !existsSync(join(checkoutOf(dir), '.git'))
+  }
+  return { own, placeable }
+}
+
+/** Counts a chat under its row: the row gains the chats source and the newest chat time, and an open chat counts. */
+function countChat(row: Row | null, chat: Chat): void {
+  if (!row) return
+  row.sources.add('chats')
+  row.lastChatAt = Math.max(row.lastChatAt ?? 0, chat.at)
+  if (chat.open) row.openChats++
 }
