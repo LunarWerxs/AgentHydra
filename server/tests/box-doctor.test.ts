@@ -26,7 +26,9 @@ function folder(name: string, files: Record<string, string>): string {
   return dir
 }
 
-describe('pathShimFindings', () => {
+// Batch shims, PATHEXT and the registry PATH are Windows facts: on POSIX the fixture's backslash
+// paths are not paths, so there is nothing to find.
+describe.skipIf(process.platform !== 'win32')('pathShimFindings', () => {
   test('flags a command whose first match on PATH is a shim fronting a native exe, and nothing PATH order or PATHEXT order already sends to an exe', () => {
     const npm = folder('npm', {
       'bun.cmd': NPM_NATIVE_SHIM('node_modules\\bun\\bin\\bun.exe'),
