@@ -362,3 +362,48 @@ describe('fail severity (owner, 2026-10-06: a whoopsie-daisy is not a catastroph
     expect(picked.reason).toContain('passed 2 of 6')
   })
 })
+
+describe('a task that deploys or deletes live things never runs on Haiku', () => {
+  const defaults: RunDefaults = {
+    auto: false,
+    model: null,
+    effort: null,
+    why: null,
+    ownerWords: null,
+    kind: null,
+    priority: 0,
+  }
+  const pick = (prompt: string, rows = scoreRows([]), n = 0) =>
+    runSetting({ prompt, cwd: '.', kind: 'code' }, defaults, rows, new Map([['code', n]]))
+
+  test("a deploy or delete prompt skips the Haiku trial and starts at the kind's non-Haiku pick", () => {
+    // No verdicts: an ordinary code task opens on Haiku medium (the trial)...
+    expect(pick('rename a helper in the parser')).toMatchObject({ model: HAIKU })
+    // ...but one that runs a CDK deploy and deletes stacks starts at code's non-Haiku start.
+    for (const prompt of [
+      'run cdk deploy for the api stack, then delete the old stack',
+      'Tear down the staging environment and destroy its resources',
+      'terraform apply in prod',
+      'drop the table users in the live database',
+    ])
+      expect(pick(prompt)).toMatchObject({ model: SONNET, effort: 'medium', auto: true })
+  })
+
+  test('the every-4th exploring pick is no way back to Haiku for such a task', () => {
+    // code's best rung is Sonnet medium with Sonnet low still learning (Haiku written off): an ordinary
+    // 4th pick explores down to Sonnet low; a live task stays on the best rung.
+    const sonnet = scoreRows([
+      ...haikuOut('code'),
+      ...times(3, () => task('code', v('pass', SONNET, 'medium'))),
+    ])
+    expect(pick('rename a helper', sonnet, 3)).toMatchObject({ model: SONNET, effort: 'low' })
+    expect(pick('cdk deploy the stack', sonnet, 3)).toMatchObject({
+      model: SONNET,
+      effort: 'medium',
+    })
+    // A trusted Haiku rung is not used for a live task either.
+    const haikuTrusted = scoreRows(times(3, () => task('code', v('pass', HAIKU, 'medium', 10_000))))
+    expect(pick('rename a helper', haikuTrusted)).toMatchObject({ model: HAIKU })
+    expect(pick('delete the production stack', haikuTrusted)).toMatchObject({ model: SONNET })
+  })
+})

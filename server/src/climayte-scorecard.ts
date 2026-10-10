@@ -377,6 +377,15 @@ export function pickedRung(kind: CliMayteKind, rows: ScoreRow[]): number {
   return haikuTrial(kind, rows, best) ?? best
 }
 
+/** A task's words say it deploys or deletes live things (a stack, a database, production): `text` is
+ *  the prompt and title. Deliberately wide: a false hit only costs a Sonnet start over a Haiku one, a
+ *  miss lets a cost experiment run destructive work (2026-10-09: a `code` task that ran a CDK deploy
+ *  and stack deletes was launched on Haiku to see if it could). */
+const LIVE_WORK =
+  /\b(?:deploy\w*|destroy\w*|tear(?:\s|-)?down|terraform\s+apply|cdk\s+(?:deploy|destroy)|kubectl\s+(?:delete|apply)|drop\s+(?:the\s+)?(?:table|database|schema)|(?:delete|remove|purge|wipe)\s+(?:the\s+|a\s+|all\s+|old\s+)*(?:\w+\s+)?(?:stacks?|buckets?|databases?|clusters?|instances?|production|prod|live|distributions?|tables?|users?|accounts?|domains?|servers?))\b/i
+
+export const touchesLiveThings = (text: string): boolean => LIVE_WORK.test(text)
+
 /** The setting for an auto task: a Haiku rung still learning on every pick while the best rung is
  *  above Haiku (haikuTrial); else the best rung, or on every EXPLORE_EVERY-th (EXPLORE_EVERY_ON_OPUS
  *  while the best rung is an Opus one) auto pick of the kind
@@ -385,7 +394,16 @@ export function pickConfig(
   kind: CliMayteKind,
   rows: ScoreRow[],
   autoIndex: number,
+  live = false,
 ): { config: CliMayteConfig; reason: string } {
+  if (live) {
+    // No Haiku trial and no exploring pick: the kind's best rung with Haiku out of the way.
+    const rung = Math.max(bestRungPastHaiku(kind, rows), HAIKU_RUNGS)
+    return {
+      config: CLIMAYTE_LADDER[rung]!,
+      reason: `${rungLabel(rung)}, never Haiku: the task deploys or deletes live things`,
+    }
+  }
   const best = bestRung(kind, rows)
   const trial = haikuTrial(kind, rows, best)
   if (trial !== null)

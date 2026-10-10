@@ -38,6 +38,7 @@ import {
   OPUS,
   pickConfig,
   scoreRows,
+  touchesLiveThings,
 } from './climayte-scorecard'
 import { getCliInstance } from './core/cli-instances'
 
@@ -278,9 +279,12 @@ export function runSetting(
   const k = kind ?? 'code'
   const held = heldSetting(t, { model, effort, kind, priority }, words, why, k, rows)
   if (held) return held
+  // A task that deploys or deletes live things is no sample for the scorecard's experiments: it
+  // neither takes the Haiku trial nor counts toward the kind's exploring pick.
+  const live = touchesLiveThings(`${t.title ?? ''}\n${t.prompt}`)
   const n = autoSoFar.get(k) ?? 0
-  autoSoFar.set(k, n + 1)
-  const pick = pickConfig(k, rows, n)
+  if (!live) autoSoFar.set(k, n + 1)
+  const pick = pickConfig(k, rows, n, live)
   const unexplained =
     model || effort
       ? ` (${[model, namedEffort].filter(Boolean).join(' ')} was named but not held: that takes the owner's words, or a modelWhy for a setting cheaper than the pick)`

@@ -1279,6 +1279,29 @@ export function keepReport(
   const message = w.message ?? w.prompt.split(/\r?\n/)[0]!.trim().slice(0, 200)
   return [...(w.reports ?? []), { at, message, results: w.results }].slice(-MAX_REPORTS)
 }
+/** The recap header a worker's report ends with (the climayte skill's three headers). */
+export const RECAP_HEADER = '## What I did'
+
+/** The turns a reader of the status sees: the current message's turns, and, when none of them holds
+ *  the recap but an earlier message's report does (a follow-up like "repeat your report" or a short
+ *  steer started a new `results`), the newest such earlier turn first, so the work's proof is not
+ *  replaced by the follow-up's reply. Unchanged when the current turns carry the recap, or no
+ *  earlier report does. */
+export function statusTurns(w: Pick<CliMayteWorker, 'result' | 'results' | 'reports'>): string[] {
+  const now = w.results?.length ? w.results : w.result ? [w.result] : []
+  if (now.some((t) => t.includes(RECAP_HEADER))) return now
+  for (const r of [...(w.reports ?? [])].reverse()) {
+    const turn = [...r.results].reverse().find((t) => t.includes(RECAP_HEADER))
+    if (turn)
+      return [
+        `[Earlier report, for: ${r.message}]
+${turn}`,
+        ...now,
+      ]
+  }
+  return now
+}
+
 export const RESULT_SEPARATOR = '\n\n---\n\n'
 
 /** `results` with `texts` appended, capped. A text equal to the last one is not repeated. */
@@ -2046,12 +2069,20 @@ export function ranSeconds(w: CliMayteWorker, now: number): number {
   )
 }
 
+/** `result` and `results` as the view shows them (statusTurns); nothing when they stay as stored. */
+function keptReport(w: CliMayteWorker): Pick<CliMayteWorker, 'result' | 'results'> | undefined {
+  const turns = statusTurns(w)
+  if (turns.length === (w.results?.length || (w.result ? 1 : 0))) return undefined
+  return { results: turns, result: joinResults(turns) }
+}
+
 export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
   return {
     ...w,
     prompt: w.prompt.slice(0, 300),
+    ...keptReport(w),
     waitUntil: w.status === 'waiting' ? (w.waitUntil ?? null) : undefined,
     account: ref ? (ref.num === null ? ref.name : `#${ref.num} ${ref.name}`) : null,
     // Working time, not time since it was created: hours spent waiting for an account, or a day
