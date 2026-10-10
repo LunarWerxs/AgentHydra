@@ -24,7 +24,7 @@ describe('tab ledger writer', () => {
 
   test('a row another writer put there survives an AgentHydra write', () => {
     const dir = tempDir('ledger-')
-    const other = { chat: 'session-connections', at: '2026-10-01T09:30:00.000Z' }
+    const other = { chat: 'session-connections', at: new Date().toISOString() }
     writeFileSync(join(dir, TABS_LEDGER), JSON.stringify({ v: 1, tabs: { 'TARGET-OTHER': other } }))
     ownPage(dir, 'TARGET-A', 'session-alpha')
     expect(rawLedger(dir).tabs['TARGET-OTHER']).toEqual(other)
@@ -33,8 +33,8 @@ describe('tab ledger writer', () => {
 
   test('dropping a page removes only its own row', () => {
     const dir = tempDir('ledger-')
-    const other = { chat: 'session-connections', at: '2026-10-01T09:30:00.000Z' }
-    writeFileSync(join(dir, TABS_LEDGER), JSON.stringify({ v: 1, tabs: { 'TARGET-OTHER': other, 'TARGET-A': { chat: 'session-alpha', at: '2026-10-02T00:00:00.000Z' } } }))
+    const other = { chat: 'session-connections', at: new Date().toISOString() }
+    writeFileSync(join(dir, TABS_LEDGER), JSON.stringify({ v: 1, tabs: { 'TARGET-OTHER': other, 'TARGET-A': { chat: 'session-alpha', at: new Date().toISOString() } } }))
     dropPage(dir, 'TARGET-A')
     expect(rawLedger(dir).tabs).toEqual({ 'TARGET-OTHER': other })
   })

@@ -42,7 +42,7 @@ const peer = (extra: Record<string, unknown> = {}) => ({
   health: null,
   cli: null,
   version: '1.0.0',
-  updated_at: '2026-01-01T00:00:00.000Z',
+  updated_at: new Date().toISOString(),
   ...extra,
 })
 
@@ -83,7 +83,8 @@ afterAll(() => {
 
 describe('the manifest AgentHydra publishes', () => {
   test('names the daemon, its health URL and its MCP endpoint', () => {
-    const m = selfManifest('http://127.0.0.1:7787/', new Date('2026-10-08T12:00:00Z'))
+    const at = new Date()
+    const m = selfManifest('http://127.0.0.1:7787/', at)
     expect(m).toMatchObject({
       schema: FAMILY_SCHEMA,
       name: 'agenthydra',
@@ -92,7 +93,7 @@ describe('the manifest AgentHydra publishes', () => {
       health: 'http://127.0.0.1:7787/api/health',
       cli: null,
       version: VERSION,
-      updated_at: '2026-10-08T12:00:00.000Z',
+      updated_at: at.toISOString(),
     })
     expect(m.ask_it_for.length).toBeGreaterThan(0)
     // The MCP path is repeated in hydra-family.ts so the stdio server loads no database.

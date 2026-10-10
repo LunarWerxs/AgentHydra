@@ -19,7 +19,7 @@ const newId = '66666666-7777-4888-8999-aaaaaaaaaaaa'
 const oldFolder = 'C:/Users/me/Projects/Alpha'
 // absolute on every platform (a C:/ path is not absolute on Linux, so validateCwd would refuse it as 400)
 const missingFolder = resolve(import.meta.dir, 'no-such-folder-for-desktop-move')
-const NOW = Date.parse('2026-10-09T12:00:00Z')
+const NOW = Date.now()
 const newFolder = import.meta.dir // an existing folder, so the real validateCwd accepts it
 
 const ARCHIVED = {
