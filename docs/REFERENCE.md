@@ -354,6 +354,31 @@ is reported down and the caller carries on.
 
 Both tools are read-only and answer without the daemon.
 
+### The box doctor
+
+`box_doctor {}` (read-only; `GET /api/box-doctor`) says what is wrong with this PC and, where
+Project Hydra is installed, with Project Hydra itself. It replaced Project Hydra's `ph doctor` on
+2026-10-10: Project Hydra only measures (`ph facts --json`, raw facts with no verdicts) and
+AgentHydra judges everything, so every machine gets the checks and they improve in one place.
+
+- **The machine** (`server/src/box-doctor*.ts`): a `.cmd` shim fronting a real exe on PATH, commit
+  memory running out, leaked console hosts, the orphan reaper not running, a process hoarding idle
+  children; the clock (the Windows Time service, one NTP sample an hour, Project Hydra's stamps: a
+  stopped or self-synced time service is a note, more than five minutes off a problem); and every
+  drive agents worked on in the last 30 days, plus Project Hydra's search roots, listed in a child
+  process so a dead drive cannot stall the daemon.
+- **Project Hydra** (`hydra:*` keys): registry against disk, missing archives, unregistered or
+  nested checkouts, old test scratch, scan folders, a stale sweep, the record and index, unread
+  instruments, Loki, the scheduled sweep, prerequisites and the pre-push hook. The facts are read at
+  most hourly; `GET` serves the last read, `POST /api/box-doctor/sync` reads them fresh. Without
+  Project Hydra these checks are skipped and the machine checks still run.
+- **Incidents.** Every 15 minutes a pass records each `problem` as an incident (scope `box-doctor`)
+  and resolves the ones that cleared. It resolves only what it actually checked (`checked` in the
+  answer: exact keys and `prefix:` families), so a section Project Hydra could not take, a search
+  walk that ran out of time or a drive that did not answer leaves its incidents open. Messages carry
+  no counts or ages (an incident's signature includes its text); those are in `detail`. Notes never
+  become incidents.
+
 ### Behavioural eval: can an agent reach the answer?
 
 `bun run eval:mcp` (`scripts/mcp-eval/`) checks the tools by USE, not by lint. It starts a frozen,
