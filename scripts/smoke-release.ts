@@ -215,7 +215,10 @@ try {
       : [orch, '-name', '__pycache__'],
     { encoding: 'utf8' },
   )
-  const pycache = isWin ? hasPycache.status === 1 : Boolean(hasPycache.stdout.trim())
+  // A probe that could not run (status null, stdout null since Bun 1.4.3) counts as found: fail closed.
+  const pycache =
+    hasPycache.error != null ||
+    (isWin ? hasPycache.status === 1 : Boolean((hasPycache.stdout ?? '').trim()))
   const state = existsSync(join(orch, 'state')) && readdirSync(join(orch, 'state')).length > 0
   check(
     existsSync(join(orch, 'orch.py')) &&
@@ -262,13 +265,14 @@ try {
   ).version
   const lv = spawnSync(exe, ['--version'], { encoding: 'utf8', env, windowsHide: true })
   check(
-    lv.status === 0 && lv.stdout.trim() === bundleVersion,
-    `launcher --version prints the bundle's version (${lv.stdout.trim()})`,
+    lv.status === 0 && (lv.stdout ?? '').trim() === bundleVersion,
+    `launcher --version prints the bundle's version (${(lv.stdout ?? '').trim()})`,
   )
   const eb = spawnSync(exe, ['--ensure-bun'], { encoding: 'utf8', env, windowsHide: true })
   check(
-    eb.status === 0 && resolve(eb.stdout.trim()).toLowerCase() === resolve(bun).toLowerCase(),
-    `launcher --ensure-bun prints the seeded bun (${eb.stdout.trim() || eb.stderr.trim()})`,
+    eb.status === 0 &&
+      resolve((eb.stdout ?? '').trim()).toLowerCase() === resolve(bun).toLowerCase(),
+    `launcher --ensure-bun prints the seeded bun (${(eb.stdout ?? '').trim() || (eb.stderr ?? '').trim() || eb.error?.message})`,
   )
   if (failed) throw new Error('the launcher did not report the seeded bundle')
   const daemonUrl = `http://127.0.0.1:${port}`

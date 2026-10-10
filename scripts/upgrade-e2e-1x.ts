@@ -223,7 +223,7 @@ function build113(): void {
     )
       throw new Error('compile failed')
     const v = spawnSync(exe, ['--version'], { encoding: 'utf8', windowsHide: true })
-    log(`1.13 exe --version: ${v.stdout.trim()}`)
+    log(`1.13 exe --version: ${(v.stdout ?? '').trim()}`)
     mkdirSync(join(stage, 'misc'), { recursive: true })
     for (const f of [
       'AgentHydra-Tray.exe',
@@ -613,9 +613,12 @@ function checkInstalled(): void {
   ]
   const missing = files.filter((f) => !existsSync(join(INSTALL, f)))
   check(
-    exeV.stdout.trim() === NEW_VERSION && missing.length === 0 && stamp === pin && pin === BUN_PIN,
+    (exeV.stdout ?? '').trim() === NEW_VERSION &&
+      missing.length === 0 &&
+      stamp === pin &&
+      pin === BUN_PIN,
     `(c) install holds the ${NEW_VERSION} launcher, app/, runtime/bun.exe + bun.version, desk2/`,
-    `--version=${exeV.stdout.trim()} missing=[${missing}] bun.version=${stamp} pin=${pin}`,
+    `--version=${(exeV.stdout ?? '').trim()} missing=[${missing}] bun.version=${stamp} pin=${pin}`,
   )
 }
 
@@ -701,7 +704,7 @@ function desk2Probe(env: Record<string, string>, base: string, port: number): vo
     `Desk 2 probe: status ${probe.status} signal ${probe.signal} err ${probe.error?.message ?? ''} stdout[${(probe.stdout ?? '').slice(-300)}] stderr[${(probe.stderr ?? '').slice(-600)}]`,
   )
   log(
-    `Desk 2 port ${port} listeners: ${spawnSync('powershell', ['-NoProfile', '-Command', `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess.ToString() + ' ' + $_.State }`], { encoding: 'utf8' }).stdout.trim() || 'none'}`,
+    `Desk 2 port ${port} listeners: ${spawnSync('powershell', ['-NoProfile', '-Command', `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess.ToString() + ' ' + $_.State }`], { encoding: 'utf8' }).stdout?.trim() || 'none'}`,
   )
   log(
     `procs under ROOT: ${procsUnderRoot()
@@ -876,7 +879,7 @@ async function scenario(label: string, ports: Ports, delayMs: number): Promise<v
 // ---- main ------------------------------------------------------------------------------------
 async function main(): Promise<void> {
   log(
-    `upgrade-e2e start; repo HEAD ${spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).stdout.trim()}`,
+    `upgrade-e2e start; repo HEAD ${spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).stdout?.trim() || 'unknown'}`,
   )
   build113()
   package2()
