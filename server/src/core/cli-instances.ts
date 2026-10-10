@@ -29,7 +29,6 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import { ownerClaudeDir } from '../climayte-core'
 import { syncOwnerClaude } from '../climayte-owner-sync'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
 import type { AccountPlacement, CliInstance, CliLimitResetResult, UsageSnapshot } from '../types'
@@ -48,6 +47,7 @@ import {
   launchOptionError,
   windowsTerminalArgv,
 } from './launch-options'
+import { ownerClaudeDir } from './owner-claude-dir'
 import { isPathInside } from './paths'
 import { type CMActionResult, prettyTier, resolvePlanLabel } from './shared'
 

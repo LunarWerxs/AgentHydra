@@ -18,7 +18,6 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { readdir as readdirAsync, readFile as readFileAsync } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { closeWorkerTabs } from './climayte-browser-tabs'
@@ -65,6 +64,7 @@ import { loginExpiryState } from './core/desktop-cli-renew'
 import { handsOnAgoMs } from './core/hands-on'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { mapPool } from './core/map-pool'
+import { setOwnerClaudeDir } from './core/owner-claude-dir'
 import { POINTER_DIR } from './instance'
 import type { KitStore } from './kit/store'
 import { liveSessionIds } from './live-registry'
@@ -497,14 +497,11 @@ export function setCliMayteClaudeCommand(argv: string[] | null): void {
   claudeCommand = argv ? () => argv : () => [resolveClaudeExe()]
 }
 
-/** Where the owner's global CLAUDE.md and skills live (`~/.claude`). Off under tests unless a test
- *  sets it, so a test run never links the real skills into a fixture. */
-export let ownerClaudeDir: string | null =
-  process.env.NODE_ENV === 'test' ? null : join(homedir(), '.claude')
+export { ownerClaudeDir } from './core/owner-claude-dir'
 
 /** Tests: sync the owner's CLAUDE.md and skills from `dir` before each launch. null turns it off. */
 export function setCliMayteOwnerDir(dir: string | null): void {
-  ownerClaudeDir = dir
+  setOwnerClaudeDir(dir)
 }
 
 /** Tests: supply the accounts. null restores the signed-in CLI instances. */
