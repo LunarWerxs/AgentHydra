@@ -900,6 +900,33 @@ Pro accounts, where tasks costing about a quarter of a window each could never a
   task waits and its row names them: "Waiting for an account nobody else is using: #14 (its
   desktop app used 3 min ago) ...".
 
+### The owner's priority and caps (`AccountPlacement`, owner, 2026-10-09)
+
+"Set certain accounts as priority ... This is priority, like, top, and then up to 50% of five-hour, 50%
+of week." The CLI table's row menu, **Priority and caps** (`desk2/hydra` `CliPlacementDialog.vue`), sets
+an account's `placement` in the instance store (`core/cli-instances.ts` `setCliInstancePlacement`,
+`POST /api/cli-instances/:id/placement`): a priority (2 Top, 1 High, 0 Normal, -1 Low) and a cap on
+each window (1-84; empty or 85 and over is the fleet's line).
+
+- **Priority** reorders only the accounts a task fits (`rankAccounts`: unread last, then fits, then
+  priority, then the score). A Top account never takes work it does not fit ahead of one it does, and
+  a chat still starts before every task.
+- **A cap is the account's own stop line** in place of 85 on that window: placement fits a task under
+  it (`fitPct`), no new work goes there at it (`accountIsNear` via `sessionStopPct` and
+  `accountWeekStopPct`; a cap is never raised to the near-reset 89), a session there is asked to hand
+  off at it (`windDownAt`), and one still working is stopped 5 points above it (`ceilingPct`, never
+  above 90; `atCeiling` returns the `line`, and the notice says "the ceiling of 45% its owner's cap
+  sets"). The live stops read the caps from the pool (`climayte-core.ts` `accountCaps`).
+- The nudge (`session-keepalive.ts`) takes the lower of its weekly floor and the account's weekly cap,
+  so it never starts a window on an account at its cap.
+- **Both PCs:** the queue snapshot carries every placement ever set (`prefs`), and a download adopts
+  each one newer than this PC's (`adoptCliInstancePlacements`; a plain setting never overwrites a
+  missing one). It needs queue sharing on and the other PC on a build that has it.
+- **Hydra Desk** reads the same fields (`AccountInfo.priority`, `maxFiveHourPct`, `maxWeeklyPct`): a
+  chat that runs out of usage moves to the highest-priority account under its line (`pickHealthy`,
+  `hasRoom`).
+- A person's own chats on the account are not limited: the cap is where AgentHydra stops sending work.
+
 ### The five-minute rule (owner, 2026-10-03)
 
 "When a worker hits a five-hour or weekly limit, CliMayte moves it to another account and resumes

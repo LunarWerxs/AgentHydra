@@ -15,6 +15,7 @@ import {
   pruneCliInstanceAccountAssociations,
   renameCliInstance,
   setCliInstanceLimitReset,
+  setCliInstancePlacement,
   setCliInstanceUsage,
 } from '../core/cli-instances'
 import { runCliLimitReset } from '../core/cli-limit-reset'
@@ -738,6 +739,11 @@ app.post('/api/cli-instances/:id/rename', async (c) => {
   if (typeof body.name !== 'string') return c.json({ error: 'name is required' }, 400)
   return c.json(renameCliInstance(c.req.param('id'), body.name))
 })
+// The account's priority and caps for AgentHydra's work (AccountPlacement): { priority, maxSessionPct,
+// maxWeekPct }, a cap null or 85+ for the fleet's line.
+app.post('/api/cli-instances/:id/placement', async (c) =>
+  c.json(setCliInstancePlacement(c.req.param('id'), await jsonBody(c))),
+)
 app.post('/api/cli-instances/:id/associate', async (c) => {
   const body = await jsonBody(c)
   const accountId = typeof body.accountId === 'string' && body.accountId ? body.accountId : null

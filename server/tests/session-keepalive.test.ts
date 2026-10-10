@@ -152,6 +152,8 @@ describe('runKeepaliveSweep', () => {
     target('idle-1', 'desktop:a'),
     target('running-1', 'desktop:b'),
     target('spent-1', 'desktop:c'),
+    // Weekly at 10%, at its owner's cap of 10 (AccountPlacement.maxWeekPct), under the floor.
+    { ...target('capped-1', 'desktop:a'), weekCapPct: 10 },
   ]
   /** A fresh in-memory record store per sweep, so one test's nudge never holds off another's. */
   const memory = (): NudgeStore => {
@@ -212,6 +214,7 @@ describe('runKeepaliveSweep', () => {
     expect(r.nudged).toEqual(['idle-1'])
     expect(r.skipped['running-1']).toContain('already running')
     expect(r.skipped['spent-1']).toContain('floor')
+    expect(r.skipped['capped-1']).toContain('at or above the 10% floor')
   })
 
   test('a nudge that did not start the window is NOT reported as a success', async () => {

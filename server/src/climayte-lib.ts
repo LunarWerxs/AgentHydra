@@ -14,7 +14,7 @@ import { type CliMayteEta, ETA_INSTRUCTION, stripReview } from './climayte-eta'
 import { type CliMayteOrigin, verdictCoversNewestWork } from './climayte-ping'
 import {
   type CliMaytePlacement,
-  FIT_PCT,
+  fitPct,
   PACE_BAND,
   paceGap,
   projectedPct,
@@ -84,7 +84,14 @@ export interface CliMayteAttempt {
    *  is 'quota' or 'handoff' for what follows; it is not a limit hit. `onArrival`: its first reading
    *  was already past the ceiling (pastOnArrival), so it was placed on a stale or missing reading
    *  and did no work; absent on stops recorded before 2026-10-02 until the load backfills it. */
-  ceiling?: { pct: number; week: boolean; resetsAt: number | null; onArrival?: boolean }
+  ceiling?: {
+    pct: number
+    week: boolean
+    resetsAt: number | null
+    onArrival?: boolean
+    /** The ceiling it was stopped at when the owner's cap set one under CEILING_PCT (ceilingPct). */
+    line?: number
+  }
   /** Asked to hand off to `path`. `pct`: the usage reading that called for it; null on request, and
    *  null with `reason: 'context'` when its conversation's size did (CONTEXT_HANDOFF_TOKENS). */
   windDown?: { at: number; pct: number | null; path: string; reason?: 'context' }
@@ -365,7 +372,17 @@ export interface CliMayteAccount {
    *  sessions that are not CliMayte's run in its folder. */
   handsOnAgoMs?: number | null
   otherSessions?: number
+  /** The owner's priority for it (AccountPlacement): new work goes to a higher one first among the
+   *  accounts it fits (rankAccounts). Absent: 0, Normal. */
+  priority?: number
+  /** The owner's caps for it (AccountPlacement): its stop lines in place of the fleet's
+   *  (sessionStopPct, accountWeekStopPct, ceilingPct). Absent or null: the fleet's. */
+  maxSessionPct?: number | null
+  maxWeekPct?: number | null
 }
+
+/** The owner's caps on one account (CliMayteAccount maxSessionPct / maxWeekPct). */
+export type AccountCaps = Pick<CliMayteAccount, 'maxSessionPct' | 'maxWeekPct'>
 
 /** Someone else's account right now (owner, 2026-10-02: CliMayte must not "step on the toes of
  *  other accounts running"): a person used its desktop app in the last ten minutes, or Claude
@@ -702,6 +719,31 @@ export function weekStopPct(weekResetsAt: number | null | undefined, now: number
     : WIND_DOWN_WEEK_PCT
 }
 
+/** How far above an owner's cap a session still working is stopped: the fleet's own gap, 85 to 90. */
+const CAP_CEILING_GAP = CEILING_PCT - WIND_DOWN_SESSION_PCT
+
+/** One account's 5-hour stop line: the owner's cap for it (AccountPlacement), never above the fleet's. */
+export function sessionStopPct(caps: AccountCaps | null | undefined): number {
+  return Math.min(WIND_DOWN_SESSION_PCT, caps?.maxSessionPct ?? WIND_DOWN_SESSION_PCT)
+}
+
+/** One account's weekly stop line: the owner's cap for it, else the fleet's (weekStopPct, 89 near a
+ *  reset). A cap is the owner's own number, so it does not move near the reset. */
+export function accountWeekStopPct(
+  caps: AccountCaps | null | undefined,
+  weekResetsAt: number | null | undefined,
+  now: number,
+): number {
+  const fleet = weekStopPct(weekResetsAt, now)
+  return caps?.maxWeekPct != null ? Math.min(caps.maxWeekPct, fleet) : fleet
+}
+
+/** The ceiling over one window with an owner's cap `cap` on it: CAP_CEILING_GAP above the cap, never
+ *  above CEILING_PCT; CEILING_PCT with none. */
+function ceilingPct(cap: number | null | undefined): number {
+  return cap == null ? CEILING_PCT : Math.min(CEILING_PCT, cap + CAP_CEILING_GAP)
+}
+
 /** The reading a running session is judged by: its own stream's, or the account's newest from any
  *  of its workers when that is newer and its 5-hour window has not reset. A session's own stream
  *  says nothing while it sits in a long tool call. 2026-10-01 on #102: three workers saw 85% at
@@ -718,17 +760,22 @@ export function sessionReading(
 }
 
 /** Where a reading has reached CEILING_PCT, if it has: the 5-hour window first. `account` and
- *  `now`: the account's newest reading from any worker (sessionReading). */
+ *  `now`: the account's newest reading from any worker (sessionReading). `caps`: the owner's caps on
+ *  the account, which lower its ceiling (ceilingPct); `line` says where one did. */
 export function atCeiling(
   own: CliMayteLiveUsage | null,
   account: CliMayteLiveUsage | null = null,
   now = Date.now(),
-): { pct: number; week: boolean; resetsAt: number | null } | null {
+  caps: AccountCaps | null = null,
+): { pct: number; week: boolean; resetsAt: number | null; line?: number } | null {
   const live = sessionReading(own, account, now)
-  if (live?.sessionPct != null && live.sessionPct >= CEILING_PCT)
-    return { pct: live.sessionPct, week: false, resetsAt: live.sessionResetsAt }
-  if (live?.weekPct != null && live.weekPct >= CEILING_PCT)
-    return { pct: live.weekPct, week: true, resetsAt: live.weekResetsAt }
+  const at = (line: number) => (line < CEILING_PCT ? { line } : {})
+  const session = ceilingPct(caps?.maxSessionPct)
+  if (live?.sessionPct != null && live.sessionPct >= session)
+    return { pct: live.sessionPct, week: false, resetsAt: live.sessionResetsAt, ...at(session) }
+  const week = ceilingPct(caps?.maxWeekPct)
+  if (live?.weekPct != null && live.weekPct >= week)
+    return { pct: live.weekPct, week: true, resetsAt: live.weekResetsAt, ...at(week) }
   return null
 }
 
@@ -738,17 +785,29 @@ export function atCeiling(
  *  too late. 2026-10-02: #120 had no reading and its first request was refused at 129%; #118 was
  *  placed at 82%, a reading half an hour old, and read 95%; #119 at 79% read 100%. All three were
  *  counted as ceiling stops and as CliMayte's peaks. */
-export function pastOnArrival(first: CliMayteLiveUsage | null, c: { week: boolean }): boolean {
+export function pastOnArrival(
+  first: CliMayteLiveUsage | null,
+  c: { week: boolean; line?: number },
+): boolean {
   const pct = c.week ? first?.weekPct : first?.sessionPct
-  return pct != null && pct >= CEILING_PCT
+  return pct != null && pct >= (c.line ?? CEILING_PCT)
 }
 
 /** What a turn stopped at the ceiling says (its attempt's notice, the account's wall). */
-export const ceilingNotice = (c: { pct: number; week: boolean; onArrival?: boolean }): string => {
+export const ceilingNotice = (c: {
+  pct: number
+  week: boolean
+  onArrival?: boolean
+  line?: number
+}): string => {
   const window = `${Math.round(c.pct)}% of its ${c.week ? 'weekly' : '5-hour'} usage`
+  const ceiling =
+    c.line == null
+      ? `CliMayte's ceiling of ${CEILING_PCT}%`
+      : `the ceiling of ${c.line}% its owner's cap sets`
   if (c.onArrival)
-    return `Found at ${window} on its first request, past CliMayte's ceiling of ${CEILING_PCT}%: the reading it was placed on was old or missing. The account rests until that window resets.`
-  return `Stopped at ${window}, CliMayte's ceiling of ${CEILING_PCT}%${c.pct < 100 ? ', well short of the limit' : ''}. The account rests until that window resets.`
+    return `Found at ${window} on its first request, past ${ceiling}: the reading it was placed on was old or missing. The account rests until that window resets.`
+  return `Stopped at ${window}, ${ceiling}${c.pct < 100 ? ', well short of the limit' : ''}. The account rests until that window resets.`
 }
 
 /** A usage reading older than this may be far behind the account: it can be in use outside
@@ -820,17 +879,19 @@ export type WindDownWhy =
   | { reason: 'request' }
 
 /** What calls for a wind-down now, or null: a usage window at its stop line first, then the
- *  conversation's size (`ctx`: contextTokens). `account` and `now` as for atCeiling. */
+ *  conversation's size (`ctx`: contextTokens). `account`, `now` and `caps` as for atCeiling: an
+ *  owner's cap is the account's stop line (sessionStopPct, accountWeekStopPct). */
 export function windDownAt(
   own: CliMayteLiveUsage | null,
   account: CliMayteLiveUsage | null = null,
   now = Date.now(),
   ctx: number | null = null,
+  caps: AccountCaps | null = null,
 ): WindDownWhy | null {
   const live = sessionReading(own, account, now)
-  if (live?.sessionPct != null && live.sessionPct >= WIND_DOWN_SESSION_PCT)
+  if (live?.sessionPct != null && live.sessionPct >= sessionStopPct(caps))
     return { reason: 'usage', pct: live.sessionPct, week: false }
-  if (live?.weekPct != null && live.weekPct >= weekStopPct(live.weekResetsAt, now))
+  if (live?.weekPct != null && live.weekPct >= accountWeekStopPct(caps, live.weekResetsAt, now))
     return { reason: 'usage', pct: live.weekPct, week: true }
   if (ctx !== null && ctx >= CONTEXT_HANDOFF_TOKENS) return { reason: 'context', tokens: ctx }
   return null
@@ -1489,7 +1550,7 @@ function placedRank(
     placement.expected,
     placement.finishedSince?.get(a.id) ?? 0,
   )
-  if (projected > FIT_PCT) return [300 + projected, projected]
+  if (projected > fitPct(a)) return [NO_FIT_SCORE + projected, projected]
   if (chat) return [0, -chatRoom(a, projected, now)]
   const gap = paceGap(a, now) ?? 0
   return [gap > PACE_BAND ? 100 + gap : gap, projected]
@@ -1501,8 +1562,8 @@ function placedRank(
  *  down there minutes later (owner, 2026-10-05: "My chat should be prioritized in like a 20x account.
  *  Not one that has to change every 10 seconds"). */
 function chatRoom(a: CliMayteAccount, projected: number, now: number): number {
-  const week = weekStopPct(a.weekResetsAt, now) - (a.weekPct ?? 50)
-  return Math.max(0, Math.min(FIT_PCT - projected, week)) * (a.planFactor ?? 1)
+  const week = accountWeekStopPct(a, a.weekResetsAt, now) - (a.weekPct ?? 50)
+  return Math.max(0, Math.min(fitPct(a) - projected, week)) * (a.planFactor ?? 1)
 }
 
 /** The best account for the worker (rankAccounts' first), or null when none takes it now. */
@@ -1539,13 +1600,18 @@ function accountIsFull(a: CliMayteAccount): boolean {
   )
 }
 
-/** An account past the wind-down line (WIND_DOWN_SESSION_PCT, weekStopPct). */
+/** An account past its wind-down line (sessionStopPct, accountWeekStopPct: the owner's caps or the
+ *  fleet's lines). */
 function accountIsNear(a: CliMayteAccount, now: number): boolean {
   return (
-    (a.sessionPct !== null && a.sessionPct >= WIND_DOWN_SESSION_PCT) ||
-    (a.weekPct !== null && a.weekPct >= weekStopPct(a.weekResetsAt, now))
+    (a.sessionPct !== null && a.sessionPct >= sessionStopPct(a)) ||
+    (a.weekPct !== null && a.weekPct >= accountWeekStopPct(a, a.weekResetsAt, now))
   )
 }
+
+/** A score at or above this in rankAccounts is an account the task does not fit (placedRank) or one
+ *  near its line, full, or the one it just failed on (rankPenalty): below every account it fits. */
+const NO_FIT_SCORE = 300
 
 /** What rankAccounts adds to an account's score for being full, near the line, the one a handoff
  *  left, or the one a last attempt failed on. */
@@ -1557,7 +1623,7 @@ function rankPenalty(
 ): number {
   return (
     (accountIsFull(a) ? 500 : 0) +
-    (accountIsNear(a, now) ? 300 : 0) +
+    (accountIsNear(a, now) ? NO_FIT_SCORE : 0) +
     (a.id === nudgedFrom ? 100 : 0) +
     (a.id === failedId ? 1000 : 0)
   )
@@ -1600,11 +1666,12 @@ interface RankInputs {
   ids: LastAttemptIds
 }
 
-/** An account at CliMayte's ceiling (CEILING_PCT) on either window. */
+/** An account at its ceiling (CEILING_PCT, or lower under the owner's cap: ceilingPct) on either
+ *  window. */
 function accountAtCeiling(a: CliMayteAccount): boolean {
   return (
-    (a.sessionPct !== null && a.sessionPct >= CEILING_PCT) ||
-    (a.weekPct !== null && a.weekPct >= CEILING_PCT)
+    (a.sessionPct !== null && a.sessionPct >= ceilingPct(a.maxSessionPct)) ||
+    (a.weekPct !== null && a.weekPct >= ceilingPct(a.maxWeekPct))
   )
 }
 
@@ -1705,11 +1772,22 @@ export function rankAccounts(
     a.sessionPct === null && a.weekPct === null ? 1 : 0
   const scored = eligible.map((a) => {
     const [base, tie] = placement ? placedRank(a, placement, now, worker.chat === true) : flat(a)
-    const score = base + rankPenalty(a, nudgedFrom, failedId, now)
-    return { a, score, tie, unread: unread(a) }
+    const penalty = rankPenalty(a, nudgedFrom, failedId, now)
+    // The owner's priority (owner, 2026-10-09: "set certain accounts as priority") orders the
+    // accounts the task fits that are not past their line, full or just failed on, ahead of the score;
+    // it never lifts one the task does not fit above one it does.
+    const fits = penalty < NO_FIT_SCORE && (!placement || base < NO_FIT_SCORE)
+    return { a, score: base + penalty, tie, unread: unread(a), fits: fits ? 0 : 1 }
   })
+  const priority = (a: CliMayteAccount): number => a.priority ?? 0
   scored.sort(
-    (x, y) => x.unread - y.unread || x.score - y.score || x.tie - y.tie || byNum(x.a) - byNum(y.a),
+    (x, y) =>
+      x.unread - y.unread ||
+      x.fits - y.fits ||
+      priority(y.a) - priority(x.a) ||
+      x.score - y.score ||
+      x.tie - y.tie ||
+      byNum(x.a) - byNum(y.a),
   )
   return scored.map((s) => s.a)
 }

@@ -204,6 +204,29 @@ describe('which account a task starts on', () => {
     expect(rank([fullBehind, ahead, behind])).toEqual(['behind', 'ahead', 'full-behind'])
   })
 
+  test("the owner's priority comes first among the accounts a task fits, and the account's cap is its line", () => {
+    // Owner, 2026-10-09: "This is priority, like, top, and then up to 50% of five-hour, 50% of week."
+    const placement = { expected: 4.6, running: new Map() }
+    const none = new Map<string, number>()
+    const rank = (accounts: CliMayteAccount[]) =>
+      rankAccounts(worker(), accounts, {}, none, 2, now, none, false, placement).map((a) => a.id)
+    // Without its priority the Top account would come second: ahead of its weekly pace, and fuller.
+    const plain = acct('plain', 1, 0, 10, weekAt(60))
+    const top = acct('top', 2, 40, 30, {
+      priority: 2,
+      maxSessionPct: 50,
+      maxWeekPct: 50,
+      ...weekAt(20),
+    })
+    expect(rank([plain, top])).toEqual(['top', 'plain'])
+    // At 46% the task would end past its 50% cap: it does not fit there, so the plain account comes first.
+    expect(rank([plain, { ...top, sessionPct: 46 }])).toEqual(['plain', 'top'])
+    // At its cap on either window it takes no new work, though the fleet's line is 85.
+    expect(pickAccount(worker(), [top], {}, none, 2, now)?.id).toBe('top')
+    expect(pickAccount(worker(), [{ ...top, sessionPct: 50 }], {}, none, 2, now)).toBeNull()
+    expect(pickAccount(worker(), [{ ...top, weekPct: 50 }], {}, none, 2, now)).toBeNull()
+  })
+
   test('with no cap from the dispatcher, a group gets 2 workers per Pro window of the account', () => {
     // 2026-10-02 04:36: the Max 5x #103 ran 2 tasks at a time, like each Pro, while 24 waited.
     const two = (id: string) => new Map([[id, 2]])

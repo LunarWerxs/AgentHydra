@@ -1431,6 +1431,22 @@ export interface AccountTokens {
   total: TokenParts
 }
 
+/** The owner's say over how much of AgentHydra's work one account gets (owner, 2026-10-09: "set certain
+ *  accounts as priority ... This is priority, like, top, and then up to 50% of five-hour, 50% of week").
+ *  Set from the CLI table (core/cli-instances.ts setCliInstancePlacement), shared with the other PCs in
+ *  the CliMayte queue snapshot (the newer `updatedAt` wins). */
+export interface AccountPlacement {
+  /** New work goes to a higher one first, among the accounts it fits: 2 Top, 1 High, 0 Normal, -1 Low. */
+  priority: number
+  /** This account's stop line on each window in place of the fleet's 85% (1-84): no new work at it,
+   *  a session there hands off at it, and one still working is stopped CAP_CEILING_GAP above it. Null:
+   *  the fleet's line. */
+  maxSessionPct: number | null
+  maxWeekPct: number | null
+  /** When it was set (epoch ms). */
+  updatedAt: number
+}
+
 /** A CLI instance: a `CLAUDE_CONFIG_DIR` associated with an account, logged in once. */
 export interface CliInstance {
   /** Permanent short handle (`#7`), shared with desktop + Codex instances in one sequence. See
@@ -1474,6 +1490,8 @@ export interface CliInstance {
   /** What the CLI said the last time its `/limit-reset` was run from AgentHydra (core/cli-limit-reset.ts).
    *  Undefined until then. The only honest reading there is: the usage endpoint will not say. */
   lastLimitReset?: CliLimitResetResult | null
+  /** The owner's priority and caps for this account (AccountPlacement). Absent: Normal, the fleet's line. */
+  placement?: AccountPlacement
   /** The last nudge the keepalive sent this account (session-keepalive.ts). Set by GET
    *  /api/cli-instances only; null when it was never nudged. */
   lastNudge?: CliNudgeRecord | null

@@ -28,7 +28,7 @@ import {
   isWalledNow,
   toView,
 } from './climayte-lib'
-import { FIT_PCT, projectedPct, sizeTask } from './climayte-placement'
+import { fitPct, projectedPct, sizeTask } from './climayte-placement'
 import {
   bestRung,
   type CliMayteKind,
@@ -510,7 +510,7 @@ export function sizeTasks(
       a,
       room: Math.max(
         0,
-        (FIT_PCT - projectedPct(a, running.get(a.id) ?? [], 0, finishedSince.get(a.id) ?? 0)) *
+        (fitPct(a) - projectedPct(a, running.get(a.id) ?? [], 0, finishedSince.get(a.id) ?? 0)) *
           (a.planFactor ?? 1),
       ),
     }))

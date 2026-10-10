@@ -167,6 +167,9 @@ export interface KeepaliveTarget {
   usageKey: string
   /** See KeepaliveContext.blocked. */
   blocked?: string | null
+  /** The owner's weekly cap for the account (its placement's maxWeekPct), where set: the floor is the lower of the
+   *  two, since work never goes past the cap and a window started there would only spend. */
+  weekCapPct?: number | null
 }
 
 /** What a nudge did. `started` is judged by a reading after it, never by "the command exited 0". */
@@ -410,7 +413,8 @@ export async function runKeepaliveSweep(deps: {
 
   for (const t of deps.targets) {
     out.considered++
-    const decision = decideKeepalive(read(t.usageKey), deps.weeklyFloorPct, {
+    const floor = Math.min(deps.weeklyFloorPct, t.weekCapPct ?? deps.weeklyFloorPct)
+    const decision = decideKeepalive(read(t.usageKey), floor, {
       blocked: t.blocked,
       last: records[t.id] ?? null,
     })

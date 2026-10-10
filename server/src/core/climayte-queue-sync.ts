@@ -48,6 +48,7 @@ import {
   remoteVersion,
   setRemote,
 } from '../climayte-remote'
+import { adoptCliInstancePlacements, cliInstancePlacements } from './cli-instances'
 import { MIRROR_FRESH_MS, type StoreMirror } from './login-sync-mirror'
 import { ownBuild } from './own-build'
 
@@ -270,7 +271,16 @@ export function buildSnapshot(pc: string, name: string, now = Date.now()): Queue
   const live: Record<string, RemoteLive> = {}
   for (const [id, r] of liveByAccount)
     live[id] = { sessionPct: r.sessionPct, weekPct: r.weekPct, at: r.at }
-  return { pc, name, at: now, workers: list, live, build: ownBuild(), jobs: [...swarmJobs] }
+  return {
+    pc,
+    name,
+    at: now,
+    workers: list,
+    live,
+    build: ownBuild(),
+    jobs: [...swarmJobs],
+    prefs: cliInstancePlacements(),
+  }
 }
 
 /** Marks the zstd format: `Z2:` then base64 of iv (12 bytes), GCM tag (16) and the encrypted zstd JSON.
@@ -410,6 +420,8 @@ const byId = (workers: QueueSnapshot['workers']): QueueSnapshot['workers'] =>
 /** What a reader of the list sees change: a change here uploads at once and counts as news. */
 const shapePrint = (snap: QueueSnapshot): string =>
   hash([
+    // A priority or cap set on one PC is news at once (AccountPlacement).
+    Object.entries(snap.prefs ?? {}).sort(([a], [b]) => a.localeCompare(b)),
     (snap.jobs ?? []).map((j) => [j.id, j.label, j.state, j.finished, j.callerSessionId, j.folder]),
     byId(snap.workers).map((w) => [
       w.id,
@@ -571,6 +583,7 @@ export async function syncQueueDetail(
       const { snap, version } = await downloadQueue(io, row)
       if (remoteNews(snap)) moved = true
       setRemote(snap, version)
+      adoptCliInstancePlacements(snap.prefs)
     } catch (err) {
       problem ??= err instanceof Error ? err : new Error(String(err))
     }

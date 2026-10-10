@@ -24,6 +24,12 @@ import { modelMultiplier } from './usage-tokens'
  *  85/90%"). It was 95, which started tasks that the line then stopped partway. */
 export const FIT_PCT = 85
 
+/** FIT_PCT on one account: the owner's 5-hour cap for it when it has one (AccountPlacement), which is
+ *  that account's stop line. */
+export function fitPct(a: { maxSessionPct?: number | null }): number {
+  return Math.min(FIT_PCT, a.maxSessionPct ?? FIT_PCT)
+}
+
 /** A task's cost with nothing on record, in % of a Pro 5-hour window. Run 1: code on Opus high
  *  26.6% a task, a sweep on Opus high 35.9%, mechanical on Sonnet medium 0.8%. */
 export const DEFAULT_TASK_PCT = 25
@@ -234,7 +240,13 @@ export const PACE_BAND = 5
  *  5-hour reset, or the end of its limit wall when `walled`) and the work running there now. */
 export type CooldownTarget = Pick<
   CliMayteAccount,
-  'id' | 'sessionPct' | 'sessionResetsAt' | 'planFactor' | 'weekPct' | 'weekResetsAt'
+  | 'id'
+  | 'sessionPct'
+  | 'sessionResetsAt'
+  | 'planFactor'
+  | 'weekPct'
+  | 'weekResetsAt'
+  | 'maxSessionPct'
 > & {
   running?: RunningLoad[]
   finishedSince?: number
@@ -272,7 +284,7 @@ export function waitsForCooldown(
   const gap = paceGap(chosen, now)
   if (gap === null || gap <= PACE_BAND) return null
   const fitsNow = (a: CooldownTarget): boolean =>
-    !a.walled && projectedPct(a, a.running ?? [], expected, a.finishedSince ?? 0) <= FIT_PCT
+    !a.walled && projectedPct(a, a.running ?? [], expected, a.finishedSince ?? 0) <= fitPct(a)
   const resets = others
     .filter(
       (a) =>
@@ -280,7 +292,7 @@ export function waitsForCooldown(
         !!a.sessionResetsAt &&
         a.sessionResetsAt > now &&
         a.sessionResetsAt - now <= RESUME_WAIT_MS &&
-        expected / (a.planFactor ?? 1) <= FIT_PCT &&
+        expected / (a.planFactor ?? 1) <= fitPct(a) &&
         !fitsNow(a) &&
         (paceGap(a, now) ?? 0) <= gap - PACE_BAND,
     )
@@ -306,7 +318,7 @@ export function waitsForHome(freesAt: number | null, now: number, priority: numb
  *  short, and neither does a task no window fits (run as a whole on the owner's say), which goes
  *  where the projection is lowest. */
 export function fallsShort(
-  chosen: Pick<CliMayteAccount, 'id' | 'sessionPct'> & { planFactor?: number },
+  chosen: Pick<CliMayteAccount, 'id' | 'sessionPct' | 'maxSessionPct'> & { planFactor?: number },
   placement: CliMaytePlacement,
   allowedFactors: number[],
   home: boolean,
@@ -318,7 +330,7 @@ export function fallsShort(
     placement.expected,
     placement.finishedSince?.get(chosen.id) ?? 0,
   )
-  return projected > FIT_PCT && allowedFactors.some((f) => placement.expected / f <= FIT_PCT)
+  return projected > fitPct(chosen) && allowedFactors.some((f) => placement.expected / f <= FIT_PCT)
 }
 
 /** Hold a task rather than start it on `chosen` when it falls short there (fallsShort) and an

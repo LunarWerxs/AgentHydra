@@ -8,6 +8,7 @@
 // Account ids are the same on both PCs: login sync keeps a CLI instance under one id.
 
 import type { CliMayteLiveUsage } from './climayte-lib'
+import type { AccountPlacement } from './types'
 
 /** A PC not seen for this long is stale: it is off, or not syncing. Seen is the newer of its snapshot's
  *  `at` and when the store's Worker last saw it poll the changes feed (x-seen, noteSeen). A live PC
@@ -110,6 +111,10 @@ export interface QueueSnapshot {
   /** This PC's HSwarm jobs: every running one and the newest finished. Absent from an older
    *  AgentHydra's snapshot (read as none). */
   jobs?: RemoteSwarmJob[]
+  /** The owner's priority and caps per account id (AccountPlacement), as that PC holds them; the newer
+   *  `updatedAt` wins on every PC (core/cli-instances.ts adoptCliInstancePlacements). Absent from an
+   *  older AgentHydra's snapshot. */
+  prefs?: Record<string, AccountPlacement>
 }
 
 /** A PC whose commit is older than this one's by more than this reads as behind. */

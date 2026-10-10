@@ -8,6 +8,7 @@
 import { mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  accountCaps,
   acctLabel,
   changed,
   freshRead,
@@ -582,7 +583,7 @@ export function stopAtCeilingOrOverage(
   // line the same way (pickAccount's allowFull).
   // Both lines go by the account's newest reading from any of its workers (sessionReading).
   if (watching && !at.ceiling && !at.overage && !overageAllowed()) {
-    const c = atCeiling(r.live, accountLive, now)
+    const c = atCeiling(r.live, accountLive, now, accountCaps(at.account.id))
     if (c) stopAtCeiling(w, at, { ...c, onArrival: pastOnArrival(r.firstLive, c) }, running)
   }
   if (at.overage || at.ceiling || overageAllowed()) return
@@ -614,7 +615,13 @@ export function stopWindDown(
   // requests, outcome quota.
   // A sealed worker has no Write tool for a handoff: it stops at the ceiling and its session moves.
   if (!watching || at.windDown || at.overage || at.ceiling || w.sealed) return
-  const why = windDownAt(r.live, accountLive, now, contextTokens(r.events))
+  const why = windDownAt(
+    r.live,
+    accountLive,
+    now,
+    contextTokens(r.events),
+    accountCaps(at.account.id),
+  )
   if (why) signalWindDown(w, at, why)
 }
 

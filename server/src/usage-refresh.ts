@@ -256,6 +256,7 @@ export async function runCliKeepalive(): Promise<KeepaliveSweepResult | null> {
           configDir: c.configDir,
           usageKey: `cli:${c.id}`,
           blocked: keepaliveBlock(c.id, c.configDir, walls),
+          weekCapPct: c.placement?.maxWeekPct ?? null,
         })),
       reading: keepaliveReading(climayteLiveReadings()),
       // The read-back is the usage check the sweep runs, so the tables show the new window at once.

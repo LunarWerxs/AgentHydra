@@ -29,6 +29,7 @@ import {
   type CliMayteJournalEvent,
 } from './climayte-journal'
 import {
+  type AccountCaps,
   type AttemptSpend,
   addTokens,
   attemptSpend,
@@ -417,7 +418,24 @@ function poolAccount(i: CliInstance, b: PoolBuild): CliMayteAccount {
     readTriedAt: asked ?? null,
     handsOnAgoMs: handsOnAgoMs(i.associatedDesktopDir, now),
     otherSessions: otherSessionsIn(i.configDir, b.mine),
+    priority: i.placement?.priority ?? 0,
+    maxSessionPct: i.placement?.maxSessionPct ?? null,
+    maxWeekPct: i.placement?.maxWeekPct ?? null,
   }
+}
+
+/** The owner's caps on an account in the pool (AccountPlacement), for the stop lines of the workers
+ *  running there (climayte-stops); null when it has none or is not in the pool. */
+export function accountCaps(id: string): AccountCaps | null {
+  let a: CliMayteAccount | undefined
+  try {
+    a = accountsProvider().find((x) => x.id === id)
+  } catch {
+    return null
+  }
+  return a && (a.maxSessionPct != null || a.maxWeekPct != null)
+    ? { maxSessionPct: a.maxSessionPct ?? null, maxWeekPct: a.maxWeekPct ?? null }
+    : null
 }
 
 /** The production pool: every CLI instance with a credential file, with its last usage reading

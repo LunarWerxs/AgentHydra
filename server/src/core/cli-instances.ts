@@ -29,7 +29,7 @@ import {
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
-import type { CliInstance, CliLimitResetResult, UsageSnapshot } from '../types'
+import type { AccountPlacement, CliInstance, CliLimitResetResult, UsageSnapshot } from '../types'
 import { pinHaikuModel } from './haiku-pin'
 import { instanceNumberFor, instanceNumbers, instanceRef } from './instance-numbers'
 import {
@@ -647,6 +647,128 @@ export function setCliInstanceLimitReset(id: string, result: CliLimitResetResult
     return { result: null, changed: true }
   })
   void outcome
+}
+
+/** Priority levels the CLI table offers (AccountPlacement.priority). */
+const PLACEMENT_PRIORITIES = [2, 1, 0, -1] as const
+
+/** A cap at or above the fleet's line (85) is no cap: the fleet's line, with its near-reset 89. */
+const FLEET_LINE_PCT = 85
+
+/** A cap as stored: a whole percent from 1 to 84, or null for the fleet's line. */
+function capOf(v: unknown): number | null | undefined {
+  if (v === null || v === undefined || v === '') return null
+  const n = typeof v === 'string' ? Number(v) : v
+  if (typeof n !== 'number' || !Number.isFinite(n)) return undefined
+  const pct = Math.round(n)
+  if (pct >= FLEET_LINE_PCT) return null
+  return pct >= 1 ? pct : undefined
+}
+
+/** The placement asked for, checked: a known priority and caps from 1 to 84 (85 or more is the fleet's
+ *  line). The reason when it is not one. */
+function checkPlacement(
+  body: { priority?: unknown; maxSessionPct?: unknown; maxWeekPct?: unknown },
+  now = Date.now(),
+): { ok: true; placement: AccountPlacement } | { ok: false; reason: string } {
+  const p = body.priority
+  const priority =
+    p === undefined
+      ? 0
+      : typeof p === 'number' || (typeof p === 'string' && p.trim())
+        ? Number(p)
+        : Number.NaN
+  if (!(PLACEMENT_PRIORITIES as readonly number[]).includes(priority))
+    return { ok: false, reason: 'priority must be 2 (Top), 1 (High), 0 (Normal) or -1 (Low)' }
+  const maxSessionPct = capOf(body.maxSessionPct)
+  const maxWeekPct = capOf(body.maxWeekPct)
+  if (maxSessionPct === undefined || maxWeekPct === undefined)
+    return {
+      ok: false,
+      reason: 'a cap is a whole percent from 1 to 85 (85 or empty: the fleet line)',
+    }
+  return { ok: true, placement: { priority, maxSessionPct, maxWeekPct, updatedAt: now } }
+}
+
+/** The plain setting: Normal with no caps, which an account without one has. */
+const isPlain = (p: AccountPlacement): boolean =>
+  p.priority === 0 && p.maxSessionPct === null && p.maxWeekPct === null
+
+/** Set an account's priority and caps (AccountPlacement), from the CLI table. A field left out keeps its value
+ *  (null clears a cap): the setting is shared with the other PCs, so a partial ask must not wipe the rest. */
+export function setCliInstancePlacement(
+  id: string,
+  body: { priority?: unknown; maxSessionPct?: unknown; maxWeekPct?: unknown },
+): CMActionResult {
+  const was = getCliInstance(id)?.placement
+  const keep = <K extends 'priority' | 'maxSessionPct' | 'maxWeekPct'>(k: K): unknown =>
+    body[k] === undefined ? was?.[k] : body[k]
+  const checked = checkPlacement({
+    priority: keep('priority'),
+    maxSessionPct: keep('maxSessionPct'),
+    maxWeekPct: keep('maxWeekPct'),
+  })
+  if (!checked.ok)
+    return { ok: false, action: 'cli-placement', dir: null, message: checked.reason, data: { id } }
+  const outcome = mutate((store) => {
+    const rec = store.instances.find((i) => i.id === id)
+    if (!rec) return { result: null, changed: false }
+    rec.placement = checked.placement
+    return { result: rec.configDir, changed: true }
+  })
+  if (!outcome.ok) return refusal('cli-placement', null, { id }, outcome)
+  if (outcome.result === null)
+    return {
+      ok: false,
+      action: 'cli-placement',
+      dir: null,
+      message: 'CLI instance not found.',
+      data: { id },
+    }
+  return {
+    ok: true,
+    action: 'cli-placement',
+    dir: outcome.result,
+    message: 'Saved.',
+    data: { id, placement: checked.placement },
+  }
+}
+
+/** Every account's placement ever set here, by instance id: what this PC shares with the others
+ *  (core/climayte-queue-sync.ts). One set back to plain still goes, so the other PCs drop theirs. */
+export function cliInstancePlacements(): Record<string, AccountPlacement> {
+  const out: Record<string, AccountPlacement> = {}
+  for (const i of readStore().instances) if (i.placement) out[i.id] = i.placement
+  return out
+}
+
+/** Take the other PCs' placements that are newer than this PC's (login sync keeps an account under one
+ *  instance id on every PC). Answers the ids that changed. */
+export function adoptCliInstancePlacements(
+  theirs: Record<string, unknown> | null | undefined,
+): string[] {
+  if (!theirs) return []
+  const incoming = new Map<string, AccountPlacement>()
+  for (const [id, raw] of Object.entries(theirs)) {
+    if (!raw || typeof raw !== 'object') continue
+    const r = raw as Record<string, unknown>
+    const at = Number(r.updatedAt)
+    const checked = checkPlacement(r, at)
+    if (checked.ok && Number.isFinite(at) && at > 0) incoming.set(id, checked.placement)
+  }
+  if (!incoming.size) return []
+  const outcome = mutate((store) => {
+    const changed: string[] = []
+    for (const rec of store.instances) {
+      const p = incoming.get(rec.id)
+      if (!p || (rec.placement && rec.placement.updatedAt >= p.updatedAt)) continue
+      if (!rec.placement && isPlain(p)) continue
+      rec.placement = p
+      changed.push(rec.id)
+    }
+    return { result: changed, changed: changed.length > 0 }
+  })
+  return outcome.ok ? (outcome.result ?? []) : []
 }
 
 // --- delete (guarded) --------------------------------------------------------

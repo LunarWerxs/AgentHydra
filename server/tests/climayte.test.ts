@@ -1441,14 +1441,15 @@ describe('integration: paid extra usage is never spent', () => {
 
   /** A task on an account that reads 98.5% (and could bill), run until it ends; 'rising': the
    *  account reads 50% first and climbs to 98.5% (fake-claude's fake-near-limit). */
-  const nearLimitRun = async (title: string, rising: boolean) => {
-    const nearDir = join(root, `acct-near-${rising ? 'rising' : 'full'}`)
+  const nearLimitRun = async (title: string, rising: boolean, caps?: { maxSessionPct: number }) => {
+    const kind = caps ? 'capped' : rising ? 'rising' : 'full'
+    const nearDir = join(root, `acct-near-${kind}`)
     mkdirSync(nearDir, { recursive: true })
     writeFileSync(join(nearDir, 'fake-near-limit'), rising ? 'rising' : '')
     setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    const near = rising ? 'rise-1' : 'near-1'
+    const near = caps ? 'cap-1' : rising ? 'rise-1' : 'near-1'
     setCliMayteAccountsProvider(() => [
-      { id: near, num: 1, name: 'near', configDir: nearDir, sessionPct: 0, weekPct: 0 },
+      { id: near, num: 1, name: 'near', configDir: nearDir, sessionPct: 0, weekPct: 0, ...caps },
       { id: `${near}-free`, num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
     ])
     startCliMayte()
@@ -1473,6 +1474,16 @@ describe('integration: paid extra usage is never spent', () => {
     const totals = climayteTotals()
     expect(totals.ceilingStopList.some((c) => c.id === id)).toBe(true)
     expect(totals.placedPastList.some((p) => p.id === id)).toBe(false)
+  }, 20_000)
+
+  test("under the owner's 40% cap a run is stopped at 45, the cap's ceiling, and goes on elsewhere", async () => {
+    // Owner, 2026-10-09: "up to 50% of five-hour". The account reads 50% on the first request, where
+    // the fleet's ceiling of 90 would have let the run go on.
+    const { w } = await nearLimitRun('capped account', true, { maxSessionPct: 40 })
+    expect(w?.status).toBe('done')
+    expect(w?.moves).toBe(1)
+    expect(w?.attempts[0]).toMatchObject({ outcome: 'quota', ceiling: true })
+    expect(w?.attempts[0]?.notice).toContain("past the ceiling of 45% its owner's cap sets")
   }, 20_000)
 
   test('at the 90% ceiling the turn is stopped, short of billing and of the limit, and goes on elsewhere', async () => {
@@ -1645,6 +1656,41 @@ describe('the 85% stop line and the 90% ceiling', () => {
     const fresh = { accounts: null, accountId: null, attempts: [] } as any
     expect(pickAccount(fresh, [acct(soon)] as any, {}, new Map(), 2, now)?.id).toBe('a')
     expect(pickAccount(fresh, [acct(later)] as any, {}, new Map(), 2, now)).toBeNull()
+  })
+
+  test("under the owner's cap a session hands off at the cap and is stopped 5 points above it", () => {
+    // Owner, 2026-10-09: "up to 50% of five-hour, 50% of week".
+    const now = Date.now()
+    const reading = (sessionPct: number, weekPct = 10) => ({
+      sessionPct,
+      sessionResetsAt: now + 3_600_000,
+      weekPct,
+      weekResetsAt: now + 4 * 3_600_000,
+      overageAllowed: false,
+      at: now - 5_000,
+    })
+    const caps = { maxSessionPct: 50, maxWeekPct: 50 }
+    expect(windDownAt(reading(49), null, now, null, caps)).toBeNull()
+    expect(windDownAt(reading(50), null, now, null, caps)).toMatchObject({ pct: 50, week: false })
+    // In the week's last five hours the cap stays the line, where the fleet's goes to 89.
+    expect(windDownAt(reading(10, 50), null, now, null, caps)).toMatchObject({
+      pct: 50,
+      week: true,
+    })
+    expect(atCeiling(reading(54), null, now, caps)).toBeNull()
+    expect(atCeiling(reading(55), null, now, caps)).toMatchObject({
+      pct: 55,
+      week: false,
+      line: 55,
+    })
+    expect(atCeiling(reading(10, 55), null, now, caps)).toMatchObject({
+      pct: 55,
+      week: true,
+      line: 55,
+    })
+    // An account without one keeps the fleet's lines.
+    expect(windDownAt(reading(50), null, now)).toBeNull()
+    expect(atCeiling(reading(90), null, now)?.line).toBeUndefined()
   })
 })
 

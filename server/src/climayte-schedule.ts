@@ -23,6 +23,7 @@ import { firstLine } from './climayte-journal'
 import { launch } from './climayte-launch'
 import {
   accountInUse,
+  accountWeekStopPct,
   type CliMayteAccount,
   type CliMayteWorker,
   dueOrder,
@@ -33,8 +34,8 @@ import {
   pickAccount,
   rankAccounts,
   readingPending,
+  sessionStopPct,
   WIND_DOWN_SESSION_PCT,
-  weekStopPct,
 } from './climayte-lib'
 import {
   DEFAULT_GROWN_BYTES,
@@ -49,8 +50,8 @@ import {
   type CliMaytePlacement,
   type CostEstimate,
   DEFAULT_TASK_PCT,
-  FIT_PCT,
   fallsShort,
+  fitPct,
   MIN_START_ROOM_PCT,
   projectedPct,
   RESUME_WAIT_MS,
@@ -167,16 +168,16 @@ function firstFreeAt(pool: CliMayteAccount[], now: number): string | null {
  *  (waitsForRoom), or null when no such time is known. */
 function fitFreesAt(allowed: CliMayteAccount[], expected: number, now: number): number | null {
   return firstFreeMs(
-    allowed.filter((a) => expected / (a.planFactor ?? 1) <= FIT_PCT),
+    allowed.filter((a) => expected / (a.planFactor ?? 1) <= fitPct(a)),
     now,
   )
 }
 
-/** The room left on an account under FIT_PCT once the work running there is done, in Pro points
+/** The room left on an account under its fit line (fitPct) once the work running there is done, in Pro points
  *  (times its plan). */
 function roomOn(s: TickState, a: CliMayteAccount): number {
   const left =
-    FIT_PCT - projectedPct(a, s.running.get(a.id) ?? [], 0, s.finishedSince.get(a.id) ?? 0)
+    fitPct(a) - projectedPct(a, s.running.get(a.id) ?? [], 0, s.finishedSince.get(a.id) ?? 0)
   return Math.max(0, left * (a.planFactor ?? 1))
 }
 
@@ -197,7 +198,7 @@ function capNote(
   const roomy = allowed.filter(
     (a) =>
       !((walls[a.id]?.until ?? 0) > s.now) &&
-      (a.weekPct ?? 0) < weekStopPct(a.weekResetsAt, s.now) &&
+      (a.weekPct ?? 0) < accountWeekStopPct(a, a.weekResetsAt, s.now) &&
       roomOn(s, a) >= MIN_START_ROOM_PCT,
   )
   const say = (list: CliMayteAccount[], counts: (a: CliMayteAccount) => number, what: string) => {
@@ -244,11 +245,11 @@ function quotaHome(w: CliMayteWorker, allowed: CliMayteAccount[]): CliMayteAccou
 function homeFreesAt(home: CliMayteAccount, now: number): number | null {
   const wall = walls[home.id]
   const walled = !!wall && wall.until > now && !isLoginWall(wall.reason)
-  if (!walled && (home.sessionPct ?? 0) < WIND_DOWN_SESSION_PCT) return null
+  if (!walled && (home.sessionPct ?? 0) < sessionStopPct(home)) return null
   const at = accountFreesAt(home, now)
   if (at === null) return null
   const weekStops =
-    (home.weekPct ?? 0) >= weekStopPct(home.weekResetsAt, at) &&
+    (home.weekPct ?? 0) >= accountWeekStopPct(home, home.weekResetsAt, at) &&
     !(home.weekResetsAt && home.weekResetsAt <= at)
   return weekStops ? null : at
 }
@@ -343,7 +344,7 @@ function cooldownFor(
         (a) =>
           !isLoginWall(walls[a.id]?.reason) &&
           (!accountInUse(a) || !!w.accounts?.includes(a.id)) &&
-          (a.weekPct ?? 0) < weekStopPct(a.weekResetsAt, s.now) &&
+          (a.weekPct ?? 0) < accountWeekStopPct(a, a.weekResetsAt, s.now) &&
           (groupActive.get(a.id) ?? 0) < groupCap(a, cap),
       )
       .map((a) => ({
@@ -620,7 +621,7 @@ function noAccountReason(
     )
   if (inUse.length)
     return `Waiting for an account nobody else is using: ${inUse.join(', ')}; the others are at their limit or signed out. It starts when one frees up.${note}`
-  return `Every eligible account is at its usage limit, past the ${WIND_DOWN_SESSION_PCT}% stop line, or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.${note}`
+  return `Every eligible account is at its usage limit, past the ${WIND_DOWN_SESSION_PCT}% stop line (or its owner's lower cap), or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.${note}`
 }
 
 /** The accounts whose linked Claude Code login has expired, by number, as a waiting task's row says
@@ -790,7 +791,7 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
     if (goesNow(s, roomy))
       journal(w, 'start-short', {
         account: acctLabel(roomy),
-        notice: `expected to use about ${Math.round(expected)}% of a Pro 5-hour window, about ${Math.round(roomOn(s, roomy))}% left there; it hands off at the ${WIND_DOWN_SESSION_PCT}% line and goes on where there is room`,
+        notice: `expected to use about ${Math.round(expected)}% of a Pro 5-hour window, about ${Math.round(roomOn(s, roomy))}% left there; it hands off at the ${sessionStopPct(roomy)}% line and goes on where there is room`,
       })
     startOn(s, w, roomy, cost, groupActive)
     return

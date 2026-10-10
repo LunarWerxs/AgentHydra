@@ -29,6 +29,12 @@ import {
 } from '../src/climayte-remote'
 import { tickState } from '../src/climayte-schedule'
 import {
+  createCliInstance,
+  deleteCliInstance,
+  getCliInstance,
+  setCliInstancePlacement,
+} from '../src/core/cli-instances'
+import {
   configureLoginSync,
   disconnectLoginSync,
   loginSyncPairingCode,
@@ -522,9 +528,21 @@ describe('a pass through the store', () => {
       callerSessionId: '11111111-2222-3333-4444-555555555555',
       callerChatId: null,
     }
+    // The owner's priority and caps for an account (AccountPlacement) follow the newer setting across
+    // PCs: theirs is newer for one account here, ours for the other.
+    const adopted = randomUUID()
+    const kept = randomUUID()
+    expect(createCliInstance('Example Adopted', { id: adopted }).ok).toBe(true)
+    expect(createCliInstance('Example Kept', { id: kept }).ok).toBe(true)
+    expect(setCliInstancePlacement(kept, { priority: 1, maxSessionPct: 60 }).ok).toBe(true)
+    const top = { priority: 2, maxSessionPct: 50, maxWeekPct: 50, updatedAt: Date.now() - 60_000 }
     const theirs = {
       ...snapshot(other, [rw({ title: 'their task', status: 'running' })]),
       jobs: [theirJob],
+      prefs: {
+        [adopted]: top,
+        [kept]: { priority: -1, maxSessionPct: null, maxWeekPct: null, updatedAt: 1 },
+      },
     }
     const put = await store('PUT', `/v1/queues/${other}`, {
       version: 0,
@@ -579,6 +597,15 @@ describe('a pass through the store', () => {
     expect(answer.pcs[0]).toMatchObject({ build: null, behind: true })
     expect(answer.pcs[0].behindNote).toContain('OTHER-PC runs an older AgentHydra')
     expect(snap.build?.version).toBeTruthy()
+    expect(getCliInstance(adopted)?.placement).toEqual(top)
+    expect(getCliInstance(kept)?.placement).toMatchObject({
+      priority: 1,
+      maxSessionPct: 60,
+      maxWeekPct: null,
+    })
+    expect(snap.prefs?.[kept]).toMatchObject({ priority: 1, maxSessionPct: 60 })
+    deleteCliInstance(adopted, 'Example Adopted')
+    deleteCliInstance(kept, 'Example Kept')
     // Nothing of theirs became a worker here (other test files share this process's workers).
     expect(workers.has(answer.pcs[0].workers[0].id)).toBe(false)
     expect(workers.has('w-mine')).toBe(true)
