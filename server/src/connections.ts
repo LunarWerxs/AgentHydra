@@ -195,6 +195,9 @@ export const NEVER_SYNCED = [
   // The desktop folders that pairing has already handled on THIS PC: folder paths of one disk, and
   // what keeps a CLI instance the person deleted deleted.
   'desktop_cli_paired',
+  // Whether THIS PC is kept awake while a run is working (keep-awake.ts). It changes this machine's
+  // power behaviour, and a laptop on battery should not inherit the desktop's choice.
+  'keep_awake_while_working',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────
