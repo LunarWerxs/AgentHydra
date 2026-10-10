@@ -51,7 +51,7 @@ import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { useInstances } from '@/composables/useInstances'
-import { pii, piiDisplayName } from '@/composables/usePrivacy'
+import { pii, piiDisplayName, piiName } from '@/composables/usePrivacy'
 import { useQuickAddTarget } from '@/composables/useQuickAddTarget'
 import { useDesktopTokenWindow } from '@/composables/useTokenWindow'
 import { useUiPrefs } from '@/composables/useUiPrefs'
@@ -205,10 +205,11 @@ function lastActiveLabel(at: number): string {
   return timeAgo(at)
 }
 
-/** The CLI login has no email field, but quick add names it after the address: that name, else the
- *  linked account's label when it is one, else none (owner, 2026-10-06). It is also what "Log in
- *  again" puts back in Quick add's email box. */
+/** The address the login's own `.claude.json` names (accountEmail), else the one quick add named it
+ *  after, else the linked account's label when it is one, else none (owner, 2026-10-06). It is also
+ *  what "Log in again" puts back in Quick add's email box. */
 function previousEmailOf(inst: CliInstance): string | null {
+  if (inst.accountEmail) return inst.accountEmail
   const name = withoutPlanSuffix(inst.name, planFor(inst))
   return name.includes('@')
     ? name
@@ -245,7 +246,8 @@ function rowModel(inst: CliInstance): InstanceRowModel {
           {
             full: pii(name),
             shown: shortDisplayName(pii(name), nameMax),
-            email,
+            email: email && pii(email),
+            account: inst.accountName && piiName(inst.accountName),
             folder: inst.configDir,
             copyHint: t('instances.nameCopyHint'),
           },

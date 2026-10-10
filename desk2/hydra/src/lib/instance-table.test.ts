@@ -106,6 +106,15 @@ describe('instance table column model', () => {
       description: '/x',
       detail: undefined,
     })
+    // A CLI login names its account (owner, 2026-10-09): the account's name under the address, the folder below it.
+    expect(nameTooltipFor({ ...name, account: 'Example Owner' }, false)).toEqual({
+      label: 'a@example.com',
+      description: 'Example Owner',
+      detail: '/x',
+    })
+    // A name that is the address itself, cut short, does not repeat the address.
+    const address = { ...name, full: 'a@example.com', shown: 'a@exa…', account: 'Example Owner' }
+    expect(nameTooltipFor(address, false).detail).toBe('/x')
   })
 
   it('keeps the plan out of a CLI name', () => {

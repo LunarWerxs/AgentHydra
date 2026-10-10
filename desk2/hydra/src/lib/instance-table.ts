@@ -218,25 +218,37 @@ export interface InstanceNameTooltip {
 /**
  * The name cell's hover (owner, 2026-10-06: the address and the folder, since the row no longer
  * prints the account's handle). It leads with the address, or the full name when the row has none,
- * then the folder. The third line is the full name when the name was cut, else the copy hint (the
- * click copies the address, so a row without one has nothing to hint).
+ * then the account's name when known, else the folder. The third line is the full name when the name
+ * was cut, else the folder under an account's name, else the copy hint (the click copies the address,
+ * so a row without one has nothing to hint).
  */
 export function nameTooltipFor(
   name: {
     full: string
     shown: string
     email?: string | null
+    /** The account's own name on Claude (a CLI login's `.claude.json`), shown under the address
+     *  (owner, 2026-10-09: "the account name when I hover over it"); the folder moves down a line. */
+    account?: string | null
     folder?: string
     copyHint: string
   },
   clipped: boolean,
 ): InstanceNameTooltip {
   const email = name.email?.trim() || null
-  const cut = name.shown !== name.full || clipped
+  const account = name.account?.trim() || null
+  // A cut name that is the address itself adds nothing to the label.
+  const cutFull = (name.shown !== name.full || clipped) && !!email && name.full !== email
   return {
     label: email ?? name.full,
-    description: name.folder || undefined,
-    detail: cut ? (email ? name.full : undefined) : email ? name.copyHint : undefined,
+    description: account ?? (name.folder || undefined),
+    detail: cutFull
+      ? name.full
+      : account
+        ? name.folder || undefined
+        : email
+          ? name.copyHint
+          : undefined,
   }
 }
 
