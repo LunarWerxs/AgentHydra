@@ -114,6 +114,29 @@ export default {
   toastLinkFailed: 'Failed to save the desktop link.',
   toastRenamed: 'CLI instance renamed.',
   toastRenameFailed: 'Failed to rename CLI instance.',
+  // Priority and caps (CliPlacementDialog.vue, the server's AccountPlacement): how much of AgentHydra's
+  // work one account gets (owner, 2026-10-09).
+  placement: 'Priority and caps',
+  placementDialogTitle: 'Priority and caps: {name}',
+  placementDialogDescription:
+    "How much of AgentHydra's work goes to this account. New work goes to the highest priority that has room first.",
+  placementPriority: 'Priority',
+  priorityTop: 'Top',
+  priorityHigh: 'High',
+  priorityNormal: 'Normal',
+  priorityLow: 'Low',
+  placementSessionCap: '5-hour cap (%)',
+  placementWeekCap: 'Weekly cap (%)',
+  placementCapPlaceholder: '85 (the usual line)',
+  placementCapHint:
+    "AgentHydra's work hands off at the cap and is stopped by 5 points above it. Empty, or 85 and up, keeps the usual 85% line. Your own chats on this account are not limited.",
+  placementCapInvalid: 'A cap is a whole number from 1 to 100, or empty.',
+  placementSave: 'Save',
+  placementSaving: 'Saving…',
+  placementChip:
+    "{priority} priority for AgentHydra's work, which stops at {session}% of the 5-hour window and {week}% of the week.",
+  toastPlacementSaved: 'Priority and caps saved.',
+  toastPlacementFailed: 'Could not save priority and caps.',
   toastAssociated: 'Account association saved.',
   toastAssociateFailed: 'Failed to save account association.',
   toastDeleted: 'CLI instance deleted.',

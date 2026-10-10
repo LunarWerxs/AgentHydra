@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Choose which accounts AgentHydra uses first, and how much of each.** In the CLI table, an account's menu now
+  has **Priority and caps**: set it to Top, High, Normal or Low, and cap how much of its 5-hour and weekly usage
+  AgentHydra may use (for example 50% and 50%). New work goes to the highest-priority account it fits, AgentHydra
+  hands off at the cap, and your own chats on that account are not limited.
 - **Moving chats no longer leaves a copy behind on the old account, or calls that move done.** The old account's
   app could hold a moved chat as "stopping" for minutes with nothing running, and the move gave up on hiding it there
   while still reporting it as finished. A move now hides that copy, and a chat whose old copy still shows is reported

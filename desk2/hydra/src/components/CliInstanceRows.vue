@@ -17,6 +17,7 @@ import {
   ArrowRightLeft,
   CreditCard,
   Eraser,
+  Gauge,
   Link2,
   LogIn,
   LogOut,
@@ -37,6 +38,7 @@ import CliLimitResetDialog from '@/components/CliLimitResetDialog.vue'
 import CliLimitResetIcon from '@/components/CliLimitResetIcon.vue'
 import CliLoginMoveDialog from '@/components/CliLoginMoveDialog.vue'
 import CliLoginSyncDialog from '@/components/CliLoginSyncDialog.vue'
+import CliPlacementDialog from '@/components/CliPlacementDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
@@ -85,6 +87,7 @@ const {
   launch,
   logout,
   rename,
+  setPlacement,
   associate,
   linkDesktop,
   remove,
@@ -311,6 +314,70 @@ async function onRenameSubmit(name: string) {
     renaming.value = false
   }
 }
+
+/** The priority and caps dialog (CliPlacementDialog.vue): how much of AgentHydra's work this account gets. */
+const placementOpen = ref(false)
+const placementTarget = ref<CliInstance | null>(null)
+const placementSaving = ref(false)
+const placementError = ref<string | null>(null)
+function openPlacement(inst: CliInstance) {
+  placementTarget.value = inst
+  placementError.value = null
+  placementOpen.value = true
+}
+async function onPlacementSubmit(placement: {
+  priority: number
+  maxSessionPct: number | null
+  maxWeekPct: number | null
+}) {
+  const inst = placementTarget.value
+  if (!inst) return
+  placementSaving.value = true
+  placementError.value = null
+  try {
+    const result = await setPlacement(inst.id, placement)
+    if (result?.ok) {
+      toast.success(t('cliInstances.toastPlacementSaved'))
+      placementOpen.value = false
+      placementTarget.value = null
+    } else {
+      placementError.value = result?.message ?? t('cliInstances.toastPlacementFailed')
+    }
+  } finally {
+    placementSaving.value = false
+  }
+}
+
+const PRIORITY_KEYS: Record<number, string> = {
+  2: 'cliInstances.priorityTop',
+  1: 'cliInstances.priorityHigh',
+  [-1]: 'cliInstances.priorityLow',
+}
+
+/** The row's chip for a priority other than Normal or a cap: its words, and the hover that explains them.
+ *  Null for a plain account. */
+function placementChip(inst: CliInstance): { text: string; label: string } | null {
+  const p = inst.placement
+  if (!p) return null
+  const level = PRIORITY_KEYS[p.priority]
+  const caps =
+    p.maxSessionPct == null && p.maxWeekPct == null
+      ? null
+      : `${p.maxSessionPct ?? 85}/${p.maxWeekPct ?? 85}%`
+  if (!level && !caps) return null
+  const text = [level ? t(level) : null, caps].filter(Boolean).join(' · ')
+  return {
+    text,
+    label: t('cliInstances.placementChip', {
+      priority: t(level ?? 'cliInstances.priorityNormal'),
+      session: p.maxSessionPct ?? 85,
+      week: p.maxWeekPct ?? 85,
+    }),
+  }
+}
+const placementChips = computed(
+  () => new Map(visibleRows.value.map((i) => [i.id, placementChip(i)])),
+)
 
 // --- associate ---
 const associateOpen = ref(false)
@@ -649,6 +716,19 @@ defineExpose({
           </span>
         </IconTooltip>
         <CliLimitResetIcon :result="inst.lastLimitReset" />
+        <!-- The owner's priority and caps for AgentHydra's work here (CliPlacementDialog.vue). -->
+        <IconTooltip
+          v-if="placementChips.get(inst.id)"
+          :label="placementChips.get(inst.id)!.label"
+        >
+          <span
+            class="inline-flex items-center gap-0.5 rounded-full bg-info/10 px-1.5 text-3xs font-semibold text-info"
+            :aria-label="placementChips.get(inst.id)!.label"
+          >
+            <Gauge class="size-3" />
+            {{ placementChips.get(inst.id)!.text }}
+          </span>
+        </IconTooltip>
         <!-- Its login went to the other PC from here (cli-login-move.ts). -->
         <IconTooltip
           v-if="inst.movedAway"
@@ -700,6 +780,9 @@ defineExpose({
         </DropdownMenuItem>
         <DropdownMenuItem v-if="!inst.loggedIn" :disabled="isBusy(inst)" @click="onLogin(inst)">
           <LogIn /> {{ reloginEmailOf(inst) ? $t('cliInstances.loginAgain') : $t('cliInstances.login') }}
+        </DropdownMenuItem>
+        <DropdownMenuItem :disabled="isBusy(inst)" @click="openPlacement(inst)">
+          <Gauge /> {{ $t('cliInstances.placement') }}
         </DropdownMenuItem>
         <DropdownMenuItem :disabled="isBusy(inst)" @click="openLinkDialog(inst)">
           <Monitor /> {{ $t('cliInstances.linkDesktop') }}
@@ -761,6 +844,14 @@ defineExpose({
     :submitting="renaming"
     :error-message="renameError"
     @submit="onRenameSubmit"
+  />
+  <CliPlacementDialog
+    v-model:open="placementOpen"
+    :instance-name="placementTarget ? pii(placementTarget.name) : null"
+    :current="placementTarget?.placement ?? null"
+    :submitting="placementSaving"
+    :error-message="placementError"
+    @submit="onPlacementSubmit"
   />
   <AssociateCliInstanceDialog
     v-model:open="associateOpen"

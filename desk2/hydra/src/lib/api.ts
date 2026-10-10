@@ -866,6 +866,15 @@ export const renameCliInstance = (id: string, name: string) =>
     method: 'POST',
     body: JSON.stringify({ name }),
   })
+/** Set an account's priority and caps for AgentHydra's work (server AccountPlacement); a null cap is the 85% line. */
+export const setCliInstancePlacement = (
+  id: string,
+  placement: { priority: number; maxSessionPct: number | null; maxWeekPct: number | null },
+) =>
+  j<CMActionResult>(`/api/cli-instances/${encodeURIComponent(id)}/placement`, {
+    method: 'POST',
+    body: JSON.stringify(placement),
+  })
 export const associateCliInstance = (
   id: string,
   accountId: string | null,

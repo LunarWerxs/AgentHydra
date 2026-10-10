@@ -108,6 +108,21 @@ async function rename(id: string, name: string): Promise<api.CMActionResult | un
   }
 }
 
+/** Set an account's priority and caps for AgentHydra's work (CliPlacementDialog.vue). */
+async function setPlacement(
+  id: string,
+  placement: { priority: number; maxSessionPct: number | null; maxWeekPct: number | null },
+): Promise<api.CMActionResult | undefined> {
+  setBusy(id, true)
+  try {
+    const result = await guard(api.setCliInstancePlacement(id, placement))
+    if (result?.ok) await refreshCliInstances({ silent: true })
+    return result
+  } finally {
+    setBusy(id, false)
+  }
+}
+
 /** Link (or unlink, passing `null`) the DESKTOP instance this CLI login belongs to. Same Anthropic
  *  account, two independent logins, so linking lets each serve as the other's usage-check fallback. */
 async function linkDesktop(
@@ -188,6 +203,7 @@ export function useCliInstances() {
     login,
     logout,
     rename,
+    setPlacement,
     associate,
     linkDesktop,
     remove,
