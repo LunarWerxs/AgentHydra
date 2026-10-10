@@ -218,17 +218,21 @@ export function hydraFindings(facts: Json, now = Date.now()): HydraCheck {
   const scans = section('scans')
   if (scans) {
     checked.push('hydra:scan-prev', 'hydra:scan-orphans')
+    // Every live rescan stages its last result as `<key>.prev` for its whole run, and the next scan
+    // restores or clears one a crash left: an hourly read that caught a sweep must not page anyone.
     if (list(scans.prev).length)
-      problem(
+      note(
         'scan-prev',
-        'Leftover scans/*.prev folders mark interrupted rescans; the next scan of each project restores or clears it.',
+        'scans/*.prev folders are there: a rescan running now, or one that was interrupted (the next scan of that project restores or clears it).',
         named(list(scans.prev), (n) => n),
       )
-    if (list(scans.orphans).length)
+    // A dot-name is a running tool's in-flight marker; no registry key starts with a dot.
+    const orphans = list(scans.orphans).filter((n) => typeof n === 'string' && !n.startsWith('.'))
+    if (orphans.length)
       problem(
         'scan-orphans',
         'Scan folders under scans/ match no registry key, so every fleet number leaves them out: re-file each under its key, or delete it.',
-        named(list(scans.orphans), (n) => n),
+        named(orphans, (n) => n),
       )
   }
 
@@ -245,6 +249,12 @@ export function hydraFindings(facts: Json, now = Date.now()): HydraCheck {
         'sweep-sarif',
         `The external sweep is stale: the newest scans/*/findings.sarif is over ${STALE_SWEEP_DAYS} days old, and every fleet number reads it.`,
         `${newest.key} at ${newest.at}`,
+      )
+    if (list(sweep.sarif_without).length)
+      note(
+        'sweep-sarif-missing',
+        'Some registered projects have a scan folder but no findings.sarif, so the sweep says nothing about them.',
+        named(list(sweep.sarif_without), (n) => n),
       )
     const runs = list(sweep.runs).filter((r) => days(r?.at, now) !== null)
     const run = runs.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0]

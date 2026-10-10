@@ -42,10 +42,12 @@ describe('hydraFindings', () => {
         ],
         unreadable: [],
       },
+      // Caught mid-sweep: a rescan's staging folder and a tool's in-flight marker are not litter.
+      scans: { owned: 2, orphans: ['.app.check-lock', 'tmp'], prev: ['app.prev'] },
       sweep_evidence: {
         owned_scan_dirs: 2,
         sarif: [{ key: 'app', at: AGO(20) }],
-        sarif_without: [],
+        sarif_without: ['zonotify'],
         sarif_unreadable: [],
         runs: [{ command: 'scan', at: AGO(1), host: 'H' }],
         runs_dropped: [],
@@ -76,6 +78,9 @@ describe('hydraFindings', () => {
         'note:hydra:walk',
         'problem:hydra:scratch', // only the root untouched for 9 days; the live test run is not litter
         'problem:hydra:sweep-sarif',
+        'note:hydra:sweep-sarif-missing',
+        'note:hydra:scan-prev',
+        'problem:hydra:scan-orphans',
         'problem:hydra:instrument:census',
         'note:hydra:instrument-deep:deepdive',
         'problem:hydra:cadence',
@@ -89,6 +94,7 @@ describe('hydraFindings', () => {
     expect(checked).toEqual(
       expect.arrayContaining(['hydra:registry', 'hydra:sweep-sarif', 'hydra:cadence']),
     )
+    expect(findings.find((f) => f.key === 'hydra:scan-orphans')?.detail).toBe('tmp')
     // Counts and ages live in detail, so a growing pile does not mint a new incident each pass.
     const stale = findings.find((f) => f.key === 'hydra:sweep-sarif')
     expect(stale?.detail).toContain(AGO(20))
