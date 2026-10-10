@@ -465,6 +465,16 @@ export interface GitStatus {
   files: GitFileChange[]
 }
 
+/** GET /api/git/merge-conflicts: whether merging the base into HEAD would conflict, before any merge (git.ts mergeConflictFiles). */
+export interface MergeConflictPreview {
+  /** clean: the merge applies; conflicts: `files` would conflict; unavailable: no answer (no base, no commit, an old Git, a failed run). */
+  state: 'clean' | 'conflicts' | 'unavailable'
+  /** The ref compared against, e.g. origin/main; null when nothing was compared. */
+  base: string | null
+  /** The paths that would conflict, in Git's order; empty unless state is conflicts. */
+  files: string[]
+}
+
 /** GET /api/server/update: the server's code changed on disk after it started (Menu > Restart to update). */
 export interface ServerUpdate {
   stale: boolean

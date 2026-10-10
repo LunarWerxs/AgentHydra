@@ -4,7 +4,7 @@
 import type { Hono } from 'hono'
 import type { ServerContext } from '../context'
 import { browse, BrowseError } from '../git/browse'
-import { GitError, gitDiff, gitStatus } from '../git/git'
+import { GitError, gitDiff, gitStatus, mergeConflictFiles } from '../git/git'
 
 function badRequest(err: unknown): string | null {
   return err instanceof GitError || err instanceof BrowseError ? err.message : null
@@ -14,6 +14,17 @@ export default function plugin(app: Hono, _ctx: ServerContext): void {
   app.get('/api/git', async (c) => {
     try {
       return c.json(await gitStatus(c.req.query('cwd') ?? ''))
+    } catch (err) {
+      const msg = badRequest(err)
+      if (msg) return c.json({ error: msg }, 400)
+      throw err
+    }
+  })
+
+  // Asked on the Changes pane's timer; the answer is cached per pair of commits in git.ts.
+  app.get('/api/git/merge-conflicts', async (c) => {
+    try {
+      return c.json(await mergeConflictFiles(c.req.query('cwd') ?? ''))
     } catch (err) {
       const msg = badRequest(err)
       if (msg) return c.json({ error: msg }, 400)

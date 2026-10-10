@@ -4,7 +4,7 @@
 import { existsSync, statSync } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
-import type { GitFileChange, GitStatus } from '@shared/protocol'
+import type { GitFileChange, GitStatus, MergeConflictPreview } from '@shared/protocol'
 
 export const GIT_TIMEOUT_MS = 5000
 export const MAX_FILES = 500
@@ -346,6 +346,92 @@ export async function gitStatus(cwd: string): Promise<GitStatusResult> {
   }
   return run
 }
+
+/**
+ * Whether merging the base into HEAD would conflict, before any merge. The idea is stablyai/orca's
+ * local conflict preview (MIT); this is a fresh write. It compares against the base ref only (never
+ * fetching: a pane must not touch the network): origin/HEAD's branch, else origin/main, else main.
+ * `git merge-tree --write-tree` merges in memory, so nothing in the work tree or index moves.
+ */
+export async function mergeConflictFiles(cwd: string): Promise<MergeConflictPreview> {
+  const dir = assertDir(cwd)
+  const root = await cachedRepoRoot(dir)
+  if (!root) return noPreview()
+  const target = await mergeTarget(root)
+  // Merging a commit into itself has nothing to say, so the preview is skipped.
+  if (!target || target.head === target.base.oid) return noPreview()
+  const key = `${dir}\0${target.head}\0${target.base.oid}`
+  const hit = previews.get(key)
+  if (hit && (hit.value.state !== 'unavailable' || Date.now() - hit.at < PREVIEW_UNAVAILABLE_MS)) return hit.value
+  // Two panes asking about one pair of commits share one derivation.
+  let run = previewRuns.get(key)
+  if (!run) {
+    run = derivePreview(root, target.head, target.base).then((value) => {
+      previews.delete(key)
+      previews.set(key, { value, at: Date.now() })
+      if (previews.size > PREVIEWS_MAX) previews.delete(previews.keys().next().value as string)
+      return value
+    }).finally(() => previewRuns.delete(key))
+    previewRuns.set(key, run)
+  }
+  return run
+}
+
+/** The base to compare against and HEAD's commit; null when either is missing or git cannot say. */
+async function mergeTarget(root: string): Promise<{ head: string; base: { ref: string; oid: string } } | null> {
+  try {
+    const head = await headSha(root)
+    if (!head) return null
+    const base = await baseRef(root)
+    return base ? { head, base } : null
+  } catch {
+    return null
+  }
+}
+
+/** origin/HEAD's branch, then origin/main, then main: the first that names a commit. */
+async function baseRef(root: string): Promise<{ ref: string; oid: string } | null> {
+  const originHead = await runGit(root, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'])
+  const names = [originHead.code === 0 ? originHead.stdout.toString('utf8').trim().replace(/^refs\/remotes\//, '') : '', 'origin/main', 'main']
+  for (const ref of names) {
+    if (!ref) continue
+    const r = await runGit(root, ['rev-parse', '--verify', '-q', `${ref}^{commit}`])
+    if (r.code === 0) return { ref, oid: r.stdout.toString('utf8').trim() }
+  }
+  return null
+}
+
+/**
+ * Exit 0 is clean and exit 1 lists the conflicting paths after the tree id. Any other exit (Git older
+ * than 2.38 rejects --write-tree, a bad base) and any run that dies is 'unavailable', never a conflict.
+ */
+async function derivePreview(root: string, head: string, base: { ref: string; oid: string }): Promise<MergeConflictPreview> {
+  const unavailable: MergeConflictPreview = { state: 'unavailable', base: base.ref, files: [] }
+  try {
+    const mb = await runGit(root, ['merge-base', head, base.oid])
+    if (mb.code !== 0) return unavailable
+    const mergeBase = mb.stdout.toString('utf8').trim()
+    const r = await runGit(root, [
+      'merge-tree', '--write-tree', '--name-only', '-z', '--no-messages', '--merge-base', mergeBase, head, base.oid,
+    ])
+    if (r.code === 0) return { state: 'clean', base: base.ref, files: [] }
+    if (r.code !== 1) return unavailable
+    const files = [...new Set(r.stdout.toString('utf8').split('\0').slice(1).filter(Boolean))]
+    return files.length ? { state: 'conflicts', base: base.ref, files } : unavailable
+  } catch {
+    return unavailable
+  }
+}
+
+function noPreview(): MergeConflictPreview {
+  return { state: 'unavailable', base: null, files: [] }
+}
+
+/** How long an unavailable preview is reused; a clean or conflicting one is a pure function of its commits. */
+const PREVIEW_UNAVAILABLE_MS = 60_000
+const PREVIEWS_MAX = 128
+const previews = new Map<string, { value: MergeConflictPreview; at: number }>()
+const previewRuns = new Map<string, Promise<MergeConflictPreview>>()
 
 function stampOf(file: string): string {
   try {
