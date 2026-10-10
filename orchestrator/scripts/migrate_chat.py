@@ -120,7 +120,7 @@ from lib import mutationlib
 from lib import nativearchivelib
 from lib import stamplib
 from lib.revivecmdlib import revive
-from lib.titlematchlib import FUZZY_WORD_RATIO, _fuzzy_pick, fuzzy_title_score  # noqa: F401 (tests reach these as migrate_chat.*)
+from lib.titlematchlib import _fuzzy_pick
 
 
 ELIDED = ("…", "...")

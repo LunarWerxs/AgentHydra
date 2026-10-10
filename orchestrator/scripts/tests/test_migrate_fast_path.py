@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import migrate_chat  # noqa: E402
 from lib import enginelib, gatelib, holdlib, hydralib, stamplib  # noqa: E402
+from lib.titlematchlib import FUZZY_WORD_RATIO, _fuzzy_pick, fuzzy_title_score  # noqa: E402
 from stubdaemon import StubDaemon, dossier_query  # noqa: E402
 from util import run_cli  # noqa: E402
 
@@ -57,29 +58,29 @@ def fleet():
 
 class FuzzyScoreTest(unittest.TestCase):
     def test_a_misspelling_still_names_the_chat(self):
-        self.assertGreaterEqual(migrate_chat.fuzzy_title_score("arkitecht cleanup", "Arkitekt cleanup"),
-                                migrate_chat.FUZZY_WORD_RATIO)
+        self.assertGreaterEqual(fuzzy_title_score("arkitecht cleanup", "Arkitekt cleanup"),
+                                FUZZY_WORD_RATIO)
 
     def test_a_different_chat_sharing_one_word_does_not(self):
-        self.assertLess(migrate_chat.fuzzy_title_score("arkitecht cleanup", "Arkitechts design critic expansion"),
-                        migrate_chat.FUZZY_WORD_RATIO)
+        self.assertLess(fuzzy_title_score("arkitecht cleanup", "Arkitechts design critic expansion"),
+                        FUZZY_WORD_RATIO)
 
     def test_case_and_punctuation_are_never_the_difference(self):
-        self.assertEqual(migrate_chat.fuzzy_title_score("ARKITEKT-CLEANUP", "arkitekt cleanup"), 1.0)
+        self.assertEqual(fuzzy_title_score("ARKITEKT-CLEANUP", "arkitekt cleanup"), 1.0)
 
     def test_empty_never_matches(self):
-        self.assertEqual(migrate_chat.fuzzy_title_score("", "Anything"), 0.0)
-        self.assertEqual(migrate_chat.fuzzy_title_score("x", ""), 0.0)
+        self.assertEqual(fuzzy_title_score("", "Anything"), 0.0)
+        self.assertEqual(fuzzy_title_score("x", ""), 0.0)
 
     def test_pick_refuses_a_tie_between_two_different_chats(self):
         rows = [{"session_id": "a", "title": "Arkitekt cleanup", "instance": "x"},
                 {"session_id": "b", "title": "Arkitekt cleanup", "instance": "y"}]
-        self.assertEqual(len(migrate_chat._fuzzy_pick("arkitecht cleanup", rows)), 2)
+        self.assertEqual(len(_fuzzy_pick("arkitecht cleanup", rows)), 2)
 
     def test_pick_takes_a_clear_winner(self):
         rows = [{"session_id": "a", "title": "Arkitekt cleanup", "instance": "x"},
                 {"session_id": "b", "title": "Arkitechts design critic expansion", "instance": "x"}]
-        got = migrate_chat._fuzzy_pick("arkitecht cleanup", rows)
+        got = _fuzzy_pick("arkitecht cleanup", rows)
         self.assertEqual([r["session_id"] for r in got], ["a"])
 
 
