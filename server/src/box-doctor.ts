@@ -368,7 +368,7 @@ export async function checkBox(
       try {
         hoards = hoardFindings(readFileSync(alertsFile(), 'utf8'), new Set(table.map((p) => p.pid)))
       } catch {
-        hoards = null // unreadable for now: the reaper rewrites it on the next change
+        hoards = null // unreadable: the reaper rewrites it on the next change
       }
     }
     add('hoard:', hoards)

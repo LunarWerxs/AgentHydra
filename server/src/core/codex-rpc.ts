@@ -60,7 +60,7 @@ export async function connectCodexRpc(
       throw error
     }
   })()
-  // The home is held until the process is gone, not until close() is called: a refresh it started
+  // The home stays held while the process is alive, and is released only once it has closed, not when close() is called: a refresh it started
   // can still be writing auth.json while it shuts down.
   child.once('close', releaseHome)
   child.once('error', releaseHome)
