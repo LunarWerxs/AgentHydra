@@ -148,6 +148,19 @@ describe('ChatStore items', () => {
     ])
   })
 
+  test('a flush while an earlier line is still being appended leaves the newest line read, on disk and in memory', async () => {
+    const h = home()
+    const store = new ChatStore(h)
+    store.appendItem('c5', text('x', 'running'))
+    await new Promise((r) => setImmediate(r))
+    store.appendItem('c5', text('x', 'final'))
+    store.flush()
+    expect(store.loadItems('c5').map((i) => (i as { text: string }).text)).toEqual(['final'])
+    await store.settledItems()
+    expect(store.loadItems('c5').map((i) => (i as { text: string }).text)).toEqual(['final'])
+    expect(new ChatStore(h).loadItems('c5').map((i) => (i as { text: string }).text)).toEqual(['final'])
+  })
+
   test('a torn last line is skipped, and the next append starts on its own line', async () => {
     const h = home()
     const store = new ChatStore(h)

@@ -104,10 +104,15 @@ export class ChatStore {
 
   /** Writes a scheduled save and the queued item lines now (server shutdown, tests); a failed write throws and keeps the list pending. */
   flush(): void {
-    // Lines in flight too: the process may end before they land, and a line written twice reads once (the last per id wins).
+    // Lines in flight too: the process may end before they land.
     for (const [file, q] of this.appends) {
-      if (!q.flying.length && !q.waiting.length) continue
-      appendFileSync(file, this.tailPrefix(file) + [...q.flying, ...q.waiting.splice(0)].join(''))
+      const lines = [...(q.flightWritten ? [] : q.flying), ...q.waiting.splice(0)]
+      if (!lines.length) continue
+      appendFileSync(file, this.tailPrefix(file) + lines.join(''))
+      if (q.flying.length) {
+        q.flightWritten = true
+        q.reissue.push(...lines)
+      }
     }
     if (this.timer) {
       clearTimeout(this.timer)
@@ -186,7 +191,7 @@ export class ChatStore {
   appendItem(chatId: string, item: TranscriptItem): void {
     const file = this.itemsFile(chatId)
     let q = this.appends.get(file)
-    if (!q) this.appends.set(file, (q = { chatId, waiting: [], flying: [], seq: 0, draining: false }))
+    if (!q) this.appends.set(file, (q = { chatId, waiting: [], flying: [], flightWritten: false, reissue: [], seq: 0, draining: false }))
     q.waiting.push(JSON.stringify(item) + '\n')
     q.seq++
     if (!q.draining) {
@@ -220,7 +225,17 @@ export class ChatStore {
       } catch (err) {
         console.error(`[store] ${q.flying.length} item(s) could not be saved to ${file}: ${(err as Error).message ?? err}`)
       }
+      if (q.reissue.length) {
+        const again = q.reissue.join('')
+        q.reissue = []
+        try {
+          appendFileSync(file, again)
+        } catch (err) {
+          console.error(`[store] items could not be saved to ${file}: ${(err as Error).message ?? err}`)
+        }
+      }
       q.flying = []
+      q.flightWritten = false
       const after = q.after
       q.after = undefined
       if (after === 'delete') await rm(file, { force: true }).catch(() => undefined)
@@ -233,7 +248,7 @@ export class ChatStore {
   /** The lines given to appendItem that may not be in the file yet, oldest first. */
   private pendingLines(file: string): string {
     const q = this.appends.get(file)
-    return q ? q.flying.join('') + q.waiting.join('') : ''
+    return q ? (q.flightWritten ? '' : q.flying.join('')) + q.waiting.join('') : ''
   }
 
   /** Changes whenever the chat's item file or the media folder changes; '' when the chat has no file. */
@@ -348,6 +363,10 @@ interface Appends {
   chatId: string
   waiting: string[]
   flying: string[]
+  /** The batch in flight was already written by flush, so reads need not overlay it. */
+  flightWritten: boolean
+  /** Lines flush wrote while a batch was in flight: that batch lands after them, so they are written again then. */
+  reissue: string[]
   /** Counts every line given, so the items stamp changes with each. */
   seq: number
   draining: boolean
