@@ -26,7 +26,7 @@ describe('settings search', () => {
   })
 
   it('filters every section by label and description, grouped under the section name', () => {
-    expect(matchRows('CLIMAYTE').map((r) => r.id)).toEqual(['ahAlerts', 'delegate', 'workers', 'bridge'])
+    expect(matchRows('CLIMAYTE').map((r) => r.id)).toEqual(['ahAlerts', 'delegate', 'workers', 'ahKeepAwake', 'bridge'])
     // Every word must match, in either the label or the description.
     expect(matchRows('model thinks').map((r) => r.id)).toEqual(['effort'])
     expect(settingsGroups('about', 'climayte').map((g) => g.heading)).toEqual(['Usage alerts', 'CliMayte'])

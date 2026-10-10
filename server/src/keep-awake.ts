@@ -211,7 +211,14 @@ export function startKeepAwake(): void {
     now: Date.now,
   })
   controller.refresh()
-  timer = setInterval(() => controller?.refresh(), TICK_MS)
+  // A tick that fails is a tick skipped: this process exits on an uncaught throw.
+  timer = setInterval(() => {
+    try {
+      controller?.refresh()
+    } catch (err) {
+      console.error('[keep-awake] refresh failed:', err)
+    }
+  }, TICK_MS)
   timer.unref?.()
 }
 
