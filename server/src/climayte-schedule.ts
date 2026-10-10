@@ -722,8 +722,8 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
       }
     }
   }
-  // Off a limit or a handoff the session moves anyway: never held for another account's pace.
-  const moving = ['quota', 'handoff'].includes(w.attempts.at(-1)?.outcome ?? '')
+  // Off a limit, a handoff or a dead login the session moves anyway: never held for another account's pace.
+  const moving = ['quota', 'handoff', 'auth'].includes(w.attempts.at(-1)?.outcome ?? '')
   const refused: Refusal[] = []
   const firstTaker = (list: CliMayteAccount[], c: number | null): CliMayteAccount | null => {
     for (const acct of list) {
@@ -760,12 +760,12 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
     const past = firstTaker(spill, over)
     if (past) {
       const within = cap ?? 'the default'
-      if (goesNow(s, past))
+      startOn(s, w, past, cost, groupActive)
+      if (w.status === 'running')
         journal(w, 'spill', {
           account: acctLabel(past),
           notice: `no account within its per_account (${within}) took it now`,
         })
-      startOn(s, w, past, cost, groupActive)
       return
     }
   }
