@@ -27,7 +27,11 @@ function desktop(session: Record<string, unknown>, reply: { delivery: string; re
     archiveSession: async () => {},
     hasPendingUserInput: () => false,
     localLineageIds: () => [],
-    sendPeerMessage: async (id: string, text: string, opts: any) => {
+    sendPeerMessage: async (
+      id: string,
+      text: string,
+      opts: { messageId: string; origin: { kind: string; from: string; name: string } },
+    ) => {
       calls.push({ id, text, opts })
       return reply
     },

@@ -668,7 +668,10 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
   test('ultracode with bypass sets the mode through the picker call and reads it back', async () => {
     const h = harness()
     const modes: any[] = []
-    h.manager.applyFlagSettings = async (id: string, flags: any) => {
+    h.manager.applyFlagSettings = async (
+      id: string,
+      flags: { ultracode: boolean; effortLevel: NativeRequest['effort'] },
+    ) => {
       const s = h.manager.sessions.get(id)
       s.sessionSettings = { ...s.sessionSettings, ultracode: flags.ultracode }
       s.effort = flags.effortLevel
@@ -700,7 +703,7 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
     const h = harness()
     const cli = '0b0e5c1a-1111-4222-8333-444455556666'
     const calls: any[] = []
-    h.manager.importCliSession = async (id: string, options: any) => {
+    h.manager.importCliSession = async (id: string, options: { source: string }) => {
       calls.push({ id, options })
       h.manager.sessions.set(`local_${id}`, {
         ...h.target,
