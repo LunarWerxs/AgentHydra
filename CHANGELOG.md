@@ -10,6 +10,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The PC stays awake while your agents work.** While a CliMayte worker runs or a chat is working, AgentHydra
   stops the PC going to sleep on its own, and lets it sleep again once nothing works. The screen still turns off
   and Sleep still works. It is on by default; Settings -> CliMayte -> This PC turns it off.
+- **A browser agent no longer gets stuck behind a page's pop-up.** When a page an agent drives shows an alert, a
+  question or a "leave this page?" box, AgentHydra answers it at once: alerts and leaving are accepted, questions are
+  declined. The agent's tab-errors check lists each one, so it can see why a click changed nothing.
+- **The Changes pane warns before a merge would conflict.** When merging the main branch into your work would
+  conflict, a line above the diff names the files. Nothing is fetched and none of your files change.
+- **Claude Code opened on any account carries your CLAUDE.md and skills.** Launching your own Claude Code on an
+  account from AgentHydra now brings in your rules and skills first, as CliMayte workers already did.
+- **A chat whose session cannot be reopened carries on instead of failing.** When a chat's saved session is not on
+  this PC (it was made on another machine, or its file is gone), your message now starts a fresh session that
+  carries a condensed handoff of the chat's record. The chat keeps everything it showed before.
+- **Plain project folders show their own logo.** On the New screen, a folder that is not a Project Hydra project now
+  shows its favicon or logo when it has one, including one in a web app one folder down.
 - **Searching chats finds more than the exact phrase.** When no chat holds the words in the order you typed them,
   search now looks for all of them apart, then fixes a small typo, then takes any of them, and says which it did.
   A case-sensitive search still looks for the exact phrase only.

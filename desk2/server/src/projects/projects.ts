@@ -14,6 +14,7 @@
 // (Claude Desktop, the CLI). One started in a folder that holds projects (D:\NEWProjects) is placed by what it did
 // (attribute.ts) and filed once into that project's sidebar group; a group the user picks is never changed.
 
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, isAbsolute, join, resolve, sep } from 'node:path'
@@ -25,6 +26,7 @@ import { type PlacedBy, SpotIndex } from './attribute'
 import { checkoutOf, folderKey, isDir, subfolders } from './choices'
 import type { HydraLocation, HydraProject, HydraRead } from './hydra'
 import { iconVersion } from './icon-cache'
+import { detectFolderIcon } from './icon-detect'
 import { AsyncFile } from '../async-file'
 
 export interface GitFacts {
@@ -247,6 +249,8 @@ export class ProjectList {
   private hydraAt: HydraState | null = null
   private hydraLoading: Promise<void> | null = null
   private readonly gitCache = new Map<string, GitEntry>()
+  /** The logo files of plain folders found by icon-detect.ts, by the key their icon URL carries; rebuilt by each build. */
+  private folderIcons = new Map<string, string>()
   /** The git reads running or waiting for a slot, by folder key. */
   private readonly gitReads = new Map<string, Promise<void>>()
   private gitRunning = 0
@@ -335,9 +339,9 @@ export class ProjectList {
     return this.outsideAt?.list ?? []
   }
 
-  /** The logo file of a Project Hydra project, from the last answer; null when it has none. */
+  /** The logo file of a Project Hydra project, or of a plain folder found by icon-detect.ts, from the last answer; null when it has none. */
   iconFile(key: string): string | null {
-    return this.hydraAt?.read?.projects.find((p) => p.key === key)?.iconFile ?? null
+    return this.hydraAt?.read?.projects.find((p) => p.key === key)?.iconFile ?? this.folderIcons.get(key) ?? null
   }
 
   /** The checkout's last known git state, and the read that refreshes it when it is missing or stale. */
@@ -479,6 +483,7 @@ export class ProjectList {
     this.seen = new Set(chats.flatMap((c) => (c.sessionId ? [c.sessionId] : [])))
     const { placing, placedAway } = this.placeChats(chats, rows, places)
     for (const dir of this.deps.recent()) places.own(dir)?.sources.add('recent')
+    this.folderIcons = plainIcons(rows)
     return { rows, choices, hydraPlaced: hydra.length, placing, placedAway }
   }
 
@@ -605,6 +610,22 @@ interface Places {
 
 function newRow(path: string): Row {
   return { path, name: basename(path) || path, group: null, icon: null, hydraKey: null, sources: new Set(), lastChatAt: null, openChats: 0 }
+}
+
+/** Gives each plain folder row its own logo (icon-detect.ts) and returns the files by the key the icon URL carries.
+ *  A Project Hydra row keeps its registry logo. */
+function plainIcons(rows: Map<string, Row>): Map<string, string> {
+  const icons = new Map<string, string>()
+  for (const row of rows.values()) {
+    if (row.hydraKey || isRemotePath(row.path)) continue
+    const file = detectFolderIcon(row.path)
+    const version = file ? iconVersion(file) : null
+    if (!file || !version) continue
+    const key = `folder:${createHash('sha1').update(folderKey(row.path)).digest('hex')}`
+    icons.set(key, file)
+    row.icon = `/api/projects/icon?key=${encodeURIComponent(key)}&v=${encodeURIComponent(version)}`
+  }
+  return icons
 }
 
 /** One row per Project Hydra project folder that exists. The longest folder first, so a project nested in another one (a
