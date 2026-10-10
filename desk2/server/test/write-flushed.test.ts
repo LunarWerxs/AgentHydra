@@ -115,7 +115,9 @@ describe.skipIf(!WINDOWS)('a rename over a file another program holds open', () 
 
   test('renameOver waits out a holder that lets go within its window', async () => {
     const { target, tmp } = scratch()
-    const holder = await hold(target, 800)
+    // 300 ms, not 800: the holder's Start-Sleep overshoots on a loaded runner, and an 800 ms hold
+    // left 1.2 s of slack in the 2 s window (CI 38043705799: the rename gave up at 2.3 s and failed).
+    const holder = await hold(target, 300)
     try {
       renameOver(tmp, target)
       expect(readFileSync(target, 'utf8')).toBe('new')
