@@ -148,11 +148,15 @@ function judge(m: Measure, needAlert: boolean): string[] {
   return out
 }
 
+const SCRATCH = mkdtempSync(join(tmpdir(), 'desk2-header-fit-'))
+const home = join(SCRATCH, 'home')
+const profile = join(SCRATCH, 'edge')
+mkdirSync(home)
+mkdirSync(profile)
 const server = Bun.spawn([process.execPath, 'server/src/index.ts'], {
-  cwd: DESK, env: { ...process.env, HYDRA_DESK_PORT: String(PORT), HYDRA_DESK_HOME: mkdtempSync(join(tmpdir(), 'desk2-header-fit-home-')) },
+  cwd: DESK, env: { ...process.env, HYDRA_DESK_PORT: String(PORT), HYDRA_DESK_HOME: home },
   stdout: 'ignore', stderr: 'ignore', windowsHide: true,
 })
-const profile = mkdtempSync(join(tmpdir(), 'desk2-header-fit-edge-'))
 const shotDir = join(tmpdir(), 'header-fit')
 mkdirSync(shotDir, { recursive: true })
 let edge: ReturnType<typeof Bun.spawn> | null = null
@@ -255,7 +259,7 @@ try {
   edge?.kill()
   server.kill()
   await Promise.all([edge?.exited, server.exited])
-  for (const dir of [profile]) try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {}
+  try { rmSync(SCRATCH, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {}
 }
 console.log(`${total - failed} of ${total} widths fit`)
 process.exit(failed || !total ? 1 : 0)

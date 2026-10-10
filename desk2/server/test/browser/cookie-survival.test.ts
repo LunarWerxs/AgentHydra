@@ -80,14 +80,17 @@ const NAME = 'ah_survival'
 const DOMAIN = 'example.test'
 
 describe.skipIf(!chrome)('cookie survival across a clean close and relaunch', () => {
+  let root = ''
   let home = ''
   let fixture = ''
   let value = ''
 
   beforeAll(() => {
-    home = mkdtempSync(join(tmpdir(), 'ah-cookie-home-'))
+    root = mkdtempSync(join(tmpdir(), 'ah-cookie-'))
+    home = join(root, 'home')
+    mkdirSync(home)
     process.env.HYDRA_DESK_HOME = home
-    fixture = join(mkdtempSync(join(tmpdir(), 'ah-cookie-profile-')), 'profile')
+    fixture = join(root, 'profile')
     mkdirSync(fixture, { recursive: true })
     value = `v${crypto.randomUUID()}`
   })
@@ -100,9 +103,7 @@ describe.skipIf(!chrome)('cookie survival across a clean close and relaunch', ()
         // floor-ok: already exited
       }
     }
-    for (const dir of [home, fixture]) {
-      if (dir) rmSync(dir, { recursive: true, force: true })
-    }
+    if (root) rmSync(root, { recursive: true, force: true })
   })
 
   test('a persistent cookie is present after close and relaunch with the same binary and folder', async () => {

@@ -9,10 +9,11 @@ import {
 } from '../../../src/browser/agent/session'
 import { closeBrowser } from '../../../src/browser/cdp'
 
+const ROOT = mkdtempSync(join(tmpdir(), 'hydra-session-'))
 const folders: string[] = []
 
 function newFolder(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'hydra-session-'))
+  const dir = mkdtempSync(join(ROOT, 'folder-'))
   folders.push(dir)
   return dir
 }
@@ -41,7 +42,7 @@ async function removeWhenUnlocked(dir: string, until: number): Promise<void> {
 afterAll(async () => {
   await Promise.all(folders.map((dir) => closeBrowser(dir).catch(() => false)))
   const until = Date.now() + 40_000
-  for (const dir of folders) await removeWhenUnlocked(dir, until)
+  await removeWhenUnlocked(ROOT, until)
 }, 120_000)
 
 describe('browser session endpoint', () => {

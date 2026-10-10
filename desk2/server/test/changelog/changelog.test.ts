@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseChangelog, readChangelog } from '../../src/changelog'
@@ -83,13 +83,16 @@ describe('parseChangelog', () => {
 })
 
 describe('readChangelog', () => {
+  const ROOT = mkdtempSync(join(tmpdir(), 'changelog-'))
+  afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+
   test('answers no sections when the file is missing', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'changelog-'))
+    const dir = mkdtempSync(join(ROOT, 'case-'))
     expect(readChangelog([join(dir, 'CHANGELOG.md')])).toEqual({ sections: [] })
   })
 
   test('reads the first file that exists', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'changelog-'))
+    const dir = mkdtempSync(join(ROOT, 'case-'))
     const file = join(dir, 'CHANGELOG.md')
     writeFileSync(file, FIXTURE)
     expect(readChangelog([join(dir, 'missing.md'), file]).sections).toHaveLength(3)

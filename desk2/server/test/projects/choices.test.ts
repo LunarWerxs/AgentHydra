@@ -1,10 +1,13 @@
-import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkoutOf, folderKey, localFolderPath, subfolders, withoutPath, withPath } from '../../src/projects/choices'
 
-const base = () => mkdtempSync(join(tmpdir(), 'choices-'))
+const ROOT = mkdtempSync(join(tmpdir(), 'choices-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+
+const base = () => mkdtempSync(join(ROOT, 'case-'))
 
 describe('folderKey', () => {
   test('a junction and the folder it points to are one key', () => {
