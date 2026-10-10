@@ -103,6 +103,7 @@ import {
   writeInstanceInfo,
 } from './instance'
 import { warmSessionMetaIndex } from './instance-sessions'
+import { keepAwakeStatus, refreshKeepAwake, startKeepAwake } from './keep-awake'
 import { startKitSweep } from './kit/sweep'
 import { initFileLogging, logFilePath } from './log-file.mjs'
 import { startLoopDetector } from './loop-detector'
@@ -653,6 +654,10 @@ const appSettings = () => ({
 app.get('/api/ui-prefs', (c) => c.json({ prefs: readUiPrefs() }))
 app.post('/api/ui-prefs', async (c) => c.json({ prefs: writeUiPrefs(await jsonBody(c)) }))
 app.get('/api/settings', (c) => c.json(appSettings()))
+// Whether this PC is being held awake for working agents, and by what (server/src/keep-awake.ts).
+app.get('/api/keep-awake', (c) =>
+  c.json(keepAwakeStatus() ?? { enabled: false, active: false, holder: 'none' }),
+)
 app.post('/api/settings', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.hideTrayIcon === 'boolean') setHideTrayIcon(body.hideTrayIcon)
@@ -688,7 +693,11 @@ app.post('/api/settings', async (c) => {
     keepaliveWeeklyFloorPct:
       typeof body.keepaliveWeeklyFloorPct === 'number' ? body.keepaliveWeeklyFloorPct : undefined,
     allowExtraUsage: typeof body.allowExtraUsage === 'boolean' ? body.allowExtraUsage : undefined,
+    keepAwakeWhileWorking:
+      typeof body.keepAwakeWhileWorking === 'boolean' ? body.keepAwakeWhileWorking : undefined,
   })
+  // Switched off, the hold goes now, not at the next minute's tick.
+  if (typeof body.keepAwakeWhileWorking === 'boolean') refreshKeepAwake()
   // The nudge acts on its switch at once (a pass now when it was switched on, its timer re-armed),
   // not at the next sweep up to 30 minutes later.
   if (
@@ -1546,6 +1555,9 @@ startIdleSweep()
 // Watches the CLI workers a person delegated, and moves one to another account at a usage limit.
 // Launches nothing on its own: with no worker queued each tick is a no-op.
 startCliMayte()
+// Asks the OS not to idle-sleep while a CliMayte worker runs or a session reports working, and lets
+// go when nothing does (server/src/keep-awake.ts). On by default; Settings switches it off.
+startKeepAwake()
 
 // --- background usage refresh (ON by default; see server/src/usage-refresh.ts) -----------------
 // A check is now a ~300ms HTTPS GET against the quota endpoint, not a `claude` spawn, and reading

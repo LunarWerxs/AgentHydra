@@ -15,6 +15,9 @@ export function getProviderSettings(): ProviderSettings {
     // accounts, with nobody watching. See server/src/session-keepalive.ts.
     keepaliveEnabled: getSetting('keepalive_enabled') === '1',
     keepaliveWeeklyFloorPct: clampFloor(getSetting('keepalive_weekly_floor')),
+    // ON by default: it costs nothing, holds only while something works, and a PC that idle-sleeps
+    // stops every unattended worker mid-turn. See server/src/keep-awake.ts.
+    keepAwakeWhileWorking: enabledByDefault('keep_awake_while_working'),
     // OPT-IN FOR THE SAME REASON AS THE KEEPALIVE, ONLY STRONGER: this one SPENDS MONEY. Some
     // accounts bill paid extra usage past their limits; only an explicit '1' lets any work do so.
     allowExtraUsage: getSetting('allow_extra_usage') === '1',
@@ -44,6 +47,8 @@ export function setProviderSettings(patch: Partial<ProviderSettings>): ProviderS
     setSetting('keepalive_enabled', patch.keepaliveEnabled ? '1' : '0')
   if (typeof patch.keepaliveWeeklyFloorPct === 'number')
     setSetting('keepalive_weekly_floor', String(clampFloor(String(patch.keepaliveWeeklyFloorPct))))
+  if (typeof patch.keepAwakeWhileWorking === 'boolean')
+    setSetting('keep_awake_while_working', patch.keepAwakeWhileWorking ? '1' : '0')
   if (typeof patch.allowExtraUsage === 'boolean')
     setSetting('allow_extra_usage', patch.allowExtraUsage ? '1' : '0')
   return getProviderSettings()

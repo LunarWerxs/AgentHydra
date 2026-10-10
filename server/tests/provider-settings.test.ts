@@ -14,6 +14,8 @@ test('provider settings default on for installed surfaces and off for ChatGPT ha
     keepaliveWeeklyFloorPct: 85,
     // Paid extra usage spends money, so CliMayte may only use it once the owner turns this on.
     allowExtraUsage: false,
+    // Holding the PC awake while agents work costs nothing and saves unattended runs: ON.
+    keepAwakeWhileWorking: true,
   })
 })
 
@@ -32,6 +34,7 @@ test('provider settings round-trip independently', () => {
     keepaliveEnabled: false,
     keepaliveWeeklyFloorPct: 85,
     allowExtraUsage: false,
+    keepAwakeWhileWorking: true,
   })
 
   setProviderSettings({

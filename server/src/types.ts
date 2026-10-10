@@ -1654,6 +1654,9 @@ export interface ProviderSettings {
   keepaliveEnabled: boolean
   /** Weekly-usage percentage at or above which an account is left alone by the keepalive. */
   keepaliveWeeklyFloorPct: number
+  /** Ask the OS not to idle-sleep while a CliMayte worker runs or a session reports working
+   *  (keep-awake.ts). ON by default; the screen still turns off and Sleep still works. */
+  keepAwakeWhileWorking: boolean
   /** Let work on this machine's Claude accounts run on paid extra usage (usage credits) past their
    *  limits. OFF by default — with it off nothing AgentHydra manages bills it: CliMayte stops a task
    *  before its account would bill and moves it, and the extra-usage guard (extra-usage.ts) stops
