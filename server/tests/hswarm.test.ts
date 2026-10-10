@@ -124,6 +124,56 @@ test('a sidecar that exits is started again', async () => {
   expect(getHSwarmStatus()).toMatchObject({ running: true, lastError: null })
 })
 
+test('our own server that stops answering is reported silent, then ended and started again', async () => {
+  // 2026-10-09: a worker's glob held the server's event loop for fifteen minutes. Its process lived on, so the
+  // daemon said "running" while every read the window made failed, and nothing restarted it.
+  let answering = true
+  const killed: number[] = []
+  const exits: (() => void)[] = []
+  const spawn = (() => {
+    let exit = () => {}
+    const exited = new Promise<number>((resolve) => {
+      exit = () => resolve(0)
+    })
+    exits.push(exit)
+    // A pid no system hands out (odd, past Linux's 2^22 ceiling): a failed run's cleanup ends nothing real.
+    return { pid: exits.length === 1 ? 4_194_305 : undefined, exited, kill: () => exit() }
+  }) as unknown as typeof Bun.spawn
+  const dir = withPackage('silent')
+  await startHSwarm({
+    enabled: true,
+    dir,
+    logDir: join(tmp, 'logs'),
+    spawn,
+    port: 1,
+    probe: async () =>
+      answering && exits.length > 0 ? { hswarm: true, pid: 4_194_305, package: dir } : null,
+    kill: (pid) => {
+      killed.push(pid)
+      exits[exits.length - 1]()
+    },
+    watchEveryMs: 5,
+    silentLimitMs: 150,
+  })
+  await Bun.sleep(40)
+  expect(getHSwarmStatus()).toMatchObject({ running: true, answering: true })
+
+  answering = false
+  await Bun.sleep(40)
+  expect(getHSwarmStatus()).toMatchObject({ running: true, answering: false })
+  expect(killed).toEqual([])
+
+  await Bun.sleep(300)
+  expect(killed).toEqual([4_194_305])
+  expect(getHSwarmStatus()).toMatchObject({
+    running: false,
+    lastError: expect.stringContaining('answered nothing'),
+  })
+  await Bun.sleep(1_300) // the first restart waits 1 s
+  expect(exits).toHaveLength(2)
+  expect(getHSwarmStatus()).toMatchObject({ running: true })
+})
+
 test('an adopted server is watched and replaced by our own child once it stops answering', async () => {
   let live = true
   const adoptedDir = withPackage('adopted')

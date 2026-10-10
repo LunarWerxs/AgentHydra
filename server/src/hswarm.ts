@@ -98,10 +98,12 @@ interface HSwarmDeps {
   /** Spawns the ZSwarm import (tests pass a fake). */
   importSpawn?: typeof Bun.spawn
   importFirstMs?: number
-  probe?: (port: number) => Promise<Record<string, unknown> | null>
-  /** Ends a foreign server by pid (tests pass a fake). */
+  probe?: (port: number, timeoutMs?: number) => Promise<Record<string, unknown> | null>
+  /** Ends a foreign server, or our own child gone silent, by pid (tests pass a fake). */
   kill?: (pid: number) => void
   watchEveryMs?: number
+  /** How long our own child may answer no /health before it is ended and started again. */
+  silentLimitMs?: number
   /** A side-run daemon (not the primary install) never ends a server it did not start; defaults to
    *  `!IS_PRIMARY_INSTALL`. Tests inject it. */
   sideRun?: boolean
@@ -109,6 +111,9 @@ interface HSwarmDeps {
 
 interface HSwarmState {
   running: boolean
+  /** Whether the server's /health answered when last looked at; null before the first look. A server can run
+   *  and still answer nobody (its event loop held), which the window must not call "running". */
+  answering: boolean | null
   port: number | null
   pid: number | null
   lastError: string | null
@@ -116,6 +121,7 @@ interface HSwarmState {
 
 let state: HSwarmState = {
   running: false,
+  answering: null,
   port: null,
   pid: null,
   lastError: null,
@@ -200,6 +206,7 @@ function watchAdopted(deps: HSwarmDeps, port: number, dir: string): void {
     const live = await (deps.probe ?? probeHSwarm)(port)
     if (stopRequested || !state.running || proc) return
     if (live?.hswarm === true && (isSideRun(deps) || runsFrom(live, dir))) {
+      state.answering = true
       watchAdopted(deps, port, dir)
       return
     }
@@ -298,6 +305,7 @@ async function settleLive(deps: HSwarmDeps, plan: StartPlan): Promise<boolean> {
   if (liveHSwarm?.hswarm !== true || !(sideRun || typeof liveHSwarm.pid === 'number')) return false
   // A side-run adopts whatever server answers, read-only: spawning beside it would fight for the port.
   state.running = true
+  state.answering = true
   state.pid = typeof liveHSwarm.pid === 'number' ? liveHSwarm.pid : null
   state.port = port
   state.lastError = null
@@ -312,10 +320,55 @@ async function settleLive(deps: HSwarmDeps, plan: StartPlan): Promise<boolean> {
 function restartOnExit(deps: HSwarmDeps): void {
   if (!stopRequested && state.running) {
     state.running = false
+    state.answering = null
     state.pid = null
-    state.lastError = 'process exited'
+    state.lastError ??= 'process exited'
     scheduleRestart(deps)
   }
+}
+
+/** How long our own child may go without answering /health before it is ended and started again. Its process
+ *  exiting is the only other sign we get, and a server whose event loop is held lives on deaf: on 2026-10-09 one
+ *  answered nobody for fifteen minutes (a worker's glob on its loop) while the window said HSwarm ran. Three
+ *  minutes leaves room for a slow start; its running jobs are carried on by the next server (adopt_orphans). */
+const SILENT_LIMIT_MS = 3 * 60_000
+/** A busy server still answers /health within this; the adopt watch's 500 ms is for a server we may replace. */
+const CHILD_PROBE_TIMEOUT_MS = 3_000
+
+/** Looks at our own child's /health on an interval: `state.answering` says what it saw, and a child silent for
+ *  SILENT_LIMIT_MS is ended, which its exit handler answers with a fresh start. */
+function watchChild(deps: HSwarmDeps, child: ReturnType<typeof Bun.spawn>, port: number): void {
+  clearAdoptTimer()
+  let heardAt = Date.now()
+  let gone = false
+  void child.exited.finally(() => {
+    gone = true
+  })
+  const live = () => !stopRequested && !gone && proc === child
+  const tick = async () => {
+    adoptTimer = null
+    if (!live()) return
+    const answer = await (deps.probe ?? probeHSwarm)(port, CHILD_PROBE_TIMEOUT_MS)
+    if (!live()) return
+    state.answering = answer?.hswarm === true
+    if (state.answering) heardAt = Date.now()
+    const silentMs = Date.now() - heardAt
+    if (silentMs >= (deps.silentLimitMs ?? SILENT_LIMIT_MS) && child.pid) {
+      state.lastError = `answered nothing for ${Math.round(silentMs / 1000)} s; ended and started again`
+      console.log(`[hswarm] pid ${child.pid} on port ${port} ${state.lastError}`)
+      try {
+        ;(deps.kill ?? killProcessTree)(child.pid)
+      } catch (e) {
+        console.error(
+          '[hswarm] ending the silent server failed:',
+          e instanceof Error ? e.message : String(e),
+        )
+      }
+      return
+    }
+    adoptTimer = setTimeout(tick, deps.watchEveryMs ?? ADOPT_WATCH_MS)
+  }
+  adoptTimer = setTimeout(tick, deps.watchEveryMs ?? ADOPT_WATCH_MS)
 }
 
 function spawnServer(deps: HSwarmDeps, plan: StartPlan): void {
@@ -339,11 +392,13 @@ function spawnServer(deps: HSwarmDeps, plan: StartPlan): void {
     })
 
     state.running = true
+    state.answering = null
     state.pid = proc.pid ?? null
     state.port = port
     state.lastError = null
     backoffMs = MIN_BACKOFF_MS
     startZswarmImport({ python, dir, env, spawn: deps.importSpawn, firstMs: deps.importFirstMs })
+    watchChild(deps, proc, port)
 
     // Watch for crash and restart with backoff
     proc.exited
@@ -458,6 +513,7 @@ export async function stopHSwarm(): Promise<void> {
   if (!proc) {
     // An adopted server is somebody else's process (a chat's keeper started it): forget it, never kill it.
     state.running = false
+    state.answering = null
     state.pid = null
     return
   }
@@ -480,6 +536,7 @@ export async function stopHSwarm(): Promise<void> {
   }
 
   state.running = false
+  state.answering = null
   state.pid = null
   proc = null
 }
@@ -504,7 +561,7 @@ export function setHSwarmEnabled(enabled: boolean): void {
 export function resetHSwarmStateForTests(): void {
   stopRequested = false
   clearAdoptTimer()
-  state = { running: false, port: null, pid: null, lastError: null }
+  state = { running: false, answering: null, port: null, pid: null, lastError: null }
   proc = null
   backoffMs = MIN_BACKOFF_MS
 }

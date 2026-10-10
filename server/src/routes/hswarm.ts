@@ -3,7 +3,7 @@
  *
  * `/api/hswarm/*` forwards to the local hswarm server on 127.0.0.1:<port>, passing through
  * method, body, query, status and JSON.
- * `/api/hswarm-status` returns {running, port, pid, lastError}.
+ * `/api/hswarm-status` returns {running, answering, port, pid, lastError}.
  * `/api/hswarm-accounts` returns {"acct-xxxxxxxx": {num, label, kind}} so the stats view can name the
  * account ids hswarm reports (first 8 hex of sha256 over the account uuid, hswarm/accounts.py).
  */
@@ -146,6 +146,7 @@ app.get('/api/hswarm-status', (c) => {
   const status = getHSwarmStatus()
   return c.json({
     running: status.running,
+    answering: status.answering,
     port: status.port,
     pid: status.pid,
     lastError: status.lastError,
