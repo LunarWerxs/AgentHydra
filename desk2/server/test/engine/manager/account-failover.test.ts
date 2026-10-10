@@ -259,7 +259,7 @@ test('a session under the size cap is still copied and resumed', async () => {
   expect(userTexts(q.last())[0]).toContain('carry on')
 })
 
-test('pickHealthy skips signed-out, tried, unread and at-the-85%-line accounts and prefers the least used', () => {
+test("pickHealthy skips signed-out, tried, unread and at-the-line accounts (85%, or the owner's cap) and prefers the owner's priority, then the least used", () => {
   const list = [
     account(1, { signedIn: false }),
     account(2, { fiveHourPct: 100 }),
@@ -267,9 +267,13 @@ test('pickHealthy skips signed-out, tried, unread and at-the-85%-line accounts a
     account(4, { fiveHourPct: 20 }),
     account(5),
     account(6, { weeklyPct: 85 }),
-    account(7, { fiveHourPct: null })
+    account(7, { fiveHourPct: null }),
+    // Owner, 2026-10-09: "This is priority, like, top, and then up to 50% of five-hour".
+    account(8, { fiveHourPct: 30, priority: 2, maxFiveHourPct: 50 }),
+    account(9, { fiveHourPct: 15, priority: 2, maxFiveHourPct: 15 })
   ]
-  expect(pickHealthy(list, [])?.number).toBe(5)
-  expect(pickHealthy(list, ['acct-5'])?.number).toBe(4)
-  expect(pickHealthy(list, ['acct-5', 'acct-4', 'acct-3'])).toBeNull()
+  expect(pickHealthy(list, [])?.number).toBe(8)
+  expect(pickHealthy(list, ['acct-8'])?.number).toBe(5)
+  expect(pickHealthy(list, ['acct-8', 'acct-5'])?.number).toBe(4)
+  expect(pickHealthy(list, ['acct-8', 'acct-5', 'acct-4', 'acct-3'])).toBeNull()
 })

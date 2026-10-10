@@ -49,6 +49,14 @@ describe('accounts', () => {
     expect(a.label).toBe('#61 someone@example.com (Pro)')
   })
 
+  test("the owner's priority and caps for an account come through; an account without them is Normal on the fleet's line", () => {
+    const inst = fixture('cli-instances')
+    inst[1].placement = { priority: 2, maxSessionPct: 50, maxWeekPct: 40 }
+    const accounts = mapAccounts(inst, [])
+    expect(accounts.find((x) => x.id === 'cli-2')).toMatchObject({ priority: 2, maxFiveHourPct: 50, maxWeeklyPct: 40 })
+    expect(accounts.find((x) => x.id === 'cli-3')).toMatchObject({ priority: 0, maxFiveHourPct: null, maxWeeklyPct: null })
+  })
+
   test('a reading taken before a sign-out is not used', () => {
     const inst = fixture('cli-instances')
     inst[1].lastUsageCheck.signedOutAt = '2026-10-03T20:00:00.000Z'

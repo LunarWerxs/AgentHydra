@@ -118,6 +118,8 @@ export interface AhCliInstance {
   lastUsageCheck: AhUsageSnapshot | null
   liveSessions?: number
   movedAway?: unknown
+  /** The owner's priority and caps for AgentHydra's work on this account (AgentHydra's AccountPlacement). */
+  placement?: { priority: number; maxSessionPct: number | null; maxWeekPct: number | null } | null
 }
 
 /** GET /api/instances: one isolated Claude Desktop instance (`loginUuid`: the account signed in there). */

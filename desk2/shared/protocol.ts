@@ -439,6 +439,11 @@ export interface AccountInfo extends AccountRef {
   fiveHourResetsAt: number | null
   weeklyResetsAt: number | null
   inUse: boolean // a person or another session is using it now (AgentHydra's reading)
+  /** The owner's priority for AgentHydra's work here (2 Top, 1 High, 0 Normal, -1 Low): a higher one is picked first. */
+  priority?: number
+  /** The owner's caps (1-84): this account's line in place of the fleet's 85%. Absent or null: the fleet's. */
+  maxFiveHourPct?: number | null
+  maxWeeklyPct?: number | null
 }
 
 // Git (the bar above the composer, and the diff pane)

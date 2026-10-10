@@ -257,11 +257,12 @@ const SIGN_IN_HOLD_MS = 6 * 60 * 60 * 1000
 /** '#126' for a numbered account, else its label. */
 const accountName = (a: AccountRef): string => (a.number !== undefined ? `#${a.number}` : a.label)
 
-/** The healthiest account not tried yet: one with room (hasRoom), the least used first; the default login last. */
+/** The healthiest account not tried yet: one with room (hasRoom), the owner's highest priority first, then the least
+ *  used; the default login last. */
 export function pickHealthy(accounts: AccountInfo[], tried: string[]): AccountInfo | null {
   const ok = accounts.filter((a) => !tried.includes(a.id) && hasRoom(a))
   const load = (a: AccountInfo): number => (a.id === DEFAULT_ACCOUNT.id ? 1000 : Math.max(a.fiveHourPct ?? 0, a.weeklyPct ?? 0))
-  return ok.sort((a, b) => load(a) - load(b))[0] ?? null
+  return ok.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || load(a) - load(b))[0] ?? null
 }
 
 /** The account a chat gets (resolveAccount). */

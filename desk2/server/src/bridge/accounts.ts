@@ -24,10 +24,18 @@ export const DEFAULT_ACCOUNT_INFO: AccountInfo = {
  *  itself (a move, a title, a judgment) goes onto an account at or past it. */
 export const ROOM_PCT = 85
 
-/** Signed in, and read under ROOM_PCT on both windows. An unread window is not room: the default login is never
+/** Signed in, and read under its line on both windows: ROOM_PCT, or the owner's lower cap for the account (owner,
+ *  2026-10-09: "up to 50% of five-hour, 50% of week"). An unread window is not room: the default login is never
  *  read, and before this a full account moved chats onto one at 99% (the line was 100, unread counted as 0). */
 export function hasRoom(a: AccountInfo): boolean {
-  return a.signedIn && a.fiveHourPct !== null && a.weeklyPct !== null && a.fiveHourPct < ROOM_PCT && a.weeklyPct < ROOM_PCT
+  const line = (cap: number | null | undefined): number => Math.min(ROOM_PCT, cap ?? ROOM_PCT)
+  return (
+    a.signedIn &&
+    a.fiveHourPct !== null &&
+    a.weeklyPct !== null &&
+    a.fiveHourPct < line(a.maxFiveHourPct) &&
+    a.weeklyPct < line(a.maxWeeklyPct)
+  )
 }
 
 const RUNNING_WORKER = new Set(['running', 'checking'])
@@ -65,6 +73,9 @@ export function toAccountInfo(i: AhCliInstance, busyAccountIds: ReadonlySet<stri
     // liveSessions counts the account's live registry (any Claude session on it, CliMayte workers
     // included); a running worker is counted too in case the registry has not caught up with it.
     inUse: (i.liveSessions ?? 0) > 0 || busyAccountIds.has(i.id),
+    priority: i.placement?.priority ?? 0,
+    maxFiveHourPct: i.placement?.maxSessionPct ?? null,
+    maxWeeklyPct: i.placement?.maxWeekPct ?? null,
   }
 }
 
