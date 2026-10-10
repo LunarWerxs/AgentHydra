@@ -9,7 +9,9 @@
 
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { CONFIG_DIR } from './config'
+import { canonicalConfigDir, listCliInstances } from './core/cli-instances'
 import { getSetting } from './db'
 import {
   claudeCodeConfigPath,
@@ -268,31 +270,98 @@ const mcpServersOf = (config: Json): Json =>
     ? (config.mcpServers as Json)
     : {}
 
+/** A CLI instance's entries follow the owner's originals: a hub entry follows the port (or, disabled, goes back to its
+ *  original), and an entry equal to its original moves to the hub. An instance entry that differs is never touched. */
+function rewriteInstanceEntries(
+  servers: Json,
+  originals: Json,
+  enabled: boolean,
+  daemonUrl: string,
+): string[] {
+  const changed: string[] = []
+  for (const [name, entry] of Object.entries(servers)) {
+    if (!SHARE_NAME.test(name)) continue
+    const url = sharedUrl(daemonUrl, name)
+    if (hubNameOf(entry) === name) {
+      if (enabled && (entry as Json).url !== url) {
+        servers[name] = { type: 'http', url }
+        changed.push(name)
+      } else if (!enabled && name in originals) {
+        servers[name] = originals[name]
+        changed.push(name)
+      }
+    } else if (enabled && name in originals && isDeepStrictEqual(entry, originals[name])) {
+      servers[name] = { type: 'http', url }
+      changed.push(name)
+    }
+  }
+  return changed
+}
+
+/** Each CLI instance's own config, rewritten from the same originals. Never adds to the store; one bad file is
+ *  reported and skipped, and the rest still run. */
+function syncInstanceFiles(
+  paths: string[],
+  originals: Json,
+  enabled: boolean,
+  daemonUrl: string,
+): { written: number; problems: string[] } {
+  let written = 0
+  const problems: string[] = []
+  for (const path of paths) {
+    try {
+      const before = stampOf(path)
+      if (before === null) continue
+      const read = readConfig(path)
+      if (!read.config) {
+        problems.push(read.error ?? `${path} could not be read`)
+        continue
+      }
+      const config = read.config
+      const servers = mcpServersOf(config)
+      if (!rewriteInstanceEntries(servers, originals, enabled, daemonUrl).length) continue
+      if (stampOf(path) !== before) {
+        problems.push(`${path} was written by another process; the next sync retries`)
+        continue
+      }
+      config.mcpServers = servers
+      writeConfigAtomic(path, config)
+      written++
+    } catch (err) {
+      problems.push(`${path}: ${errorText(err)}`)
+    }
+  }
+  return { written, problems }
+}
+
 /**
- * Make ~/.claude.json agree with the setting. Enabled: each shareable stdio entry is kept in the store and rewritten
- * to the hub URL, and a hub entry whose port moved is rewritten to the new one. Disabled: every hub entry goes back
- * to its stored original. Never throws; the config and the store are written in the order that cannot lose an
- * original (store first when sharing, config first when restoring).
+ * Make ~/.claude.json and each CLI instance's config agree with the setting. Enabled: each shareable stdio entry is
+ * kept in the store and rewritten to the hub URL, and a hub entry whose port moved is rewritten to the new one.
+ * Disabled: every hub entry goes back to its stored original, the instance files before the store forgets it. Never
+ * throws; the config and the store are written in the order that cannot lose an original (store first when sharing,
+ * config first when restoring).
  */
 export function syncSharedMcp(opts: {
   daemonUrl: string
   enabled?: boolean
   configPath?: string
   storePath?: string
+  instancePaths?: string[]
   primary?: boolean
   env?: NodeJS.ProcessEnv
-}): { changed: string[]; error: string | null } {
+}): { changed: string[]; instances: number; error: string | null } {
   const env = opts.env ?? process.env
   const enabled = opts.enabled ?? true
   const configPath = opts.configPath ?? claudeCodeConfigPath(env)
   const storePath = opts.storePath ?? STORE_PATH
-  if (registrationBarred(opts.primary, env, !!opts.configPath)) return { changed: [], error: null }
+  if (registrationBarred(opts.primary, env, !!opts.configPath))
+    return { changed: [], instances: 0, error: null }
   try {
     const before = stampOf(configPath)
     const read = readConfig(configPath)
-    if (!read.config) return { changed: [], error: read.error }
+    if (!read.config) return { changed: [], instances: 0, error: read.error }
     const storeRead = readConfig(storePath)
-    if (!storeRead.config) return { changed: [], error: storeRead.error }
+    if (!storeRead.config) return { changed: [], instances: 0, error: storeRead.error }
     const config = read.config
     const servers = mcpServersOf(config)
     const store = storeRead.config
@@ -320,26 +389,27 @@ export function syncSharedMcp(opts: {
     }
     for (const name of Object.keys(nextStore)) if (!(name in servers)) delete nextStore[name]
     const storeChanged = JSON.stringify(nextStore) !== JSON.stringify(store)
-    if (!changed.length && !storeChanged) return { changed, error: null }
-    if (stampOf(configPath) !== before)
-      return {
-        changed: [],
-        error: `${configPath} was written by another process; the next sync retries`,
-      }
+    const guarded = (changed.length > 0 || storeChanged) && stampOf(configPath) !== before
     const writeStore = () => {
       if (storeChanged) writeConfigAtomic(storePath, nextStore)
     }
-    if (enabled) {
+    const writeConfig = () => {
+      if (!changed.length) return
+      config.mcpServers = servers
+      writeConfigAtomic(configPath, config)
+    }
+    if (enabled && !guarded) {
       writeStore()
-      if (changed.length) {
-        config.mcpServers = servers
-        writeConfigAtomic(configPath, config)
-      }
-    } else {
-      if (changed.length) {
-        config.mcpServers = servers
-        writeConfigAtomic(configPath, config)
-      }
+      writeConfig()
+    }
+    const instances = syncInstanceFiles(
+      opts.instancePaths ?? [],
+      enabled && !guarded ? nextStore : store,
+      enabled,
+      opts.daemonUrl,
+    )
+    if (!enabled && !guarded) {
+      writeConfig()
       writeStore()
       for (const [name, hub] of hubs)
         if (!(name in nextStore)) {
@@ -347,19 +417,43 @@ export function syncSharedMcp(opts: {
           hubs.delete(name)
         }
     }
-    return { changed, error: null }
+    const problems = guarded
+      ? [
+          `${configPath} was written by another process; the next sync retries`,
+          ...instances.problems,
+        ]
+      : instances.problems
+    return {
+      changed: guarded ? [] : changed,
+      instances: instances.written,
+      error: problems.join('; ') || null,
+    }
   } catch (err) {
-    return { changed: [], error: `shared MCP sync failed: ${errorText(err)}` }
+    return { changed: [], instances: 0, error: `shared MCP sync failed: ${errorText(err)}` }
   }
 }
+
+const cliInstancePaths = (): string[] =>
+  listCliInstances().map((rec) => join(canonicalConfigDir(rec), '.claude.json'))
 
 /** The boot and minute-timer entry point: logs only when an entry actually changed or failed. */
 export function reassertSharedMcp(daemonUrl: string): void {
   const enabled = sharedMcpEnabled()
-  const { changed, error } = syncSharedMcp({ daemonUrl, enabled })
+  const { changed, instances, error } = syncSharedMcp({
+    daemonUrl,
+    enabled,
+    instancePaths: cliInstancePaths(),
+  })
   if (error) console.warn(`[agenthydra] shared MCP servers: ${error}`)
-  else if (changed.length)
+  if (changed.length || instances) {
+    const what = [
+      changed.length ? `${changed.join(', ')} in ~/.claude.json` : '',
+      instances ? `${instances} CLI instance file(s)` : '',
+    ]
+      .filter(Boolean)
+      .join(' and ')
     console.log(
-      `[agenthydra] shared MCP servers ${changed.join(', ')} ${enabled ? 'now served by the daemon' : 'restored to their own stdio entries'}`,
+      `[agenthydra] shared MCP servers ${what} ${enabled ? 'now served by the daemon' : 'restored to their own stdio entries'}`,
     )
+  }
 }

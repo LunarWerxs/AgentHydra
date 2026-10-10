@@ -177,4 +177,82 @@ describe('syncSharedMcp', () => {
     expect(r.error).toContain('not valid JSON')
     expect(readFileSync(p.configPath, 'utf8')).toBe('{not json')
   })
+
+  const instanceFile = (entries: Json, extra: Json = {}) => {
+    const file = join(dir, 'instance.claude.json')
+    writeFileSync(file, JSON.stringify({ ...extra, mcpServers: entries }))
+    return file
+  }
+
+  test('a CLI instance entry equal to its original is moved to the hub', () => {
+    const p = paths()
+    writeFileSync(p.configPath, JSON.stringify({ mcpServers: { quickdictate: original } }))
+    const instance = instanceFile({ quickdictate: original })
+    const url = 'http://127.0.0.1:7787'
+    const r = syncSharedMcp({ daemonUrl: url, ...p, instancePaths: [instance] })
+    expect(r.instances).toBe(1)
+    expect(read(instance).mcpServers.quickdictate).toEqual({
+      type: 'http',
+      url: sharedUrl(url, 'quickdictate'),
+    })
+  })
+
+  test('a CLI instance entry that differs from its original is left alone and never stored', () => {
+    const p = paths()
+    writeFileSync(p.configPath, JSON.stringify({ mcpServers: { quickdictate: original } }))
+    const differs = { ...original, args: ['--other'] }
+    const instance = instanceFile({ quickdictate: differs, solo: original })
+    const r = syncSharedMcp({
+      daemonUrl: 'http://127.0.0.1:7787',
+      ...p,
+      instancePaths: [instance],
+    })
+    expect(r.instances).toBe(0)
+    expect(read(instance).mcpServers).toEqual({ quickdictate: differs, solo: original })
+    expect(read(p.storePath)).not.toHaveProperty('solo')
+  })
+
+  test('a CLI instance hub entry follows a port change', () => {
+    const p = paths()
+    writeFileSync(p.configPath, JSON.stringify({ mcpServers: { quickdictate: original } }))
+    const instance = instanceFile({ quickdictate: original })
+    syncSharedMcp({ daemonUrl: 'http://127.0.0.1:7787', ...p, instancePaths: [instance] })
+    const moved = syncSharedMcp({
+      daemonUrl: 'http://127.0.0.1:7790',
+      ...p,
+      instancePaths: [instance],
+    })
+    expect(moved.instances).toBe(1)
+    expect(read(instance).mcpServers.quickdictate.url).toBe(
+      sharedUrl('http://127.0.0.1:7790', 'quickdictate'),
+    )
+  })
+
+  test('disabling restores the CLI instance entries before the store forgets them', () => {
+    const p = paths()
+    writeFileSync(p.configPath, JSON.stringify({ mcpServers: { quickdictate: original } }))
+    const instance = instanceFile({ quickdictate: original })
+    syncSharedMcp({ daemonUrl: 'http://127.0.0.1:7787', ...p, instancePaths: [instance] })
+    const undone = syncSharedMcp({
+      daemonUrl: 'http://127.0.0.1:7787',
+      enabled: false,
+      ...p,
+      instancePaths: [instance],
+    })
+    expect(undone.instances).toBe(1)
+    expect(read(instance).mcpServers.quickdictate).toEqual(original)
+    expect(read(p.storePath)).toEqual({})
+  })
+
+  test('only mcpServers changes in a CLI instance file', () => {
+    const p = paths()
+    writeFileSync(p.configPath, JSON.stringify({ mcpServers: { quickdictate: original } }))
+    const projects = { 'C:/Users/me/work': { allowedTools: [] } }
+    const instance = instanceFile({ quickdictate: original }, { numStartups: 7, projects })
+    syncSharedMcp({ daemonUrl: 'http://127.0.0.1:7787', ...p, instancePaths: [instance] })
+    const after = read(instance)
+    expect(after.numStartups).toBe(7)
+    expect(after.projects).toEqual(projects)
+    expect(after.mcpServers.quickdictate.type).toBe('http')
+  })
 })
