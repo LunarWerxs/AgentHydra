@@ -161,7 +161,7 @@ class RemoteSandbox(Sandbox):
             raise TimeoutError(f"{self.runtime.spec} did not answer within the file-op timeout")
         raise OSError(f"{self.runtime.spec} exit {code}: {err.strip()[:500]}")
 
-    async def t_read_file(self, path: str, start_line: int | None = None, end_line: int | None = None) -> str:
+    async def read_one(self, path: str, start_line: int | None = None, end_line: int | None = None) -> str:  # t_read_file batches on top
         p = self.resolve(path, tool="read_file")
         sliced = bool(start_line or end_line)
         # Unsliced, the isolate sends only the size of an over-cap file, never its bytes.

@@ -391,6 +391,8 @@ def _repeat_key(sb: Sandbox, name: str, args: dict) -> tuple | None:
     """What makes two calls the same call over the same data, or None for a call that always runs."""
     if name not in _FILE_READS and name not in _WALKS:
         return None
+    if name == "read_file" and args.get("paths"):
+        return None  # several files: the key stats no one file, so a batch always runs
     key = (name, json.dumps(args, sort_keys=True, ensure_ascii=False, default=str))
     if name in _WALKS:
         return key

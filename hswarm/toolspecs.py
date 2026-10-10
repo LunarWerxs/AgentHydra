@@ -24,15 +24,29 @@ WEB_TOOLS = {"read_url"}
 
 SPECS: dict[str, dict] = {
     "read_file": {
-        "description": "Read a UTF-8 text file. Returns numbered lines. Use start_line/end_line for a slice of a large file.",
+        "description": "Read a UTF-8 text file. Returns numbered lines. Use start_line/end_line for a slice of a large file. "
+        "To read several files, pass them ALL in one call as paths (a list; each entry a path string, or an object with path "
+        "and optional start_line/end_line): reading several files is one call, not one call per file.",
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string"},
+                "path": {"type": "string", "description": "one file; omit when you pass paths"},
                 "start_line": {"type": "integer", "description": "1-based, inclusive"},
                 "end_line": {"type": "integer", "description": "1-based, inclusive"},
+                "paths": {
+                    "type": "array",
+                    "description": "several files in one call, each under its own header; use this instead of repeated read_file calls",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "start_line": {"type": "integer", "description": "1-based, inclusive"},
+                            "end_line": {"type": "integer", "description": "1-based, inclusive"},
+                        },
+                        "required": ["path"],
+                    },
+                },
             },
-            "required": ["path"],
         },
     },
     "write_file": {

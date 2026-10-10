@@ -230,7 +230,10 @@ class ToolHooks:
         """The refusal reason when a PreToolUse hook denies this call, else None."""
         cc_name = CC_NAMES.get(name, name)
         reasons = []
-        for code, out, err in await self._fire("PreToolUse", cc_name, {"tool_name": cc_name, "tool_input": cc_input(name, args, self.cwd)}):
+        # A batched read_file is one hook call per file, so a hook that denies one listed file still sees it.
+        singles = [{"path": f} if isinstance(f, str) else f for f in args["paths"]] if name == "read_file" and args.get("paths") else [args]
+        fired = [hit for single in singles for hit in await self._fire("PreToolUse", cc_name, {"tool_name": cc_name, "tool_input": cc_input(name, single, self.cwd)})]
+        for code, out, err in fired:
             if code == 2:
                 reasons.append(err.strip() or "denied by a PreToolUse hook (exit 2)")
                 continue

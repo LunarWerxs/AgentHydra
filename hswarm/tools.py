@@ -431,7 +431,22 @@ class Sandbox:
     # middle of a 12-30k source file from a reviewer. At most 28% of read_file chars saved, less what is paged back.
     READ_PAGE_CHARS = 12_000
 
-    async def t_read_file(self, path: str, start_line: int | None = None, end_line: int | None = None) -> str:
+    async def t_read_file(self, path: str | None = None, start_line: int | None = None, end_line: int | None = None, paths: list | None = None) -> str:
+        if not paths:
+            if path is None:
+                raise ValueError("read_file needs path, or paths for several files")
+            return await self.read_one(path, start_line, end_line)
+        # Several files in one call, each under its own header; a refused path fails the call exactly as a single one does.
+        parts = []
+        for item in paths:
+            spec = {"path": item} if isinstance(item, str) else dict(item)
+            if not spec.get("path"):
+                raise ValueError("every paths entry needs a path")
+            body = await self.read_one(spec["path"], spec.get("start_line"), spec.get("end_line"))
+            parts.append(f"== {spec['path']} ==\n{body}")
+        return "\n\n".join(parts)
+
+    async def read_one(self, path: str, start_line: int | None = None, end_line: int | None = None) -> str:
         p = self.resolve(path, must_exist=True, tool="read_file")
         if p.is_dir():
             raise IsADirectoryError(str(p))
