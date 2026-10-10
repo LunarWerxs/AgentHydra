@@ -120,6 +120,7 @@ import {
   withUnlistedTools as mcpWithUnlistedTools,
 } from './mcp'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
+import { reassertSharedMcp, sharedMcpServer } from './mcp-hub'
 import { withOutputShaping as mcpWithOutputShaping } from './mcp-output'
 import {
   createMcpReasserter,
@@ -425,6 +426,35 @@ app.post('/api/mcp', async (c) => {
 // to the client, so 405 is the correct, spec-sanctioned answer - and saying so explicitly stops a
 // client from holding an idle stream open per tab, which is the very cost this endpoint removes.
 app.get('/api/mcp', (c) =>
+  c.text('This MCP endpoint does not offer a server-initiated stream.', 405),
+)
+
+// One shared stdio server (mcp-hub.ts) for every Claude session: each client gets its own answer, the child one.
+app.post('/api/mcp/shared/:name', async (c) => {
+  const hub = sharedMcpServer(c.req.param('name'))
+  if (!hub)
+    return c.json(
+      {
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32601, message: 'no shared MCP server by that name' },
+      },
+      404,
+    )
+  let body: unknown
+  try {
+    body = await c.req.json()
+  } catch {
+    body = PARSE_ERROR
+  }
+  const ctx = { serverInfo: MCP_SERVER_INFO, tools: [], instructions: '' }
+  const { status, json } = await handleMcpHttp(body, ctx, (msg) =>
+    hub.handle(msg as Record<string, unknown>),
+  )
+  return json === null ? c.body(null, status as 202) : c.json(json, status as 200)
+})
+
+app.get('/api/mcp/shared/:name', (c) =>
   c.text('This MCP endpoint does not offer a server-initiated stream.', 405),
 )
 
@@ -1120,6 +1150,7 @@ const pointerReassertTimer = setInterval(() => {
   // off, boot and the settings toggle remove the entry exactly as before, and a minute timer has
   // no business removing an entry someone wrote by hand in between. Synchronous, never throws.
   if (mcpRegisterEnabled()) mcpReasserter.run()
+  reassertSharedMcp(daemonSelfUrl)
 }, POINTER_REASSERT_MS)
 pointerReassertTimer.unref()
 
@@ -1149,6 +1180,7 @@ mcpUseOwnDaemon(daemonSelfUrl)
 // resolved would write a URL nothing is listening on. Runs on every boot so a hop cannot leave a
 // stale one behind, writes only when the entry actually differs, and never throws.
 mcpReasserter.run()
+reassertSharedMcp(daemonSelfUrl)
 // Tell the rest of the Hydra family this daemon exists: its health URL and MCP endpoint, in the
 // manifest folder the family shares (hydra-family.ts). Here for the same reason as the line above,
 // the file carries the bound port; a scratch daemon stays out of the machine's folder; a failed
