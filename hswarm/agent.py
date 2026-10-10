@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextvars
+import dataclasses
 import json
 import time
 import traceback
@@ -196,9 +197,26 @@ async def _stop_hooks(sb: Sandbox, answer: str, last: bool) -> str | None:
 
 # worker.NUDGE for a schema task, whose last turn is sent with submit_result alone (_call_turn).
 SCHEMA_NUDGE = "Turn budget exhausted. Call submit_result now with the best result you can give from what you have gathered. Call no other tool."
+# The answer turn at the time wall (_answer_at_wall). It asks for what is unfinished too: the work stopped mid-way.
+# Not "FAILED:": a worker told its time is up reads the system prompt's FAILED rule as its exit (a live probe on
+# 2026-10-10 answered "FAILED: Time limit reached..." over 30 tool results), and the partial result is the point.
+WALL_NUDGE = ("Your time is up, and that is expected: it is not a failure. Do not call tools. Write your final answer now "
+              "from what you have gathered: every result you have so far, in the shape the task asked for. A partial "
+              "answer is the right answer now; a reply starting FAILED throws your work away. End with one line naming "
+              "what you did not get to.")
+# Sent once, in the reserve's remaining time, after a wall answer that opened FAILED: or came back empty: mistral
+# medium 3.5 answered the wall nudge with a one-line FAILED in 3 of 3 live probes (2026-10-10) over 14-30 tool results.
+WALL_REFUSAL_NUDGE = ("That reply discards the work above. Do not refuse. List the results the tool output above already "
+                      "shows, in the format the task asked for, and nothing else.")
+WALL_REFUSAL_RETRIES = 1
+# The answer turn's output ceiling: a summary of what was gathered, sized to land inside the reserve.
+WALL_ANSWER_MAX_TOKENS = 4_000
+SCHEMA_WALL_NUDGE = ("Your time is up, and that is expected: it is not a failure. Call submit_result now with every result "
+                     "you have gathered so far; a partial result is the right answer now. Say in it what you did not get "
+                     "to. Call no other tool.")
 
 
-async def _loop(client: DeepSeekClient, task: Task, res: Result, sb: Sandbox, messages: list[dict], tools: list[dict], usage: Usage, warm: asyncio.Event | None, is_pilot: bool, user_tag: str | None, slow_turn_s: float | None = None, job_budget: Budget | None = None, escape=None) -> None:
+async def _loop(client: DeepSeekClient, task: Task, res: Result, sb: Sandbox, messages: list[dict], tools: list[dict], usage: Usage, warm: asyncio.Event | None, is_pilot: bool, user_tag: str | None, slow_turn_s: float | None = None, job_budget: Budget | None = None, escape=None, wall: dict | None = None) -> None:
     budget = _TurnBudget(task, job_budget)  # first: its clock is the one timeout_s runs on, the wait for the pilot included
     if warm is not None and not is_pilot:
         await wait_for_pilot(warm)  # the pilot's first reply lands the shared prefix in DeepSeek's cache; everyone else reads it
@@ -210,11 +228,16 @@ async def _loop(client: DeepSeekClient, task: Task, res: Result, sb: Sandbox, me
     editor = ContextEditor.for_leg(task, spill=sb.spill)
     schema_state["cleared"] = editor.cleared  # run_tools runs a repeated call again once its earlier result was cleared
     gate = _GoalGate(client, task, usage, user_tag) if task.done_when else None
+    if wall is not None:
+        wall["editor"], wall["budget"] = editor, budget  # the answer turn at the wall goes on with the same ceilings
     for turn in range(task.max_turns + 1):
         exhausted = turn >= task.max_turns
         if exhausted:
             messages.append({"role": "user", "content": SCHEMA_NUDGE if task.schema else NUDGE})
             res.add_taint("B")
+        elif _wall_near(wall, res):
+            wall["due"] = True  # one more working turn would run into the reserve: answer now, with all the time left
+            return
         else:
             budget.note(task, messages, turn, editor.view(messages), tools, editor.passes)
         r = await _call_turn(client, task, res, editor, messages, tools, budget, exhausted, user_tag, slow_turn_s, escape, avoid)
@@ -243,6 +266,7 @@ class _TurnBudget:
         self.ceilings = [b for b in (self.worker, job_budget) if b is not None]
         self.priced = top_rates(task.model) is not None
         self.checkpointed = False
+        self.cut_hold = 0.0  # the hold of a turn cut off mid-call, settled as spent (_call_turn); the wall turn takes it back
         self.started = time.monotonic()
         # Only a sticky_keys provider keeps a task on one key (ChatClient._pick); any other pool round-robins, and
         # the next turn's key may hold none of the prefix the last one reported.
@@ -359,6 +383,7 @@ async def _call_turn(client: DeepSeekClient, task: Task, res: Result, editor: Co
         raise
     except BaseException as exc:
         settle_turn(ceilings, hold, None)  # cut off mid-call (timeout, cancel): it may have been billed, so the hold stays spent
+        budget.cut_hold = hold
         if isinstance(exc, TimeoutError) and limit is not None and limit.expired():
             raise SlowLeg(f"SlowLeg: {task.model} gave no reply to one turn in {config.SLOW_LEG_CALL_S:.0f}s - failing over "
                           f"while the task still has time") from None
@@ -481,13 +506,23 @@ async def run_api_task(client: DeepSeekClient, task: Task, warm: asyncio.Event |
     RATE_WAIT.set(rate_wait)
     t0 = time.perf_counter()
     replayed: list[tuple[dict, str]] = []
+    reserve = _wall_reserve(task, resume_messages is not None)
+    wall: dict = {"due": False, "deadline": None, "started": time.monotonic()}
     try:
-        await asyncio.wait_for(_planned_loop(client, task, res, sb, messages, tools, usage, warm, is_pilot, user_tag, slow_turn_s, job_budget, replayed, escape),
-                               timeout=task.timeout_s)
-        if res.status == "ok" and task.recipe:
+        if task.timeout_s - reserve > 0:
+            wall["deadline"] = wall["started"] + task.timeout_s - reserve
+            await _work_until_wall(_planned_loop(client, task, res, sb, messages, tools, usage, warm, is_pilot, user_tag, slow_turn_s, job_budget, replayed, escape, wall),
+                                   task.timeout_s - reserve, reserve, messages, wall)
+        else:
+            wall["due"] = True  # a failover leg with little time: no work turns, the answer from what it was handed
+        if wall["due"]:
+            await _answer_at_wall(client, task, res, sb, messages, tools, usage, user_tag, job_budget, wall, t0)
+        if res.status == "ok" and task.recipe and "W" not in res.taint:
             plans.record(task, [c for c, _ in replayed] + plans.calls_from(messages))
     except asyncio.TimeoutError:
         res.status, res.error = "timeout", f"task exceeded {task.timeout_s}s"
+        if wall.get("why"):
+            res.error += f"; the answer turn at the wall did not answer: {wall['why']}"
     except asyncio.CancelledError:
         res.status, res.error = "cancelled", "cancelled"
         raise
@@ -498,6 +533,112 @@ async def run_api_task(client: DeepSeekClient, task: Task, warm: asyncio.Event |
     finally:
         _close_task(task, res, sb, messages, usage, rate_wait, t0, warm, is_pilot)
     return res, messages
+
+
+def _wall_reserve(task: Task, resumed: bool) -> float:
+    """The seconds of timeout_s held back from the work loop for the answer turn at the wall (config.WALL_RESERVE_*).
+    All of it for a failover leg handed WALL_ANSWER_ONLY_S or less: work turns there end in the next leg or nowhere."""
+    t = float(task.timeout_s)
+    if resumed and t <= config.WALL_ANSWER_ONLY_S:
+        return t
+    if t < config.WALL_RESERVE_FLOOR_S:
+        return 0.0
+    return min(config.WALL_RESERVE_MAX_S, max(config.WALL_RESERVE_MIN_S, t * config.WALL_RESERVE_SHARE))
+
+
+def _gathered(messages: list[dict]) -> bool:
+    """Whether the transcript holds a tool result to answer from (this leg's or an earlier one's)."""
+    return any(m.get("role") == "tool" for m in messages)
+
+
+def _wall_near(wall: dict | None, res: Result) -> bool:
+    """True once the next working turn, at this leg's own average turn (its replies and tool work), would run past the
+    work deadline: better to answer now with all the time left than to start a turn the reserve then cuts off."""
+    if wall is None or wall.get("deadline") is None or not res.turns:
+        return False
+    now = time.monotonic()
+    return now + (now - wall["started"]) / res.turns > wall["deadline"]
+
+
+async def _work_until_wall(work, work_s: float, reserve: float, messages: list[dict], wall: dict) -> None:
+    """Run the work loop until it ends or reaches the reserve. There, with something gathered, it is cut and
+    wall["due"] set for the answer turn; with nothing gathered there is nothing to answer from, so it keeps the whole
+    clock as before (a tool-free task's one slow call may still land). TimeoutError past timeout_s, as wait_for."""
+    job = asyncio.ensure_future(work)
+    try:
+        done, _ = await asyncio.wait({job}, timeout=work_s)
+        if not done and not (reserve and _gathered(messages)):
+            done, _ = await asyncio.wait({job}, timeout=reserve)
+            if not done:
+                raise asyncio.TimeoutError
+        if not done:
+            wall["due"] = True  # the work ran into the reserve: a stalled call, a retry loop, a slow tool
+            return
+        job.result()  # what the loop raised, raised here
+    finally:
+        if not job.done():
+            job.cancel()
+            try:
+                await job
+            except BaseException:  # noqa: BLE001 - its own cancellation, or whatever it raised on the way out
+                pass
+
+
+def _close_dangling(messages: list[dict]) -> None:
+    """Pair every tool call of the last assistant turn with a result: a loop cut mid-tool leaves calls with none, and a
+    provider refuses a transcript with an unanswered tool call (Anthropic 400s on a tool_use with no tool_result)."""
+    at = next((i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "assistant"), None)
+    if at is None:
+        return
+    answered = {m.get("tool_call_id") for m in messages[at + 1:] if m.get("role") == "tool"}
+    end = at + 1 + sum(1 for m in messages[at + 1:] if m.get("role") == "tool")  # results follow their call directly
+    stubs = [{"role": "tool", "tool_call_id": c.get("id"), "content": "not run: the task's time ran out"}
+             for c in messages[at].get("tool_calls") or () if c.get("id") not in answered]
+    messages[end:end] = stubs
+
+
+async def _answer_at_wall(client: DeepSeekClient, task: Task, res: Result, sb: Sandbox, messages: list[dict], tools: list[dict],
+                          usage: Usage, user_tag: str | None, job_budget: Budget | None, wall: dict, t0: float) -> None:
+    """One tool-free turn, thinking off, that turns what the task gathered into its answer in the time left (taint W),
+    the way the turn limit's last turn does. Anything short of an answer is the timeout it would have been, its
+    reason in wall["why"]: a wall that only renames a failure is no answer."""
+    left = task.timeout_s - (time.perf_counter() - t0)
+    if left <= 0 or not _gathered(messages):
+        raise asyncio.TimeoutError
+    _close_dangling(messages)
+    _say(messages, SCHEMA_WALL_NUDGE if task.schema else WALL_NUDGE)
+    res.add_taint("W")
+    editor = wall.get("editor") or ContextEditor.for_leg(task, spill=sb.spill)
+    budget = wall.get("budget") or _TurnBudget(task, job_budget)
+    if budget.worker is not None and budget.cut_hold:
+        # The cut call's worst case was settled as spent, and on a priced leg that is often the rest of the task's cap:
+        # a live probe (2026-10-10) had its answer turn refused at "$0.0000 left" after $0.09 of real spend. The job's
+        # own budget keeps the hold; it is the caller's ceiling across tasks.
+        budget.worker.refund(budget.cut_hold)
+        budget.cut_hold = 0.0
+    answer = dataclasses.replace(task, max_tokens=min(task.max_tokens, WALL_ANSWER_MAX_TOKENS))
+    try:
+        async with asyncio.timeout(left):
+            for attempt in range(1 + WALL_REFUSAL_RETRIES):
+                if attempt:
+                    _say(messages, WALL_REFUSAL_NUDGE)
+                r = await _call_turn(client, answer, res, editor, messages, tools, budget, True, user_tag, None, None, [])
+                if r is None:
+                    wall["why"] = res.error  # a ceiling refused even that turn (taint C): still the timeout it was
+                    raise asyncio.TimeoutError
+                _account_turn(task, res, r, usage, None, False, None, tools, True, None)
+                if r.tool_calls or r.content.strip():
+                    messages.append({"role": "assistant", **r.message})
+                await _after_reply(task, res, sb, messages, r, EMPTY_RETRIES, {}, None, None, True, None)
+                if res.status == "ok" or not (res.answer or "").startswith("FAILED:") and (res.answer or "").strip():
+                    break
+    except (TimeoutError, ApiError, SlowLeg) as e:
+        if not wall.get("why"):
+            wall["why"] = f"{type(e).__name__}: {e}" if str(e) else "no reply before timeout_s"
+        raise asyncio.TimeoutError from None
+    if res.status != "ok":
+        wall["why"] = res.error or res.status
+        raise asyncio.TimeoutError
 
 
 def _task_grant(task: Task) -> tuple[list[dict], Capability, redaction.Redactor | None]:
@@ -524,13 +665,13 @@ def _redacted_messages(task: Task, redactor: redaction.Redactor, messages: list[
 
 async def _planned_loop(client: DeepSeekClient, task: Task, res: Result, sb: Sandbox, messages: list[dict], tools: list[dict], usage: Usage,
                         warm: asyncio.Event | None, is_pilot: bool, user_tag: str | None, slow_turn_s: float | None,
-                        job_budget: Budget | None, replayed: list[tuple[dict, str]], escape=None) -> None:
+                        job_budget: Budget | None, replayed: list[tuple[dict, str]], escape=None, wall: dict | None = None) -> None:
     # A recipe task replays its cached plan first (plans.py): the reads its last passing run made land in the
     # user turn before the first model call, so the model answers instead of planning them again.
     replayed[:], res.plan = await plans.replay(task, sb)
     if replayed:
         messages[1]["content"] += "\n\n" + plans.replay_block(task.recipe, replayed)
-    await _loop(client, task, res, sb, messages, tools, usage, warm, is_pilot, user_tag, slow_turn_s, job_budget, escape)
+    await _loop(client, task, res, sb, messages, tools, usage, warm, is_pilot, user_tag, slow_turn_s, job_budget, escape, wall)
 
 
 def _close_task(task: Task, res: Result, sb: Sandbox, messages: list[dict], usage: Usage, rate_wait: list[float], t0: float,

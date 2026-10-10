@@ -119,6 +119,18 @@ QUIET_TASK_S = 180.0
 # whose keys answer 429 before its call errors with `PoolSaturated`. Before 2026-09-24 it had no bound but the
 # task's own timeout_s: job 20260924-152821-54f1 lost 43 tasks at 600 s with zero replies that way.
 SATURATED_REST_S = 120.0
+# The end of an api task's clock is held back for one tool-free answer turn on what it gathered (agent.run_api_task):
+# WALL_RESERVE_SHARE of timeout_s, within [WALL_RESERVE_MIN_S, WALL_RESERVE_MAX_S]. Over 7 days to 2026-10-10, 809
+# tasks timed out ($113.71, 4.7% of all spend), every paid one after at least one reply, and came back as a tool-call
+# log: the in-flight model call ate the clock in 668 (wall minus API seconds, median 461 s; one opus task POSTed the
+# same request nine times, 90 s apart, for its last 13 minutes), and the 80% checkpoint is only a message. A task
+# shorter than WALL_RESERVE_FLOOR_S keeps the single wait. A failover leg handed WALL_ANSWER_ONLY_S or less answers at
+# once: 167 of those timeouts ($43.62) were a later leg started on the transcript with under a quarter of the clock left.
+WALL_RESERVE_SHARE = 0.15
+WALL_RESERVE_MIN_S = 30.0
+WALL_RESERVE_MAX_S = 120.0
+WALL_RESERVE_FLOOR_S = 60.0
+WALL_ANSWER_ONLY_S = 120.0
 # How many times an evaluated-profile task whose LAST leg ended `PoolSaturated` goes back through that provider's
 # gate (halved by the 429s) with its transcript kept, instead of failing (dispatch.run_selected). Its run clock
 # still bounds it; this only stops a pool that never recovers from looping a task that spends no run time.

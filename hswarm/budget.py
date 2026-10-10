@@ -69,6 +69,12 @@ class Budget:
             if not f.done():
                 f.set_result(None)
 
+    def refund(self, usd: float) -> None:
+        """Take back money settled at its hold for a turn cut off mid-call (settle_turn with no cost): the answer turn at
+        a task's time wall (agent._answer_at_wall) is given back the cut turn's worst case. At most that one short turn
+        lands over the cap, if the cut call was billed after all."""
+        self.settled = max(0.0, self.settled - usd)
+
     async def freed(self) -> None:
         """Wait until some hold on this ceiling is settled or released."""
         f = asyncio.get_running_loop().create_future()

@@ -181,3 +181,101 @@ def test_limits_are_coerced_and_a_zero_is_refused_not_read_as_unlimited(tmp_path
                 {"timeout_s": 0}, {"checkpoint_at": "soon"}):
         with pytest.raises(ValueError, match=next(iter(bad))):
             Task.from_dict({**base, **bad}, {}, 1)
+
+
+class _Stalls:
+    """Reads `reads` times, then hangs on any call that offers tools (a stalled call, a retry loop); a call offering
+    none gets `tool_free(messages)` back. Keeps the tool names each call offered."""
+
+    def __init__(self, reads: int, tool_free):
+        self.reads, self.tool_free, self.offered = reads, tool_free, []
+
+    async def chat(self, messages, tools=None, **kw):
+        names = [t["function"]["name"] for t in tools or []]
+        self.offered.append(names)
+        if "read_file" in names and len(self.offered) > self.reads:
+            await asyncio.sleep(3600)
+        if "read_file" in names:
+            n = len(self.offered)
+            call = {"id": f"c{n}", "type": "function", "function": {"name": "read_file", "arguments": f'{{"path": "evidence.txt", "end_line": {n + 1}}}'}}
+            message = {"role": "assistant", "content": "", "tool_calls": [call]}
+        else:
+            message = await self.tool_free(messages)
+        return ChatResult(message=message, finish_reason="tool_calls" if message.get("tool_calls") else "stop",
+                          usage=Usage(), model="deepseek-flash", seconds=0.001, cost_usd=0.0, peak=False)
+
+    async def aclose(self):
+        pass
+
+
+def _small_wall(monkeypatch) -> None:
+    """The reserve sized for a 5 s test task (the least timeout_s): 1.5 s held back for the answer turn."""
+    monkeypatch.setattr(config, "WALL_RESERVE_FLOOR_S", 1.0)
+    monkeypatch.setattr(config, "WALL_RESERVE_SHARE", 0.3)
+    monkeypatch.setattr(config, "WALL_RESERVE_MIN_S", 0.5)
+
+
+async def _answers(messages):
+    return {"role": "assistant", "content": "from the evidence: the line that matters; not reached: the rest"}
+
+
+async def _hangs_too(messages):
+    await asyncio.sleep(3600)
+
+
+async def _refuses_once(messages):
+    # The system prompt's FAILED rule read as the exit, as mistral medium 3.5 did in three live probes on 2026-10-10.
+    if not any(m.get("role") == "assistant" and str(m.get("content")).startswith("FAILED:") for m in messages):
+        return {"role": "assistant", "content": "FAILED: not enough time to finish."}
+    return await _answers(messages)
+
+
+@pytest.mark.parametrize("tool_free, status", [(_answers, "ok"), (_refuses_once, "ok"), (_hangs_too, "timeout")])
+def test_a_task_whose_call_stalls_after_gathering_answers_in_the_reserve(tmp_path, monkeypatch, tool_free, status):
+    # Contract: when the work runs into the end of timeout_s (here a call that never returns), the task gets one
+    # tool-free turn on what it gathered and comes back with that answer, taint W; when that turn cannot answer either,
+    # it is the timeout it was, with its partial evidence, never an ok. A wall answer that refuses (FAILED:) is asked
+    # once more for the listing. Regression: 809 tasks in 7 days (to
+    # 2026-10-10, $113.71) timed out after gathering, most with the in-flight call eating the clock, and came back as
+    # a tool-call log.
+    _small_wall(monkeypatch)
+    client = _Stalls(2, tool_free)
+    res, _ = asyncio.run(agent.run_api_task(client, _task(tmp_path, timeout_s=5, max_turns=50)))
+    assert res.status == status, (res.status, res.error)
+    assert client.offered[-1] == [] and "read_file" in client.offered[0]  # it worked, then answered with no tools
+    if status == "ok":
+        assert "W" in res.taint and res.answer.startswith("from the evidence")
+    else:
+        assert res.error.startswith("task exceeded 5") and "answer turn at the wall" in res.error
+        assert res.answer.startswith("PARTIAL")
+
+
+def test_a_failover_leg_handed_little_time_answers_from_the_transcript_at_once(tmp_path, monkeypatch):
+    # Contract: a leg resumed on an earlier leg's transcript with WALL_ANSWER_ONLY_S or less spends it on the answer,
+    # not on work turns. Regression: 167 timeouts in 7 days ($43.62) were a later leg started with under a quarter
+    # of the clock left, re-sending the whole transcript to start work it could not finish.
+    task = _task(tmp_path, timeout_s=5, max_turns=50)
+    earlier = agent.build_messages(task) + [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "e1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "evidence.txt"}'}}]},
+        {"role": "tool", "tool_call_id": "e1", "content": "the line that matters"},
+    ]
+    client = _Stalls(50, _answers)
+    res, _ = asyncio.run(agent.run_api_task(client, task, resume_messages=earlier))
+    assert res.status == "ok" and "W" in res.taint, (res.status, res.error)
+    assert client.offered == [[]]
+
+
+def test_a_call_with_nothing_gathered_keeps_the_whole_clock(tmp_path, monkeypatch):
+    # Contract: the reserve is only cut into when there is something to answer from; a first call still out at the
+    # reserve keeps waiting to timeout_s as before. Regression: cutting it would turn a slow first answer that lands
+    # inside the last 15% into a timeout with nothing to show.
+    _small_wall(monkeypatch)
+
+    class _SlowFirst(_Worker):
+        async def chat(self, messages, tools=None, **kw):
+            await asyncio.sleep(4.0)  # past the 3.5 s work window, inside the 5 s clock
+            return await super().chat(messages, tools, **kw)
+
+    final = lambda messages, names: {"role": "assistant", "content": "the line that matters"}  # noqa: E731
+    res, _ = asyncio.run(agent.run_api_task(_SlowFirst(final), _task(tmp_path, timeout_s=5, max_turns=50)))
+    assert res.status == "ok" and "W" not in res.taint, (res.status, res.error)
