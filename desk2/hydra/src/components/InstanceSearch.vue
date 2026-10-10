@@ -46,7 +46,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     <Input
       ref="box"
       v-model="searchQuery"
-      class="w-56 pr-8 pl-8"
+      class="w-56"
+      leading="icon"
+      trailing="icon"
       :placeholder="$t('instances.searchPlaceholder')"
       :aria-label="$t('instances.search')"
       @keydown.escape.prevent="clear"

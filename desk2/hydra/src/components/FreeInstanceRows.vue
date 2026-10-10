@@ -510,7 +510,7 @@ defineExpose({
           :label="$t('freeInstances.planLabel', { provider: providerName(inst.provider), plan: paidPlan(inst) })"
           :description="$t(inst.provider === 'claude' ? 'freeInstances.planHintClaude' : 'freeInstances.planHint')"
         >
-          <Badge variant="outline" class="h-4 px-1 text-[10px]">{{ paidPlan(inst) }}</Badge>
+          <Badge variant="outline" size="sm" class="h-4">{{ paidPlan(inst) }}</Badge>
         </IconTooltip>
         <!-- The Free plan, checked at sign-in and on every reading (owner, 2026-10-09: "a little free icon for the free ones"). -->
         <IconTooltip
@@ -519,12 +519,12 @@ defineExpose({
           :description="$t('freeInstances.planFreeHint', { provider: providerName(inst.provider) })"
         >
           <span class="inline-flex items-center" :aria-label="$t('freeInstances.planFree')">
-            <Gift class="size-3.5 text-emerald-600 dark:text-emerald-400" />
+            <Gift class="size-3.5 text-plan-free dark:text-plan-free-dark" />
           </span>
         </IconTooltip>
         <!-- A move between free and paid, until dismissed in the menu (owner, 2026-10-09: "If they change to not free ... let me know"). -->
         <IconTooltip v-if="inst.planChange" :label="planChangeLabel(inst)" :description="planChangeHint(inst)">
-          <Badge class="h-4 px-1 text-[10px]">{{ planChangeLabel(inst) }}</Badge>
+          <Badge size="sm" class="h-4">{{ planChangeLabel(inst) }}</Badge>
         </IconTooltip>
       </template>
       <!-- The row's one primary action, as Open is on a desktop row. -->
