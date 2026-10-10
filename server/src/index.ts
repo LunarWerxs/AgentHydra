@@ -3,9 +3,9 @@ import { spawn } from 'node:child_process'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { join } from 'node:path'
-import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { warmAnalyticsInBackground } from './analytics'
+import { apiBodyLimit } from './api-body-limit'
 import { apiOriginAllowlist } from './api-origins'
 import {
   autoUpdateEnabled,
@@ -316,13 +316,7 @@ app.use(
 app.use('/api/*', createLoopbackGuard({ allowedOrigins: () => allowedApiOrigins }))
 // No API route needs a multi-megabyte body. Bound parser memory even for a deliberate local/MCP
 // misuse; the provenance guard runs first so a rejected browser origin is never allowed to stream.
-app.use(
-  '/api/*',
-  bodyLimit({
-    maxSize: 2 * 1024 * 1024,
-    onError: (c) => c.json({ error: 'request body exceeds 2 MiB' }, 413),
-  }),
-)
+app.use('/api/*', apiBodyLimit())
 // A daemon with a relocated store stamps every answer with that store (side-run.ts), so no client
 // can mistake a scratch database for the fleet's.
 app.use('/api/*', sideRunHeader())
