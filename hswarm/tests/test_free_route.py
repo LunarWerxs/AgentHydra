@@ -6,6 +6,7 @@ import asyncio
 import json
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -36,10 +37,13 @@ class _Api:
 class _Fake:
     """A fake AgentHydra: POST /api/mcp answering free_status, free_chat and free_results."""
 
-    def __init__(self, accounts=None, reply="free answer", state="done"):
+    def __init__(self, accounts=None, reply="free answer", state="done", status_delays=()):
         self.accounts = ACCOUNTS if accounts is None else accounts
         self.reply, self.state = reply, state
         self.chats: list[dict] = []
+        self.status_delays = list(status_delays)  # seconds before each free_status answer, in arrival order
+        self.hold = threading.Event()  # cleared, a sent chat is not answered until it is set again
+        self.hold.set()
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -52,9 +56,12 @@ class _Fake:
                     return self._send(404, {})
                 name, args = body["params"]["name"], body["params"]["arguments"]
                 if name == "free_status":
+                    if fake.status_delays:
+                        time.sleep(fake.status_delays.pop(0))
                     out = {"ready": True, "accounts": fake.accounts, "running": 0}
                 elif name == "free_chat":
                     fake.chats.append(args)
+                    fake.hold.wait(10)
                     out = fake.batch()
                 elif name == "free_results":
                     out = fake.batch()
@@ -221,12 +228,19 @@ def test_one_process_can_fill_every_idle_account(fake, monkeypatch):
     assert _consult(_task(id="t1")) == (None, None) and len(f.chats) == 1
 
 
-def test_tasks_reading_one_snapshot_take_its_one_idle_account_once(fake):
-    # free_status cannot show a task sent a moment ago: two tasks that both read "one idle" must not both be sent.
-    f = fake(accounts=[{**ACCOUNTS[0], "busy": True}] * 5 + [ACCOUNTS[0]])
+def test_tasks_reading_one_snapshot_take_its_one_idle_account_once(fake, monkeypatch):
+    # free_status cannot show a task sent a moment ago: two tasks that both read "one idle" must not both be sent, even
+    # when the second's answer comes back after UNSEEN_S (the daemon may take STATUS_TIMEOUT_S). Measured from the
+    # answer, the first task's send had aged out, and under a loaded full-suite run both took the account (2026-10-09).
+    monkeypatch.setattr(free_route, "UNSEEN_S", 0.1)
+    f = fake(accounts=[{**ACCOUNTS[0], "busy": True}] * 5 + [ACCOUNTS[0]], status_delays=[0, 0.4])
+    f.hold.clear()
 
     async def both():
-        return await asyncio.gather(free_route.consult("j1", _task()), free_route.consult("j2", _task(id="t1")))
+        tasks = [asyncio.create_task(free_route.consult("j1", _task())), asyncio.create_task(free_route.consult("j2", _task(id="t1")))]
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        f.hold.set()  # the sent task's chat runs until the other task has decided, so it cannot free the account first
+        return [await t for t in tasks]
 
     results = asyncio.run(both())
     assert len(f.chats) == 1 and sum(r is not None for r, _ in results) == 1

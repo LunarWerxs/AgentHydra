@@ -28,9 +28,10 @@ WAIT_CAP_S = 240  # the longest a free account may hold a task before it goes ba
 HAIKU_PROFILES = ("routine", "general")
 _LOGGED: set[str] = set()
 _ACTIVE = 0  # tasks on a free account right now, across every job of this process (route_via_free_max)
-# When this process last sent tasks: free_status shows a sent task's account busy once the daemon has started it
-# (a status read and one POST, well under a second), so until then the task is subtracted from the idle count. Kept
-# short: a sent task that free_status already shows is subtracted twice for this long, as _ACTIVE once was for good.
+# When this process sent each task still running: free_status shows a sent task's account busy once the daemon has
+# started it (a status read and one POST, well under a second), so until then the task is subtracted from the idle
+# count. Kept short: a sent task that free_status already shows is subtracted twice for this long, as _ACTIVE once was
+# for good. A task's stamp leaves the list when the task ends.
 _SENT: list[float] = []
 UNSEEN_S = 2.0
 SCHEMA_LINE = "Answer with only one JSON value that satisfies this JSON Schema, with no prose and no code fence:"
@@ -181,6 +182,7 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     global _ACTIVE
     if not eligible(task):
         return None, None
+    asked = time.monotonic()
     try:
         status = await _call("free_status", {}, STATUS_TIMEOUT_S)
     except _ERRORS as e:
@@ -188,12 +190,14 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
         return None, None
     # _idle already leaves out the accounts this process's running tasks hold (comparing _ACTIVE with it counted each
     # of them twice and stopped a process at 3 of 6 accounts). What it cannot show yet is a task sent moments ago:
-    # tasks that read one snapshot at once would all take its one idle account, so those are subtracted here.
-    now = time.monotonic()
-    _SENT[:] = [t for t in _SENT if now - t < UNSEEN_S]
+    # tasks that read one snapshot at once would all take its one idle account, so those are subtracted here. Unseen is
+    # measured from when the snapshot was asked for: measured from its answer, a status read slower than UNSEEN_S (the
+    # daemon is allowed STATUS_TIMEOUT_S) aged out a task sent while it waited, and both took the one idle account.
+    unseen = sum(1 for t in _SENT if t > asked - UNSEEN_S)
     capped = config.ROUTE_VIA_FREE_MAX is not None and _ACTIVE >= config.ROUTE_VIA_FREE_MAX
-    if not isinstance(status, dict) or _idle(status) - len(_SENT) <= 0 or capped:
+    if not isinstance(status, dict) or _idle(status) - unseen <= 0 or capped:
         return None, None
+    now = time.monotonic()
     _SENT.append(now)
     _ACTIVE += 1  # both taken before any await below
     try:

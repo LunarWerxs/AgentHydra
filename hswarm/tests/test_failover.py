@@ -854,7 +854,9 @@ def test_a_task_replying_every_turn_is_never_listed_quiet_and_a_silent_one_is(mo
         if job.results["t"].status == "running" and isinstance(client, Silent):
             m.cancel(job.id)
         else:
-            await asyncio.wait_for(m.wait(job.id, None), 5)
+            # A hang guard only: nine 0.15 s turns finish in about 2 s alone, but a loaded full-suite run (2026-10-09)
+            # was still on them 10 s in.
+            await asyncio.wait_for(m.wait(job.id, None), 60)
         return job, samples
 
     job, samples = asyncio.run(watch(Steady(), 5))
