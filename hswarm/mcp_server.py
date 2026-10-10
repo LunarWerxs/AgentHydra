@@ -170,7 +170,7 @@ async def hswarm_run(
     each may be set per task, except the job-wide concurrency, budget_usd, label, wait, wait_s, max_answer_chars.
     cwd: an ABSOLUTE folder; the worker's tools see nothing outside it.
     tools: exactly one of read (default) | edit (read + write files) | all (edit + a shell) | none (reason only) |
-    web (read + read_url, only for hosts in web_hosts) | jobs (all + background shell jobs) | propose (read +
+    web (read + web_search + read_url, reads only for hosts in web_hosts; ["*"] = any public host) | jobs (all + background shell jobs) | propose (read +
     changes queued for hswarm_apply_proposals), or a comma list of tool names. read has no web access.
     schema: a JSON schema whenever the answer is data. The parsed object comes back in `data`; the whole schema is
     enforced, so say minItems where an empty answer is wrong.

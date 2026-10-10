@@ -173,3 +173,62 @@ def test_rebinding_name_is_connected_to_the_checked_public_address_not_a_second_
     with pytest.raises(httpx.ConnectError):
         run(s.get("https://rebind.example/x"))
     assert inner.calls == ["93.184.216.34"] and len(answers) == 1
+
+
+def search_session(allowed, replies, monkeypatch):
+    """A WebSession whose search providers answer from `replies` ({host: httpx.Response}); every provider holds one
+    unit-test key, and each request is logged as (host, JSON body)."""
+    import json as _json
+
+    from hswarm import config
+
+    monkeypatch.setattr(config, "load_api_keys", lambda p="": ["unit-test-key"] if p in ("tavily", "jina") else [])
+    seen: list[tuple[str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.host, _json.loads(request.content or b"{}")))
+        return replies.get(request.url.host, httpx.Response(404))
+
+    return web.WebSession(list(allowed), transport=httpx.MockTransport(handler)), seen
+
+
+def test_search_is_capped_and_held_to_the_web_policy(monkeypatch):
+    # Contract: web_search asks for at most SEARCH_MAX results, drops results the web policy denies (block list,
+    # private address) and marks the ones read_url would suspend. Regression: a flood of results or a blocked host
+    # reaching the worker's context.
+    web.save_policy(block=["bad.example"])
+    hits = [{"title": "Docs", "url": "https://docs.example.com/a", "content": "x " * 400},
+            {"title": "Blocked", "url": "https://cdn.bad.example/b", "content": "no"},
+            {"title": "Local", "url": "http://127.0.0.1/admin", "content": "no"},
+            {"title": "Other", "url": "https://other.example.org/c", "content": "elsewhere"}]
+    s, seen = search_session(["docs.example.com"], {"api.tavily.com": httpx.Response(200, json={"results": hits})}, monkeypatch)
+    out = run(s.search("  example\n topic  ", max_results=99))
+    assert seen == [("api.tavily.com", {"query": "example topic", "max_results": web.SEARCH_MAX, "search_depth": "basic"})]
+    assert "bad.example" not in out and "127.0.0.1" not in out and "2 dropped by the web policy" in out
+    docs, other = (line for line in out.splitlines() if line.strip().startswith("http"))
+    assert "outside web_hosts" not in docs and other.endswith("[outside web_hosts]")
+    assert max(len(line) for line in out.splitlines()) <= web.SNIPPET_CHARS + 3
+
+
+def test_search_falls_back_to_jina_and_a_blocked_or_keyless_provider_is_never_asked(monkeypatch):
+    # Contract: a provider that fails drops behind the next one for a while, one on the admin block list gets no
+    # query at all, and with no key anywhere the worker gets an ERROR string, not an exception.
+    jina = httpx.Response(200, json={"data": [{"title": "J", "url": "https://docs.example.com/j", "description": "from jina"}]})
+    s, seen = search_session(["*"], {"api.tavily.com": httpx.Response(503), "s.jina.ai": jina}, monkeypatch)
+    out = run(s.search("example topic"))
+    assert "[web_search jina]" in out and "from jina" in out
+    assert [h for h, _ in seen] == ["api.tavily.com", "s.jina.ai"]
+    seen.clear()
+    run(s.search("example topic"))
+    assert [h for h, _ in seen] == ["s.jina.ai"]  # tavily is demoted: jina is asked first and answers
+    web.save_policy(block=["s.jina.ai"])
+    monkeypatch.setattr(web, "_demoted", {})
+    seen.clear()
+    out = run(s.search("example topic"))
+    assert [h for h, _ in seen] == ["api.tavily.com"] and out.startswith("ERROR: web_search could not search")
+    assert "admin block list" in out
+    from hswarm import config
+
+    monkeypatch.setattr(config, "load_api_keys", lambda p="": [])
+    seen.clear()
+    assert run(s.search("example topic")).startswith("ERROR: web_search could not search") and seen == []

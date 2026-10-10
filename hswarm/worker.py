@@ -384,7 +384,7 @@ _FILE_READS = frozenset({"read_file", "outline", "unfold"})  # one file: unchang
 # Many files: a new file or a write elsewhere changes the result without touching an earlier hit, so these are
 # unchanged only while this sandbox has run nothing that can write since.
 _WALKS = frozenset({"grep", "glob", "list_dir"})
-_WRITES_NOTHING = _FILE_READS | _WALKS | {"fetch_output", "read_url"}
+_WRITES_NOTHING = _FILE_READS | _WALKS | {"fetch_output", "read_url", "web_search"}
 
 
 def _repeat_key(sb: Sandbox, name: str, args: dict) -> tuple | None:
