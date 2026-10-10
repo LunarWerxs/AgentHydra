@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **An HSwarm task that runs out of time hands back an answer.** A task that hit its time limit used to come back
+  as a list of the tool calls it made, about 800 tasks and $114 a week. Now the end of its time is kept for one last
+  turn that writes the answer from what it found, marked `W` so you can tell.
 - **HSwarm no longer goes silent while a worker searches a big folder.** One worker's file search could hold HSwarm
   for minutes, so the window said "Error loading HSwarm data" while HSwarm still ran. Searches now skip folders like
   node_modules and run beside the server, and AgentHydra restarts an HSwarm that stays silent for 3 minutes.

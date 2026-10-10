@@ -233,6 +233,8 @@ Retries hswarm makes on its own, with no option to set:
   label is a text heuristic, not a grade: check or continue those tasks before counting them done.
 - `taint` holds sticky letters saying why a result is doubted (none = clean): `F` failed over, `R` re-run or
   re-prompted, `S` schema repaired, `T` output truncated, `B` the turn budget forced the answer, `C` a cost or
-  context cap stopped it.
+  context cap stopped it, `W` the clock ran low and the answer was forced, with no tools, from what the task had
+  gathered. An api task holds back the end of its `timeout_s` (15%, 30-120 s; none under 60 s) for that one answer
+  turn, so a stalled call or a slow tool no longer ends it as a `timeout` with only a tool-call log.
 - `citations` (api results) checks the answer's `[rN tool]` citations against the receipts of the tool calls it
   really made. `hswarm_results` documents the verdicts.
