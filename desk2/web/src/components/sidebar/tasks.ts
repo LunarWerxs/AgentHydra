@@ -80,6 +80,8 @@ export interface NestedTasks {
   jobsByRow: Map<string, SwarmJob[]>
   /** The rows added for running work no drawn row lists (nor draws as itself): the tasks' oldest first, then the jobs'. */
   added: AddedRow[]
+  /** How many running tasks HSwarm sent wait, drawn nowhere, for their job (ROUTED_WAIT_MS): while any do, the caller works the list out again on a timer. */
+  held: number
 }
 
 const ADDED = 'added:'
@@ -92,15 +94,46 @@ const MAX_DEPTH = 3
 /** A row the sidebar added for a CliMayte task nothing says which chat started: it carries the CliMayte mark in both lists. */
 export const isTaskRow = (id: string): boolean => /^added:[^:]*:task:/.test(id)
 
+/** The group CliMayte gives a task HSwarm sent it: `hswarm-<job>-<task>` (hswarm/climayte_route.py). */
+const ROUTED = 'hswarm-'
+/** A task HSwarm sent that names nothing that dispatched it: its job is its one tie to a chat. */
+const isRouted = (w: CliMayteWorker) => !w.originSessionId && !w.originWorkerId && !!w.group?.startsWith(ROUTED)
+const jobKey = (j: Pick<SwarmJob, 'id' | 'pc'>) => `${j.pc ?? ''}|${j.id}`
+
 /**
- * A task HSwarm sent to CliMayte (its group `hswarm-<job>-<task>`, hswarm/climayte_route.py) carries no origin, so the
- * chat is not pinged for every one; it takes its job's caller as its origin, so it sits under the chat that called the
- * job, beside the job (owner, 2026-10-07: "they should probably be under the chat that spawned them"). The caller is
- * the drawn row's session the job's ids name (an 8-character prefix only when one row has it), else the ids the job
- * itself is placed by (homeOf).
+ * The HSwarm jobs the window has seen, by PC and id, kept by the sidebar across polls (Sidebar.vue) for the tasks HSwarm
+ * sent to CliMayte (viaJobs): the job list comes on its own, slower channel than the tasks (every 10 s at most, and
+ * nothing while HSwarm does not answer), and a task whose job dropped out of it went from under its chat to a row of
+ * its own and back on every poll (owner, 2026-10-09: the sidebar "jackhammers"). Each listed job is kept; one HSwarm no
+ * longer lists is dropped once no task names it.
  */
-function viaJobs(workers: readonly CliMayteWorker[], jobs: readonly SwarmJob[], rows: readonly NestRow[]): CliMayteWorker[] {
-  if (!jobs.length) return [...workers]
+export type SeenJobs = Map<string, SwarmJob>
+
+/**
+ * How long a task HSwarm sent waits, drawn nowhere, for a job to name its chat: a new job's first tasks reach the window
+ * before the job does (the server reads HSwarm's list at most every 10 s, a slow answer taking up to 15 s more), and a
+ * task drawn as a row of its own until then would jump under its chat a moment later (owner, 2026-10-09). A task whose
+ * job is still unknown once the wait is over is listed under one row of such tasks per folder (routedRow), never hidden
+ * for longer.
+ */
+export const ROUTED_WAIT_MS = 30_000
+
+/**
+ * A task HSwarm sent to CliMayte carries no origin, so the chat is not pinged for every one; it takes its job's caller as
+ * its origin, so it sits under the chat that called the job, beside the job (owner, 2026-10-07: "they should probably be
+ * under the chat that spawned them"). The job is the one listed now or, while HSwarm's list lacks it, the one `seen`
+ * kept from an earlier poll, so a task stays where it was (SeenJobs). The caller is the drawn row's session the job's
+ * ids name (an 8-character prefix only when one row has it), else the ids the job itself is placed by (homeOf).
+ * `routed` has each such task that still names no chat: its job when that job names no caller, null while no job is
+ * known for it.
+ */
+function viaJobs(
+  workers: readonly CliMayteWorker[],
+  jobs: readonly SwarmJob[],
+  rows: readonly NestRow[],
+  seen: SeenJobs
+): { workers: CliMayteWorker[]; routed: Map<string, SwarmJob | null> } {
+  for (const j of jobs) seen.set(jobKey(j), j)
   const sessions = new Set(rows.flatMap((r) => r.sessionIds))
   const drawnAs = (id: string | null): string | undefined => {
     if (!id) return undefined
@@ -108,13 +141,36 @@ function viaJobs(workers: readonly CliMayteWorker[], jobs: readonly SwarmJob[], 
     const found = rows.filter((r) => r.sessionIds.some((s) => s.startsWith(id)))
     return found.length === 1 ? found[0]!.sessionIds.find((s) => s.startsWith(id)) : undefined
   }
-  return workers.map((w) => {
-    if (w.originSessionId || w.originWorkerId || !w.group?.startsWith('hswarm-')) return w
-    const j = jobs.find((x) => (x.pc ?? null) === (w.pc ?? null) && w.group!.startsWith(`hswarm-${x.id}-`))
-    if (!j) return w
-    const sid = drawnAs(j.callerSessionId) ?? drawnAs(j.callerHostSessionId) ?? j.callerSessionId ?? j.callerHostSessionId
-    return sid ? { ...w, originSessionId: sid, originTitle: w.originTitle ?? j.callerTitle } : w
+  const routed = new Map<string, SwarmJob | null>()
+  const named = new Set<string>()
+  const out = workers.map((w) => {
+    if (!isRouted(w)) return w
+    let j: SwarmJob | undefined
+    for (const x of seen.values()) {
+      if ((x.pc ?? null) === (w.pc ?? null) && w.group!.startsWith(`${ROUTED}${x.id}-`)) {
+        j = x
+        break
+      }
+    }
+    if (j) named.add(jobKey(j))
+    const sid = j ? (drawnAs(j.callerSessionId) ?? drawnAs(j.callerHostSessionId) ?? j.callerSessionId ?? j.callerHostSessionId) : null
+    if (sid) return { ...w, originSessionId: sid, originTitle: w.originTitle ?? j!.callerTitle }
+    routed.set(keyOf(w), j ?? null)
+    return w
   })
+  const listed = new Set(jobs.map(jobKey))
+  for (const k of [...seen.keys()]) if (!listed.has(k) && !named.has(k)) seen.delete(k)
+  return { workers: out, routed }
+}
+
+/** What nestTasks is told besides the lists: what the sidebar keeps across polls, and the time. */
+export interface NestOptions {
+  /** The HSwarm jobs seen so far (SeenJobs), kept by the caller across polls; without it only the jobs listed now place a task. */
+  seenJobs?: SeenJobs
+  /** Now, for how long a task HSwarm sent has waited for its job (ROUTED_WAIT_MS). */
+  now?: number
+  /** When the window began to listen for HSwarm's jobs: a task older than that waits from then, its job's first list being on its way. */
+  since?: number
 }
 
 /**
@@ -133,26 +189,35 @@ function viaJobs(workers: readonly CliMayteWorker[], jobs: readonly SwarmJob[], 
  * once: under the row of the chat that dispatcher came from, titled and placed as `known` (what the window
  * knows of each session) has that chat, else as its PC titles it, else after its first task; or, when
  * nothing says which chat, under the dispatcher's own row (a Desk chat run as a worker is one). A task HSwarm sent
- * to CliMayte counts as dispatched by the chat that called its job (viaJobs).
+ * to CliMayte counts as dispatched by the chat that called its job (viaJobs); one whose job names no chat goes under
+ * the job's row, and one whose job is not known waits for it (ROUTED_WAIT_MS), then goes under a row of such tasks
+ * (routedRow): never a row of its own (owner, 2026-10-09).
  */
 export function nestTasks(
   rows: readonly NestRow[],
   given: readonly CliMayteWorker[],
   jobs: readonly SwarmJob[] = [],
-  known: ReadonlyMap<string, KnownChat> = new Map()
+  known: ReadonlyMap<string, KnownChat> = new Map(),
+  o: NestOptions = {}
 ): NestedTasks {
-  const ix = indexWorkers(viaJobs(given, jobs, rows))
+  const { workers, routed } = viaJobs(given, jobs, rows, o.seenJobs ?? new Map())
+  const now = o.now ?? Date.now()
+  const held = new Set<string>()
+  for (const w of workers) {
+    if (w.active && routed.get(keyOf(w)) === null && now - Math.max(w.startedAt ?? 0, o.since ?? 0) < ROUTED_WAIT_MS) held.add(keyOf(w))
+  }
+  const ix = indexWorkers(workers)
   const rl = listRows(ix, rows)
   dropShadowed(rows, rl)
   const shown = new Set(rl.drawn)
   for (const list of rl.lists.values()) for (const n of list) shown.add(keyOf(n.worker))
-  const roots = findRoots(ix, shown)
+  const roots = findRoots(ix, shown, held)
   const seen = new Set([...shown, ...roots.map(keyOf)])
   const st: AddedRows = { known, added: new Map(), bySession: new Map() }
-  addRoots(ix, st, roots, seen)
+  addRoots(ix, st, roots, seen, routed)
   const jobsByRow = placeJobs(st, rows, jobs)
   settleAdded(st)
-  return { byRow: rl.lists, jobsByRow, added: [...st.added.values()] }
+  return { byRow: rl.lists, jobsByRow, added: [...st.added.values()], held: held.size }
 }
 
 const keyOf = (w: CliMayteWorker) => (w.pc ? `${w.pc}:${w.id}` : w.id)
@@ -291,13 +356,13 @@ function dropShadowed(rows: readonly NestRow[], rl: RowLists): void {
   for (const key of dropped) rl.lists.delete(key)
 }
 
-/** The topmost dispatcher no row lists above each running task no row lists: its list starts there. */
-function findRoots(ix: WorkerIndex, shown: ReadonlySet<string>): CliMayteWorker[] {
+/** The topmost dispatcher no row lists above each running task no row lists: its list starts there; none for a task HSwarm sent that waits for its job (`held`). */
+function findRoots(ix: WorkerIndex, shown: ReadonlySet<string>, held: ReadonlySet<string>): CliMayteWorker[] {
   const roots: CliMayteWorker[] = []
   for (const w of ix.workers) {
     if (!w.active || shown.has(keyOf(w))) continue
     const top = topOf(ix, w, shown)
-    if (!roots.includes(top)) roots.push(top)
+    if (!held.has(keyOf(top)) && !roots.includes(top)) roots.push(top)
   }
   return roots
 }
@@ -356,13 +421,34 @@ function chatRow(st: AddedRows, pc: string | null, sid: string, first: { title: 
   )
 }
 
-function addRoots(ix: WorkerIndex, st: AddedRows, roots: CliMayteWorker[], seen: Set<string>): void {
+/** The title of the row a task HSwarm sent goes under while no job says which chat it came from (routedRow). */
+const ROUTED_TITLE = 'HSwarm tasks'
+
+/**
+ * The row a task HSwarm sent goes under when no job names its chat: its job's own row (a job nothing says which chat
+ * called is a row itself, homeOf), else, its job not known, one row of such tasks per PC and folder, so a wave of them
+ * folds into one badge rather than a row each (owner, 2026-10-09). Both are keyed by what they stand for, never by a
+ * task, so a badge opened on one stays open as tasks come and go.
+ */
+function routedRow(st: AddedRows, r: CliMayteWorker, j: SwarmJob | null): AddedRow {
+  const pc = r.pc ?? null
+  const cwd = cwdOf(st, r)
+  const id = j ? `${ADDED}${pc ?? ''}:job:${j.id}` : `${ADDED}${pc ?? ''}:hswarm:${cwd ? folderKey(cwd) : (r.folder ?? '').toLowerCase()}`
+  const had = st.added.get(id)
+  if (had) return had
+  const at = j?.startedAt ?? activity(r)
+  return addRow(st, { id, title: j ? j.title : ROUTED_TITLE, pc, cwd, folder: j?.folder ?? r.folder ?? null, at, sessionId: null, worker: null, job: j }, [])
+}
+
+function addRoots(ix: WorkerIndex, st: AddedRows, roots: CliMayteWorker[], seen: Set<string>, routed: ReadonlyMap<string, SwarmJob | null>): void {
   /** The first non-empty title of the chat each origin stands for, as its PC sent it. */
   const titles = new Map<string, string>()
   for (const r of roots) if (r.originSessionId && r.originTitle && !titles.has(`${r.pc ?? ''}|${r.originSessionId}`)) titles.set(`${r.pc ?? ''}|${r.originSessionId}`, r.originTitle)
   for (const r of roots.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))) {
     const pc = r.pc ?? null
-    if (r.originSessionId) {
+    if (routed.has(keyOf(r))) {
+      routedRow(st, r, routed.get(keyOf(r)) ?? null).nodes.push({ worker: r, depth: 1 }, ...walk(ix, sessionsOf(r), new Set([keyOf(r)]), 2, seen))
+    } else if (r.originSessionId) {
       // The chat that started it, titled as the window knows it, else as its PC titles it, else after its first
       // task (owner, 2026-10-05), with its tasks one step in as under a drawn row.
       const row = chatRow(st, pc, r.originSessionId, { title: titles.get(`${pc ?? ''}|${r.originSessionId}`) || r.title, cwd: cwdOf(st, r), folder: r.folder ?? null, at: activity(r) })

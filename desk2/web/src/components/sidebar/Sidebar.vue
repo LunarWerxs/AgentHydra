@@ -21,6 +21,7 @@ import { accountChoices, refreshAhInstances } from '@/components/session-header/
 import { peekHeader } from '@/components/session-header/state'
 import { lazyPanel } from '@/lib/lazy-panel'
 import { useSwarmJobs } from '@/lib/swarm-jobs'
+import { useClock } from '@/lib/clock'
 import { ahUpdateDot, hydraOpen, hydraShown, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { ChevronRight, EyeOff } from '@lucide/vue'
@@ -47,6 +48,7 @@ import {
   type KnownChat,
   type NestedTasks,
   type NestRow,
+  type SeenJobs,
   type TaskNode
 } from './tasks'
 import ChatRow from './ChatRow.vue'
@@ -278,11 +280,25 @@ const knownChats = computed(() => {
   for (const c of src.chats.value) if (c.sessionId) out.set(c.sessionId, { title: c.title, cwd: c.cwd || null, at: c.updatedAt })
   return out
 })
+// The HSwarm jobs seen so far, kept across polls (tasks.ts SeenJobs): a task HSwarm sent stays under the chat its job
+// named while HSwarm's list lacks the job, instead of turning into a row of its own and back (owner, 2026-10-09). A
+// task still waiting for its job is drawn nowhere for a while (ROUTED_WAIT_MS, counted from when this list began
+// listening at the latest); while one waits the nesting is worked out again on a 5 s tick, so it shows when the wait
+// ends even if nothing else changes.
+const seenJobs: SeenJobs = new Map()
+const listeningSince = Date.now()
+const heldTick = useClock(5000)
 const nesting = computed<NestedTasks | null>(() => {
+  const out = nestAll()
+  if (out?.held) void heldTick.value
+  return out
+})
+function nestAll(): NestedTasks | null {
   if (!showTasks.value) return null
   const workers = [...src.workers.value, ...remoteWorkers.value]
   const jobs = swarmJobs.value
-  if (cloud.on.value) return nestTasks(cloud.groups.value.flatMap((g) => g.rows.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] }))), workers, jobs, knownChats.value)
+  const o = { seenJobs, now: Date.now(), since: listeningSince }
+  if (cloud.on.value) return nestTasks(cloud.groups.value.flatMap((g) => g.rows.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] }))), workers, jobs, knownChats.value, o)
   // The rows the desk list draws of its own, as groupChats picks them (never a CliMayte worker's own session, nor
   // a session that is one of our chats); a row in a folded group still holds its tasks, and the group's heading
   // counts the running ones (RunningBadge). A chat stands for its worker by id too, so one still queued (no
@@ -294,8 +310,8 @@ const nesting = computed<NestedTasks | null>(() => {
         : { key: `external:${e.id}`, sessionIds: [e.session.id] }
     )
   )
-  return nestTasks(rows, workers, jobs, knownChats.value)
-})
+  return nestTasks(rows, workers, jobs, knownChats.value, o)
+}
 /** The rows added for running work no drawn row lists (tasks.ts AddedRow), by id. */
 const addedRows = computed(() => new Map((nesting.value?.added ?? []).map((a) => [a.id, a])))
 /** The added row a row key (`external:` or `cloud:`, then its id) is, if any. */

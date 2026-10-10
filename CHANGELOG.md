@@ -7,6 +7,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **HSwarm no longer goes silent while a worker searches a big folder.** One worker's file search could hold HSwarm
+  for minutes, so the window said "Error loading HSwarm data" while HSwarm still ran. Searches now skip folders like
+  node_modules and run beside the server, and AgentHydra restarts an HSwarm that stays silent for 3 minutes.
+- **CLI accounts are named after their email.** A CLI login AgentHydra added for a desktop account was named after
+  the desktop ("Example (CLI)"), which did not say whose account it was. It now takes the account's email, and
+  hovering the name shows the account's name. Names you gave yourself stay.
+- **Arrows step through the messages you sent.** At the top right of a chat, an up arrow takes you to your previous
+  message, one per click, and a down arrow goes forward and then back to the latest. They stay faint until you
+  hover them.
+- **The sidebar stops jumping when HSwarm sends work to CliMayte.** Those tasks now stay under the chat that started
+  them (or one "HSwarm tasks" row) instead of popping up as their own rows and back. An open count badge now looks on.
 - **One copy of each stdio MCP server now serves the whole PC.** Every Claude session started its own copy of
   QuickDictate and the games server, so a busy PC ran dozens of each and ran short of memory. AgentHydra now runs one
   copy and every session connects to it through the daemon, and the original entries are kept so turning it off

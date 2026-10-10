@@ -321,7 +321,7 @@ test('a job and a task of the same unlisted chat share one row, whether the job 
   expect(nested.added.map((a) => [a.nodes.length, a.jobs.map((j) => j.id)])).toEqual([[1, ['j-full', 'j-prefix']]])
 })
 
-test("a task HSwarm sent to CliMayte sits under the chat that called its job, on its own PC; one whose job is not listed is a row of its own", () => {
+test("a task HSwarm sent to CliMayte sits under the chat that called its job, on its own PC; one whose job is not listed goes under one row of such tasks, never a row of its own", () => {
   const sid = '11111111-2222-4333-8444-555555555555'
   const remote = '22222222-3333-4444-8555-666666666666'
   const workers = [
@@ -340,8 +340,29 @@ test("a task HSwarm sent to CliMayte sits under the chat that called its job, on
   expect(listOf(nested.byRow.get('chat:a'))).toEqual(['1:here:w-routed', '1:here:w-prefix'])
   expect(nested.added.map((a) => [a.title, a.pc, a.worker?.id ?? null, a.nodes.map((n) => n.worker.id), a.jobs.map((j) => j.pc)])).toEqual([
     ['Example remote chat', 'PC-B', null, ['w-remote'], ['PC-B']],
-    ['w-unknown', null, 'w-unknown', [], []]
+    ['HSwarm tasks', null, null, ['w-unknown'], []]
   ])
+})
+
+// Owner, 2026-10-09: a task HSwarm sent showed as a row of its own, then under its chat, over and over ("jackhammers"),
+// as HSwarm's job list came and went on its own slower channel. One poll per row, the job list as the window had it.
+test('a task HSwarm sent keeps one place across polls: drawn nowhere while new and its job unknown, then under its chat even while the job list lacks the job', () => {
+  const sid = '11111111-2222-4333-8444-555555555555'
+  const rows = [{ key: 'chat:a', sessionIds: [sid] }]
+  const task = worker('w-routed', 1_000, { group: 'hswarm-20261009-120000-abcd-t1' })
+  const job = swarmJob('20261009-120000-abcd', { callerSessionId: sid })
+  const where = (n: ReturnType<typeof nestTasks>) =>
+    n.byRow.get('chat:a')?.some((x) => x.worker.id === 'w-routed') ? 'chat:a' : (n.added.find((a) => a.worker?.id === 'w-routed' || a.nodes.some((x) => x.worker.id === 'w-routed'))?.id ?? 'held')
+  const polls: [now: number, jobs: SwarmJob[], at: string][] = [
+    [5_000, [], 'held'],
+    [12_000, [job], 'chat:a'],
+    [20_000, [], 'chat:a'],
+    [60_000, [], 'chat:a'],
+    [70_000, [job], 'chat:a'],
+    [90_000, [], 'chat:a']
+  ]
+  const seenJobs = new Map()
+  expect(polls.map(([now, jobs]) => where(nestTasks(rows, [task], jobs, new Map(), { seenJobs, now, since: 0 })))).toEqual(polls.map(([, , at]) => at))
 })
 
 test('an 8-character prefix that two rows share adds a row for the job, not a guess between the two', () => {
