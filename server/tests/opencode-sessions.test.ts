@@ -288,4 +288,6 @@ test('the async OpenCode listing returns the sync listing, with and without pare
     expect(await listOpenCodeSessionsAsync(path)).toEqual(sync)
   }
   expect(await listOpenCodeSessionsAsync(join(CONFIG_DIR, 'no-such-opencode.db'))).toEqual([])
-})
+  // Two stores, two worker boots each (table_info, then the list): four cold Worker starts. CI's
+  // Windows runner took 5.1 s for them (run 38046209067), this PC well under 1 s: the time is worker boots.
+}, 20_000)
