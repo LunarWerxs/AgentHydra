@@ -44,6 +44,7 @@ import {
 import { killHostTree, pidAlive } from '../host/launch'
 import { type Scan, scanPorts } from '../localhost/ports'
 import { type AdoptContext, findByFolder, judgePort } from './adopt'
+import { UrlCapture } from './advertised-url'
 import { stripAnsi } from './ansi'
 import { companyOf } from './company'
 import type { CreateDevServers, DevServers, DevServersDeps, LoadAnswer, ScaffoldProposal } from './contract'
@@ -139,6 +140,8 @@ interface Entry {
   composeEnv: Record<string, string> | null
   /** The compose hold this run is a user of. */
   composeKey: string | null
+  /** The address this run printed for itself; a new capture per run, so a stopped run's address is not shown. */
+  advertised: UrlCapture | null
 }
 
 /** A compose stack shared by the servers that name the same file; the services this service started are stopped with the last user. */
@@ -390,6 +393,7 @@ class Manager implements DevServers {
       stopTimer: null,
       composeEnv: null,
       composeKey: null,
+      advertised: null,
     }
   }
 
@@ -485,6 +489,8 @@ class Manager implements DevServers {
     const own = !!e.child
     const status: DevWebProcessStatus = own ? e.status : e.outside ? 'running' : e.status
     const metrics = this.settingsNow.monitorResources && (own || e.outside) ? this.lastMetrics.get(d.id) : undefined
+    // The address the run printed for itself beats the declared one (a moved or path-served server); an outside server's output is not read, so it keeps the declared one.
+    const url = (own && e.advertised?.get()?.url) || d.url
     return {
       id: d.id,
       localId: d.localId,
@@ -496,7 +502,7 @@ class Manager implements DevServers {
       ...(d.starred !== undefined ? { starred: d.starred } : {}),
       enabled: this.processEnabled(d),
       ...(d.port !== undefined ? { port: d.port } : {}),
-      ...(d.url ? { url: d.url } : {}),
+      ...(url ? { url } : {}),
       status,
       owner: own || e.pendingStart ? 'desk' : e.outside ? 'outside' : null,
       pid: own ? e.pid : (e.outside?.pid ?? null),
@@ -1175,18 +1181,23 @@ class Manager implements DevServers {
     e.child = child
     e.pid = child.pid ?? null
     e.startedAt = this.now()
+    // This child's own capture: a stopped child's late output must not land in the next run's.
+    const advertised = new UrlCapture()
+    e.advertised = advertised
     const answerer = answering ? new PromptAnswerer(def.answers) : null
     child.stdin?.on('error', () => {})
     child.stdout?.on('data', (d: Buffer) => {
       const text = d.toString()
       this.addLog(e, 'stdout', text)
       this.recordError(e, 'stdout', text)
+      advertised.feed(text)
       if (answerer) this.answerWith(e, child, answerer.feed(text))
     })
     child.stderr?.on('data', (d: Buffer) => {
       const text = d.toString()
       this.addLog(e, 'stderr', text)
       this.recordError(e, 'stderr', text)
+      advertised.feed(text)
       if (answerer) this.answerWith(e, child, answerer.feed(text))
     })
     child.on('error', (err) => this.spawnFailed(e, child, err))
@@ -1229,10 +1240,14 @@ class Manager implements DevServers {
       }
       if (busy) return
       busy = true
-      void this.safeListening(port).then((up) => {
+      // A server that printed another port (Vite takes the next free one) is also probed there; the declared port stays
+      // probed too, so this only ever makes readiness come sooner, never later.
+      const printed = e.advertised?.get()?.port
+      const probes = [this.safeListening(port), printed && printed !== port ? this.safeListening(printed) : Promise.resolve(false)]
+      void Promise.all(probes).then((answers) => {
         busy = false
         if (e.child !== child || e.status !== 'starting') return
-        if (up || Date.now() - began >= READY_GIVE_UP_MS) {
+        if (answers.some(Boolean) || Date.now() - began >= READY_GIVE_UP_MS) {
           e.status = 'running'
           this.clearTimers(e)
         }

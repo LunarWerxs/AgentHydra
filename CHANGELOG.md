@@ -10,6 +10,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The PC stays awake while your agents work.** While a CliMayte worker runs or a chat is working, AgentHydra
   stops the PC going to sleep on its own, and lets it sleep again once nothing works. The screen still turns off
   and Sleep still works. It is on by default; Settings -> CliMayte -> This PC turns it off.
+- **A dev server shows the address it actually printed.** When a dev server starts somewhere other than the
+  address in its settings (another port, a sub-path), the Dev servers page and its Open button now use the "Local:"
+  address the server printed for itself.
+- **A browser agent's click survives the page re-rendering.** A button or link an agent read a moment before is found
+  again after the page redraws, as long as there is exactly one of it. If the page now has more or fewer of them,
+  the agent is told to look again rather than clicking the wrong one.
+- **A stuck read of another app's history can no longer hang AgentHydra.** Reading OpenCode's history now gives up
+  after 20 seconds, and after three failures in a row it pauses for a minute instead of trying again and again.
 - **A chat you mark unread stays unread.** Marking the open chat unread from the sidebar no longer clears again a
   moment later when you click back into the window. It turns read when its next turn ends, or when you open it again.
 - **Keyboard shortcuts work on any keyboard layout.** On a Russian, Greek or other non-Latin layout, Ctrl+N and the
