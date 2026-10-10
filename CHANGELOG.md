@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Closing an unused terminal no longer leaves a console host behind.** When AgentHydra closes the terminal Claude
+  Desktop opened ahead of time for a chat you are not looking at, it now closes that terminal's console host too.
+  Before, each one stayed running until the app quit.
 - **Free accounts show their plan, and tell you when one stops being free.** Each Free row now shows its plan: a
   badge such as Go or Pro, or a small gift icon when it is free, for Claude accounts as well as ChatGPT. When an
   account moves between free and paid, its row is marked and you get a desktop notification, and its menu offers to

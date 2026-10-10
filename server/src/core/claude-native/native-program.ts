@@ -878,10 +878,16 @@ function nativeOnScreen(lifecycle: any, sessionId: string): boolean {
  * Stops a chat's terminal shells that the app started ahead of time ("prewarm") and nobody has
  * typed into or read, once the app has had the chat off screen for `hiddenForMs`. The app opens
  * one PowerShell (~85 MB) for every chat it shows and keeps it until the chat is archived, engine
- * or not; showing the chat again prewarms a new one. A stopped shell's ConPTY conhost (~8 MB) is
- * never closed by the app, so a chat someone keeps returning to keeps its shell: stopping it each
- * time left a conhost per return (measured 2026-10-07). A shell anyone used, one the app opened
- * for any other reason, or one of a chat whose visibility the app has not reported is left alone.
+ * or not; showing the chat again prewarms a new one, so a chat someone keeps returning to keeps
+ * its shell. A shell anyone used, one the app opened for any other reason, or one of a chat whose
+ * visibility the app has not reported is left alone.
+ *
+ * The app's own stop leaves the shell's ConPTY conhost running until it quits: it ends a local
+ * shell with `taskkill /T` on the shell's pid, never calling the pty's kill(), and its pty host
+ * forgets a pty whose shell exited without closing it. The conhost is the shell's sibling, not its
+ * child, so /T misses it (295 left on one PC, 2026-10-10). The pty's kill() sends the pty host the
+ * message that runs node-pty's kill, which closes the pseudoconsole and with it the conhost. It is
+ * sent before the stop so it reaches the pty host while the shell, and so its pty, still exists.
  */
 function nativeStopPrewarmShells(
   shells: any,
@@ -898,6 +904,9 @@ function nativeStopPrewarmShells(
     const stats = shells.shellPtyStats.get(key)
     if (stats?.spawnReason !== 'prewarm' || stats.hadInput !== false || stats.reads) continue
     if (now - (entry.lastHiddenTime ?? stats.startedAt ?? now) < hiddenForMs) continue
+    // A remote shell (pid 0) is closed by the app's stop itself.
+    const pty = shells.shellPtyProcesses.get(key)
+    if (pty?.pid > 0 && typeof pty.kill === 'function') pty.kill()
     shells.stopShellPty(key, { noSweep: true })
     stopped.push(key)
   }

@@ -730,6 +730,54 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
       'UUID',
     )
   })
+  // 2026-10-10: every prewarm shell the idle pass stopped left its ConPTY conhost running.
+  test('idle closes the pseudoconsole of the unused prewarm shell it stops, and touches no other', async () => {
+    const h = harness()
+    const now = Date.now()
+    // Claude's pty host runs node-pty's kill (ClosePseudoConsole) only for a pty it still holds;
+    // the app's stop ends the shell, and the pty host then drops the pty without closing it.
+    const held = new Set(['local_target', 'local_target::2'])
+    const closed: string[] = []
+    const stopped: string[] = []
+    const pty = (key: string, pid: number) => ({
+      pid,
+      kill: () => held.delete(key) && closed.push(key),
+    })
+    const shellPtyProcesses = new Map([
+      ['local_target', pty('local_target', 4101)],
+      ['local_target::2', pty('local_target::2', 4102)],
+    ])
+    h.manager.shellPty = {
+      shellPtyProcesses,
+      shellPtyStats: new Map([
+        ['local_target', { spawnReason: 'prewarm', hadInput: false, reads: 0, startedAt: now }],
+        ['local_target::2', { spawnReason: 'prewarm', hadInput: true, reads: 0, startedAt: now }],
+      ]),
+      stopShellPty: (key: string) => {
+        shellPtyProcesses.delete(key)
+        held.delete(key)
+        stopped.push(key)
+      },
+    }
+    h.manager.pauseSession = async () => {}
+    h.manager.warmLifecycle = {
+      config: { idleTimeoutMs: 0 },
+      sessions: new Map([
+        [
+          'local_target',
+          { visibilityKnown: true, isTabVisible: false, lastHiddenTime: now - 20 * 60_000 },
+        ],
+      ]),
+      startIdleTimeout: () => {},
+      getTimeoutMs: () => 0,
+    }
+    expect(await h.run({ action: 'idle', idleMs: 10 * 60_000 })).toMatchObject({
+      ok: true,
+      shellsStopped: ['local_target'],
+    })
+    expect(stopped).toEqual(['local_target'])
+    expect(closed).toEqual(['local_target'])
+  })
   test('serialized identifiers cannot inject additional inspector code', async () => {
     const h = harness()
     const value = 'local_target");globalThis.injected=true;//'
