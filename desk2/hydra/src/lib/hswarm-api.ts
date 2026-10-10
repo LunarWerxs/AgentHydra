@@ -7,6 +7,8 @@ import { loadStats, statsKey } from '@/lib/swarm-stats'
 
 interface HswarmStatus {
   running: boolean
+  /** The daemon's last look at its /health; false while the process runs but answers nobody. */
+  answering?: boolean | null
   port?: number
   pid?: number
   lastError?: string
@@ -102,7 +104,13 @@ async function fetchState() {
     }
     if (error.value !== null) error.value = null
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to load state'
+    // The daemon's own look says why a running server fails every read: its process lives, deaf.
+    error.value =
+      status.value.answering === false
+        ? 'HSwarm is running but not answering: it is busy or stuck. AgentHydra starts it again after 3 minutes of silence.'
+        : err instanceof Error
+          ? err.message
+          : 'Failed to load state'
   } finally {
     loading.value = false
   }
