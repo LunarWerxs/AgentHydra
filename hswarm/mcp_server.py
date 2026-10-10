@@ -166,8 +166,8 @@ async def hswarm_run(
     8+ small tool-free tasks of one shape are REFUSED with the packing recipe; unbatched=true sends them anyway,
     and purpose="evaluation" jobs are never refused.
 
-    tasks: prompt strings, or {prompt, id?, files?, ...} objects. The arguments below are every task's defaults and
-    each may be set per task, except the job-wide concurrency, budget_usd, label, wait, wait_s, max_answer_chars.
+    tasks: prompt strings, or {prompt, id?, files?, ...} objects. Each argument below is every task's default,
+    settable per task, except the job-wide concurrency, budget_usd, label, wait, wait_s, max_answer_chars.
     cwd: an ABSOLUTE folder; the worker's tools see nothing outside it.
     tools: exactly one of read (default) | edit (read + write files) | all (edit + a shell) | none (reason only) |
     web (read + web_search + read_url, reads only for hosts in web_hosts; ["*"] = any public host) | jobs (all + background shell jobs) | propose (read +
@@ -179,7 +179,7 @@ async def hswarm_run(
     code, judge, summarize, review) picks the model this machine wires for it. hswarm_select previews the route.
     Cost: max_cost_usd caps ONE worker, and a capped task dies with its work: set it for long code or research tasks
     (defaults: $0.25; with tools code $1, research $1.50; critical $2). budget_usd caps the WHOLE job and cancels what is still pending
-    once crossed; unset, the job has no ceiling.
+    once crossed; unset, no ceiling.
     timeout_s: RUN time per task; time queued at a busy provider's gate spends none. max_turns: default 24 (cc 40).
     wait=true returns what finished within wait_s (at most 240 s: MCP clients drop a call silent ~300 s; the job runs
     on); wait=false returns a job_id at once: poll hswarm_status, read
@@ -187,7 +187,7 @@ async def hswarm_run(
     backend: api (sandboxed tool loop) | cc (headless Claude Code; edit/all there also need confirm_write=true).
     Answer: summary and results [{id, status, answer or data, ...}]. Re-check first what `unverified`,
     summary.mis_scoped and summary.not_advanced list.
-    An argument this tool does not take is refused with the nearest valid name, never dropped.
+    An unknown argument is refused with the nearest valid name, never dropped.
     Every other option (reasoning_effort, verify, acceptance, done_when, green, escalate, scope, capability,
     writable, inventory, recipe, scripted, redact, envelope, resume_from_job, lean, isolated, zdr, ...) and every result
     field is in docs/HSWARM-API.md in the AgentHydra repo: read it before using one.
