@@ -103,7 +103,7 @@ names and fingerprints. They never return a key or the pairing code.
 ## hswarm_run options
 
 The `hswarm_run` tool description points here. It is in every chat's context on every turn, so it carries only what
-every call needs. Each option below is a top-level argument that sets every task's default, a task key, or both.
+every call needs, and a test holds it to 3,000 characters: a new option is documented here, not there. Each option below is a top-level argument that sets every task's default, a task key, or both.
 "Per task" means a task key only. "Job-wide" means a top-level argument only.
 
 An argument `hswarm_run` does not take is refused with the nearest valid name, and nothing runs. A task key it does
