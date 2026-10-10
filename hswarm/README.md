@@ -164,7 +164,7 @@ The HSWARM_HOME directory structure:
 
 ## Inside AgentHydra
 
-The AgentHydra daemon starts HydraSwarm by default (`python -m hswarm mcp --http --port 7793`), restarts it with backoff if it exits, and proxies its console API at `/api/hswarm/*` for the HSwarm tab. The log is `<AgentHydra data>/logs/hswarm.log`.
+The AgentHydra daemon starts HydraSwarm by default (`python -m hswarm mcp --http --port 7793`), restarts it with backoff if it exits or stops answering (its `/health` silent for 3 minutes ends it and starts it again; `GET /api/hswarm-status` reports `answering`), and proxies its console API at `/api/hswarm/*` for the HSwarm tab. The log is `<AgentHydra data>/logs/hswarm.log`.
 
 - `AGENTHYDRA_HSWARM_ENABLED=0` keeps it off.
 - `AGENTHYDRA_HSWARM_DIR` names the folder holding `hswarm/` when it is not beside the app (a wrong folder is reported in the tab, not replaced).

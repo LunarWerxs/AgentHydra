@@ -204,6 +204,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   view, as Find brings a match (TranscriptView's `revealStep`, which ExternalSessionView calls through a ref; the
   rows carry `data-step`). It shows only while the words are the step's own, and on an outside session only when
   the transcript shows that step (Display can hide tools or thinking).
+- **Arrows through the messages you sent** (owner, 2026-10-09). At a chat's top right, an up arrow glides to the
+  previous message the person sent, one per click, and a down arrow to the next; past the last one it goes back to
+  the latest, as the bottom-right arrow does. A sub-agent's prompt and a queued message are not steps. Both sit
+  at half opacity until hovered (`transcript/lib/steps.ts` `nextMessageStep`, TranscriptView's `stepUp` /
+  `stepDown`).
 - **Groups you hide.** A project group's header has a right-click menu with Hide: the group leaves the
   list and its chats stay active, nothing is archived (owner, 2026-10-05: "I don't want to like archive
   because they're meant to be there, but I also don't feel like seeing"). The Filter menu's Show hidden
@@ -249,7 +254,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   chat (a synced chat, an outside session or a Desk chat), else as its PC titles it, else after its first
   task; when nothing says which chat started it (a Desk chat run as a worker, a dispatcher that is gone, a
   PC whose AgentHydra is too old), the task is the row (`nestTasks` and `addToDeskGroups` /
-  `addToCloudGroups` in `web/src/components/sidebar/tasks.ts`). The other PC shares only the last name of
+  `addToCloudGroups` in `web/src/components/sidebar/tasks.ts`). A task HSwarm sent to CliMayte is never a row
+  of its own (owner, 2026-10-09: the sidebar was "jackhammering, open and closed"): it goes under the chat that
+  called its HSwarm job, else under the job's row; a job once seen is kept (`SeenJobs`), so a job list that comes
+  late or empty does not move it, and a task whose job is not known yet waits up to 30 s (`ROUTED_WAIT_MS`), drawn
+  nowhere, then goes under one "HSwarm tasks" row in its folder's group (`routedRow`). The other PC shares only the last name of
   a task's folder (and of an HSwarm job's caller's), never its path, so its chat that is not synced here
   goes in the one group here whose folder has that name, else in a group of that name after the list's
   own (two groups with the name are a guess, so it gets its own; owner, 2026-10-06); only work with no
@@ -281,7 +290,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   each task line shows its account (`#68`) in the same colour (`sidebar/account-tone.ts`: AgentHydra's
   instance palette without the blue that is HSwarm's, or the red, green and gray a line's mark uses). A
   badge's tooltip names up to eight of them, a task after its account; a click shows that row's lines inline
-  until the next click. Kept in `hydra-desk.sidebar.tasks-mode` and `hydra-desk.sidebar.jobs-mode`.
+  until the next click, and an open badge looks on (HSwarm's in blue, CliMayte's with an outline, as blue is
+  HSwarm's alone; `sidebar/SubBadges.vue`). Kept in `hydra-desk.sidebar.tasks-mode` and `hydra-desk.sidebar.jobs-mode`.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.

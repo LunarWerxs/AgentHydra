@@ -1562,7 +1562,10 @@ desktop? ... to save me from having to do both individually."
   `desktop_cli_pairing`, on by default): every signed-in desktop profile (the instances root plus the
   default install) with no CLI instance linked gets one, on the feed's minute pass and before it
   feeds. An unlinked CLI instance logged in as the same account is linked first (lowest number);
-  otherwise `<label> (CLI)` is created. A desktop is handled once (`desktop_cli_paired`, which also
+  otherwise `<label> (CLI)` is created, and once it is signed in the minute pass names it after the
+  account's email (owner, 2026-10-09; `nameCliInstancesByAccount`), following the account if the login
+  changes; a name a person gave stays. Every read of a signed-in instance carries `accountEmail` and
+  `accountName` from its `.claude.json`, which the window's name hover shows. A desktop is handled once (`desktop_cli_paired`, which also
   records desktops that already had a link), so a CLI instance the person deletes or unlinks stays
   gone. Only turning the setting on, after a confirm (`POST /api/desktop-cli-pairing`), clears that
   list and pairs everything again; its answer waits at most 7 s (`running: true` after that, and the
