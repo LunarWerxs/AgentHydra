@@ -39,7 +39,7 @@ import WhatsNewDialog from './WhatsNewDialog.vue'
 import { changesTabFor } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
 import NewSessionScreen from './NewSessionScreen.vue'
-import { CHAT_DEFAULT, CHAT_MIN, NavHistory, TASKS_DEFAULT, TASKS_MAX, TASKS_MIN, archivedNotice, SidebarPeek, chatViewOf, matchShortcut, splitChat, splitColumns, tasksPanelWidth, viewUnder, type View } from './logic'
+import { CHAT_DEFAULT, CHAT_MIN, NavHistory, TASKS_DEFAULT, TASKS_MAX, TASKS_MIN, archivedNotice, SidebarPeek, chatViewOf, matchShortcut, splitChat, splitColumns, tasksPanelWidth, unreadHold, viewUnder, type View } from './logic'
 import { useElementSize } from '@vueuse/core'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
@@ -295,7 +295,8 @@ watch(
     const opened = id !== before?.[0]
     // floor-ok: both catches predate this change (same calls, new conditions); a failed load or read mark is retried on the next open.
     if (opened && !src.itemsByChat.value.has(id)) void src.loadItems(id).catch(() => {}) // floor-ok
-    if (c.unread && (opened || document.hasFocus())) void src.updateChat(id, { unread: false }).catch(() => {}) // floor-ok
+    const reads = unreadHold.reads(id, opened ? 'opened' : 'turn', document.hasFocus())
+    if (c.unread && reads) void src.updateChat(id, { unread: false }).catch(() => {}) // floor-ok
   },
   { immediate: true }
 )
@@ -693,24 +694,29 @@ function pickAccount(id: string) {
 }
 
 // An outside session's unread mark clears the same way as a chat's, however it was opened (its row, a
-// search hit, Back / Forward): on opening it, or when it turns unread while open in the focused window.
+// search hit, Back / Forward): on opening it, or when it turns unread or its turn moves on while open in
+// the focused window. A mark the owner set by hand stays (unreadHold). Going stale is no new turn.
 watch(
-  () => [external.value?.id, external.value?.unread] as const,
-  ([id, unread], before) => {
-    if (!id || !unread) return
+  () => [external.value?.id, external.value?.unread, external.value?.status] as const,
+  ([id, unread, status], before) => {
+    if (!id) return
+    const turn = status !== before?.[2] && status !== 'stale'
+    const reads = unreadHold.reads(id, id !== before?.[0] ? 'opened' : turn ? 'turn' : 'mark', document.hasFocus())
     // floor-ok: a failed read mark is retried on the next open or focus.
-    if (id !== before?.[0] || document.hasFocus()) void src.updateSessionMeta(id, { unread: false }).catch(() => {})
+    if (unread && reads) void src.updateSessionMeta(id, { unread: false }).catch(() => {})
   },
   { immediate: true }
 )
 
 // Coming back to the window reads what is open: a turn that ended while the owner was away keeps its
-// unread mark until then.
+// unread mark until then. A mark the owner set by hand is not undone by coming back (unreadHold).
 function markOpenRead() {
   if (document.visibilityState === 'hidden') return
   // floor-ok: both are retried on the next open or focus.
-  if (chat.value?.unread) void src.updateChat(chat.value.id, { unread: false }).catch(() => {})
-  if (external.value?.unread) void src.updateSessionMeta(external.value.id, { unread: false }).catch(() => {})
+  if (chat.value?.unread && unreadHold.reads(chat.value.id, 'focus', true))
+    void src.updateChat(chat.value.id, { unread: false }).catch(() => {})
+  if (external.value?.unread && unreadHold.reads(external.value.id, 'focus', true))
+    void src.updateSessionMeta(external.value.id, { unread: false }).catch(() => {})
 }
 const onVisibility = () => document.visibilityState === 'visible' && markOpenRead()
 

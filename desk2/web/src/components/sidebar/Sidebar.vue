@@ -8,6 +8,7 @@ import { Tip } from '@/components/ui/tooltip'
 import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import HeadlessAudioButton from '@/components/sidebar/HeadlessAudioButton.vue'
 import { useShellSource } from '@/components/shell/source'
+import { unreadHold } from '@/components/shell/logic'
 const CloudList = lazyPanel(() => import('@/components/cloud/CloudList.vue'))
 const DevServersList = lazyPanel(() => import('@/components/servers/DevServersList.vue'))
 import { useDevServers } from '@/components/servers/store'
@@ -550,6 +551,8 @@ function attempt(what: string, run: Promise<unknown>) {
   void run.catch((err: unknown) => (rowError.value = `${what} failed: ${err instanceof Error ? err.message : String(err)}`))
 }
 function mark(row: Row, patch: SessionMetaPatch & { title?: string }) {
+  // A hand mark the window must not undo by itself when the item is open (shell/logic.ts UnreadHold).
+  if (patch.unread !== undefined) unreadHold.mark(row.kind === 'chat' ? row.chat.id : row.session.id, patch.unread)
   attempt('The change', row.kind === 'chat' ? src.updateChat(row.chat.id, patch) : src.updateSessionMeta(row.session.id, patch))
 }
 function act(row: Row, item: RowMenuItem) {

@@ -28,6 +28,7 @@ const SWITCHES: Partial<Record<SettingsRowId, BoolKey>> = {
   ahTray: 'hideTrayIcon',
   ahShowCli: 'showCliInstances',
   ahKeepalive: 'keepaliveEnabled',
+  ahKeepAwake: 'keepAwakeWhileWorking',
   ahShowDesktop: 'showDesktopInstances',
   ahShowCodexDesktop: 'codexDesktopEnabled',
   ahShowCodexCli: 'codexCliEnabled',

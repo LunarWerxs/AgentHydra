@@ -8,7 +8,7 @@
 // server is gone). WMI starts it with the user's default environment, so the chat's own environment travels in
 // the spec file (the host deletes it once read). Elsewhere a detached spawn is a real detach.
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { HostFile, HostSpec } from './protocol'
@@ -122,8 +122,87 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
-/** Ends a host's process tree (the host and the Claude Code under it), when it will not end itself. */
-export async function killHostTree(pid: number): Promise<void> {
+// A recorded pid is only a number. Once the process that wrote it has gone (a crash, a reboot), Windows
+// hands the number to the next process that starts, so a host or service file left behind names a stranger,
+// and `taskkill /T /F` on it ends that stranger and everything under it. Idea from stablyai/orca's
+// windows-pty-root-identity.ts (MIT), which classifies a pid before its tree kill; here the proof is the
+// start time: the process that wrote `startedAt` was already running when it wrote it, and a process that
+// took its pid later started later.
+
+/** How far a process's own start may lag the `startedAt` its file records (one-second `ps` precision, a
+ *  file stamped by the launcher just before the start). */
+const START_SLACK_MS = 5000
+
+type Kernel = {
+  OpenProcess(access: number, inherit: number, pid: number): unknown
+  GetProcessTimes(h: unknown, creation: unknown, exit: unknown, kernel: unknown, user: unknown): number
+  CloseHandle(h: unknown): number
+}
+let kernel: { k: Kernel; ptr: (b: BigUint64Array) => unknown } | null | undefined
+
+async function openKernel(): Promise<typeof kernel> {
+  if (kernel !== undefined) return kernel
+  try {
+    const { dlopen, FFIType, ptr } = await import('bun:ffi')
+    const lib = dlopen('kernel32.dll', {
+      OpenProcess: { args: [FFIType.u32, FFIType.i32, FFIType.u32], returns: FFIType.ptr },
+      GetProcessTimes: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+      CloseHandle: { args: [FFIType.ptr], returns: FFIType.i32 }
+    })
+    kernel = { k: lib.symbols as unknown as Kernel, ptr: (b) => ptr(b) }
+  } catch {
+    kernel = null
+  }
+  return kernel
+}
+
+/** `[[dd-]hh:]mm:ss`, ps's elapsed time, in seconds; null when it is not one. */
+function parseEtime(text: string): number | null {
+  const m = /^\s*(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)\s*$/.exec(text)
+  if (!m) return null
+  return Number(m[1] ?? 0) * 86400 + Number(m[2] ?? 0) * 3600 + Number(m[3]) * 60 + Number(m[4])
+}
+
+/** When the process at `pid` started, in epoch ms; null when that cannot be read (gone, another user's). */
+export async function processStartedAt(pid: number): Promise<number | null> {
+  if (!Number.isInteger(pid) || pid <= 0) return null
+  if (process.platform !== 'win32') {
+    const r = spawnSync('ps', ['-o', 'etime=', '-p', String(pid)], { encoding: 'utf8', windowsHide: true })
+    const secs = r.status === 0 ? parseEtime(r.stdout) : null
+    return secs === null ? null : Date.now() - secs * 1000
+  }
+  const kk = await openKernel()
+  if (!kk) return null
+  const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+  const h = kk.k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+  if (!h) return null
+  try {
+    const t = new BigUint64Array(4)
+    if (!kk.k.GetProcessTimes(h, kk.ptr(t.subarray(0, 1)), kk.ptr(t.subarray(1, 2)), kk.ptr(t.subarray(2, 3)), kk.ptr(t.subarray(3, 4)))) return null
+    // FILETIME: 100 ns ticks since 1601-01-01.
+    return Number(t[0]! / 10_000n) - 11_644_473_600_000
+  } finally {
+    kk.k.CloseHandle(h)
+  }
+}
+
+/** Is the process at `pid` still the one that recorded `startedAt`? 'unknown' (its start cannot be read)
+ *  is never permission to kill. */
+export async function recordedPidOwner(
+  pid: number,
+  startedAt: number,
+  startOf: (pid: number) => Promise<number | null> = processStartedAt
+): Promise<'ours' | 'foreign' | 'unknown'> {
+  const started = await startOf(pid)
+  if (started === null || !Number.isFinite(startedAt)) return 'unknown'
+  return started > startedAt + START_SLACK_MS ? 'foreign' : 'ours'
+}
+
+/** Ends a host's process tree (the host and the Claude Code under it), when it will not end itself. Given the
+ *  `startedAt` its file recorded, it first proves the pid still belongs to that process and leaves a
+ *  stranger (or one it cannot prove) alone; answers whether it killed. */
+export async function killHostTree(pid: number, startedAt?: number): Promise<boolean> {
+  if (startedAt !== undefined && (await recordedPidOwner(pid, startedAt)) !== 'ours') return false
   try {
     if (process.platform === 'win32') {
       const child = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
@@ -135,6 +214,7 @@ export async function killHostTree(pid: number): Promise<void> {
   } catch {
     // already gone
   }
+  return true
 }
 
 export interface LaunchOptions {

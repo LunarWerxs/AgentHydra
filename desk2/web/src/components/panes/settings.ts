@@ -69,6 +69,7 @@ export type SettingsRowId =
   | 'ahTray'
   | 'ahShowCli'
   | 'ahKeepalive'
+  | 'ahKeepAwake'
   | 'ahKeepaliveFloor'
   | 'ahShowDesktop'
   | 'ahShowCodexDesktop'
@@ -279,6 +280,14 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     description: 'New chats hand sub-agent work to CliMayte instead of the Agent tool.'
   },
   { id: 'workers', section: 'climayte', group: 'Sub-agents', label: 'Running now', description: 'CliMayte workers active across your chats.' },
+  {
+    id: 'ahKeepAwake',
+    section: 'climayte',
+    group: 'This PC',
+    label: 'Stay awake while agents work',
+    description:
+      'On by default. While a CliMayte worker runs or a chat is working, the PC does not go to sleep on its own. The screen still turns off, and Sleep still works.'
+  },
   { id: 'bridge', section: 'climayte', group: 'AgentHydra bridge', label: 'Bridge status', description: 'The AgentHydra MCP bridge CliMayte runs through.' },
   {
     id: 'ahMcp',

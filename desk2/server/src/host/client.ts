@@ -644,7 +644,9 @@ export async function endHost(dir: string, chatId: string, connect?: (file: Host
     }
     const deadline = Date.now() + 3000
     while (pidAlive(file.pid) && Date.now() < deadline) await Bun.sleep(100)
-    if (pidAlive(file.pid)) await killHostTree(file.pid)
+    // The file's startedAt proves the pid is still this host: a file left by a host that died long ago
+    // names whatever took its pid since, which is left alone.
+    if (pidAlive(file.pid)) await killHostTree(file.pid, file.startedAt)
   }
   rmSync(hostFilePath(dir, chatId), { force: true })
 }

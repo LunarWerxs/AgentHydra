@@ -61,6 +61,37 @@ export class NavHistory {
   }
 }
 
+/** Why the window would mark the open chat or outside session read by itself: it was just opened, its
+ *  status moved on (a turn started or ended), its unread mark just arrived, or the window came back. */
+export type ReadCue = 'opened' | 'turn' | 'mark' | 'focus'
+
+/** The chats and outside sessions a person marked unread by hand (a row's menu, the title bar, U). The
+ *  window marks what is open read by itself, and before this that undid a hand mark at once (an outside
+ *  session) or the next time the window came back (a chat). A hand mark now holds until the item is
+ *  opened again or a new turn moves its status on, which is when the window reads it as seen again.
+ *  Idea from stablyai/orca's per-turn auto-acknowledge key (MIT). */
+export class UnreadHold {
+  private readonly held = new Set<string>()
+
+  /** A person's own mark: unread holds it, read lets it go. */
+  mark(id: string, unread: boolean): void {
+    if (unread) this.held.add(id)
+    else this.held.delete(id)
+  }
+
+  /** Whether the window marks `id` read now, on `cue`. Opening it reads it; a new turn reads it when the
+   *  window has focus; both end a hand mark. A mark arriving, or the window coming back, never undoes one. */
+  reads(id: string, cue: ReadCue, focused: boolean): boolean {
+    if (cue === 'opened' || cue === 'turn') this.held.delete(id)
+    if (cue === 'opened') return true
+    if (this.held.has(id)) return false
+    return cue === 'focus' || focused
+  }
+}
+
+/** The one hold the sidebar's marks and the frame's own read marks share. */
+export const unreadHold = new UnreadHold()
+
 export const PEEK_OPEN_MS = 120
 export const PEEK_CLOSE_MS = 200
 
@@ -133,11 +164,23 @@ export class SidebarPeek {
 
 export type ShellShortcut = 'new' | 'toggleSidebar' | 'search' | 'back' | 'forward'
 
+/** The letter a shortcut reads: the typed letter on a Latin layout (Dvorak's N is N wherever it sits), and
+ *  the physical key's on any other, where Ctrl+N on the N key types 'т' (Cyrillic) and matched nothing.
+ *  Idea from stablyai/orca's shortcut matching (MIT). */
+function shortcutLetter(e: { key: string; code?: string }): string {
+  const k = e.key.toLowerCase()
+  if (k.length !== 1 || /^[a-z]$/.test(k)) return k
+  const physical = /^Key([A-Z])$/.exec(e.code ?? '')
+  return physical ? physical[1].toLowerCase() : k
+}
+
 /** Ctrl+N new session, Ctrl+B sidebar, Ctrl+K search, Alt+Left / Alt+Right back and forward. */
-export function matchShortcut(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>): ShellShortcut | null {
+export function matchShortcut(
+  e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'> & { code?: string }
+): ShellShortcut | null {
   const mod = e.ctrlKey || e.metaKey
   if (mod && !e.altKey && !e.shiftKey) {
-    const k = e.key.toLowerCase()
+    const k = shortcutLetter(e)
     if (k === 'n') return 'new'
     if (k === 'b') return 'toggleSidebar'
     if (k === 'k') return 'search'

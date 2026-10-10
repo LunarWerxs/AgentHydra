@@ -7,6 +7,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **The PC stays awake while your agents work.** While a CliMayte worker runs or a chat is working, AgentHydra
+  stops the PC going to sleep on its own, and lets it sleep again once nothing works. The screen still turns off
+  and Sleep still works. It is on by default; Settings -> CliMayte -> This PC turns it off.
+- **A chat you mark unread stays unread.** Marking the open chat unread from the sidebar no longer clears again a
+  moment later when you click back into the window. It turns read when its next turn ends, or when you open it again.
+- **Keyboard shortcuts work on any keyboard layout.** On a Russian, Greek or other non-Latin layout, Ctrl+N and the
+  other letter shortcuts now act on the key in that place, as on an English keyboard.
+- **Stopping a chat can no longer end an unrelated program.** A chat or dev-servers record left behind by a crash or
+  a restart could name a process number Windows had since given to another program, and stopping it ended that
+  program. AgentHydra now checks the process is still the one it started before it ends it.
+- **A Codex usage check and a chat move no longer sign the account out.** Codex replaces its sign-in token each time
+  it refreshes it, so two of AgentHydra's own Codex connections to one account refreshing at once could leave it
+  signed out. They now take turns, one account at a time; other accounts never wait.
 - **An HSwarm run no longer freezes for hours on a big repo.** A worker listing or searching a very large folder
   could stop a whole run: no task's time limit fired, nothing was saved, and one CPU core stayed busy for twelve
   hours. Listing, file finding and text search now run beside the run, skip folder links, and stop after a minute

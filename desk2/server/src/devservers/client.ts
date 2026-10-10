@@ -33,8 +33,9 @@ export interface ClientDeps {
   now?: () => number
   /** Desk's own stamp (default stamp.ts serviceStamp). */
   stamp?: () => string
-  /** Ends a process and its tree (default host/launch.ts killHostTree). */
-  kill?: (pid: number) => void
+  /** Ends a process and its tree (default host/launch.ts killHostTree, which leaves a pid alone that its
+   *  `startedAt` shows another process has taken since). */
+  kill?: (pid: number, startedAt?: number) => void
   alive?: (pid: number) => boolean
   /** How long a start may take (default 20 s). */
   startWaitMs?: number
@@ -159,7 +160,7 @@ export function createDevServicesClient(deps: ClientDeps): DevServicesClient {
     }
     const deadline = now() + stopWaitMs
     while (alive(live.file.pid) && now() < deadline) await Bun.sleep(100)
-    if (alive(live.file.pid)) kill(live.file.pid)
+    if (alive(live.file.pid)) kill(live.file.pid, live.file.startedAt)
     if (readServiceFile(home)?.pid === live.file.pid) rmSync(serviceFilePath(home), { force: true })
   }
 

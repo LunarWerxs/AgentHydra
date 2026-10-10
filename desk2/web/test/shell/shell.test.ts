@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import type { AccountInfo, ChatSummary } from '@shared/protocol'
-import { CHAT_MIN, NavHistory, SIDE_MIN, computeStats, matchShortcut, modelName, splitChat, splitColumns } from '@/components/shell/logic'
+import { CHAT_MIN, NavHistory, SIDE_MIN, UnreadHold, computeStats, matchShortcut, modelName, splitChat, splitColumns } from '@/components/shell/logic'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AUTO_LABEL, accountRows, chooseAccount, headroom, rowTip } from '@/components/accounts/rows'
@@ -90,6 +90,14 @@ describe('shortcuts', () => {
     expect(matchShortcut(key('ArrowLeft', { altKey: true }))).toBe('back')
     expect(matchShortcut(key('n', { ctrlKey: true, shiftKey: true }))).toBeNull()
     expect(matchShortcut(key('n'))).toBeNull()
+  })
+
+  it('reads the physical key on a non-Latin layout, and the typed letter on a Latin one', () => {
+    expect(matchShortcut(key('т', { ctrlKey: true, code: 'KeyN' }))).toBe('new')
+    expect(matchShortcut(key('и', { ctrlKey: true, code: 'KeyB' }))).toBe('toggleSidebar')
+    // Dvorak: N sits on the physical L key, and the physical N key types L.
+    expect(matchShortcut(key('n', { ctrlKey: true, code: 'KeyL' }))).toBe('new')
+    expect(matchShortcut(key('l', { ctrlKey: true, code: 'KeyN' }))).toBeNull()
   })
 })
 
@@ -211,6 +219,40 @@ describe('settings dialog', () => {
   })
 })
 
+// The window marks the open chat or outside session read by itself; a person's own mark-as-unread must
+// outlive that until the item is opened again or a new turn moves it on (UnreadHold).
+describe('a hand mark-as-unread', () => {
+  it('survives the window coming back and the mark itself arriving, whether the window has focus or not', () => {
+    const hold = new UnreadHold()
+    hold.mark('c1', true)
+    expect(hold.reads('c1', 'mark', true)).toBe(false)
+    expect(hold.reads('c1', 'focus', true)).toBe(false)
+    expect(hold.reads('c1', 'mark', false)).toBe(false)
+  })
+
+  it('ends when the item is opened again, or a new turn moves it on in the focused window', () => {
+    const hold = new UnreadHold()
+    hold.mark('c1', true)
+    expect(hold.reads('c1', 'opened', false)).toBe(true)
+    expect(hold.reads('c1', 'focus', true)).toBe(true)
+    hold.mark('c1', true)
+    expect(hold.reads('c1', 'turn', false)).toBe(false)
+    expect(hold.reads('c1', 'focus', true)).toBe(true)
+  })
+
+  it("leaves the window's own read marks as they were for everything not marked by hand, or marked read again", () => {
+    const hold = new UnreadHold()
+    expect(hold.reads('c2', 'mark', true)).toBe(true)
+    expect(hold.reads('c2', 'mark', false)).toBe(false)
+    expect(hold.reads('c2', 'turn', true)).toBe(true)
+    expect(hold.reads('c2', 'focus', true)).toBe(true)
+    hold.mark('c1', true)
+    hold.mark('c1', false)
+    expect(hold.reads('c1', 'mark', true)).toBe(true)
+    expect(hold.reads('c2', 'focus', true)).toBe(true)
+  })
+})
+
 // DeskFrame mounts nothing under bun:test, so these pin the wiring; the store side is in test/stores/outside-sessions.
 describe('the frame and the open view', () => {
   const frame = readFileSync(join(import.meta.dir, '../../src/components/shell/DeskFrame.vue'), 'utf8')
@@ -226,13 +268,16 @@ describe('the frame and the open view', () => {
       expect(between('onBeforeUnmount(', '</script>')).toContain(s.replace('addEventListener', 'removeEventListener'))
     }
     const read = between('function markOpenRead', 'const onVisibility')
+    expect(read).toContain("unreadHold.reads(chat.value.id, 'focus', true)")
     expect(read).toContain('src.updateChat(chat.value.id, { unread: false })')
+    expect(read).toContain("unreadHold.reads(external.value.id, 'focus', true)")
     expect(read).toContain('src.updateSessionMeta(external.value.id, { unread: false })')
   })
 
   it('an outside session opened any way (row, search hit, Back) clears its unread mark through the meta action', () => {
-    const watcher = between('() => [external.value?.id, external.value?.unread] as const', 'function markOpenRead')
-    expect(watcher).toContain("if (id !== before?.[0] || document.hasFocus()) void src.updateSessionMeta(id, { unread: false })")
+    const watcher = between('() => [external.value?.id, external.value?.unread, external.value?.status] as const', 'function markOpenRead')
+    expect(watcher).toContain("unreadHold.reads(id, id !== before?.[0] ? 'opened' : turn ? 'turn' : 'mark', document.hasFocus())")
+    expect(watcher).toContain('if (unread && reads) void src.updateSessionMeta(id, { unread: false })')
   })
 
   it('an outside session the list lacks is fetched on its own and titled Loading session… meanwhile', () => {

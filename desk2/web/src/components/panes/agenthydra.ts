@@ -49,6 +49,8 @@ export interface AhSettings {
   keepaliveEnabled: boolean
   keepaliveWeeklyFloorPct: number
   allowExtraUsage: boolean
+  /** Hold the PC awake while a worker runs or a session reports working (server/src/keep-awake.ts). */
+  keepAwakeWhileWorking: boolean
 }
 
 type ReadOnly =
