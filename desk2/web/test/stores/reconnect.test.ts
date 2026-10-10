@@ -126,6 +126,15 @@ describe('a reconnect keeps the open chat', () => {
   })
 })
 
+describe('a hello merges into the chat list', () => {
+  test('a chat the hello omits stays listed, and one it carries is updated', async () => {
+    push(hello([summary('rc-keep'), summary('rc-merge')]))
+    push(hello([{ ...summary('rc-merge'), title: 'Renamed' }]))
+    expect(desk.chats.value.map((c) => c.id)).toContain('rc-keep')
+    expect(desk.chats.value.find((c) => c.id === 'rc-merge')?.title).toBe('Renamed')
+  })
+})
+
 describe('a chat whose history does not load', () => {
   // 2026-10-05: after a server restart chats sat on "No messages yet" with their history on disk.
   RELOAD_WAITS_MS.splice(0, RELOAD_WAITS_MS.length, 5)
@@ -172,6 +181,7 @@ describe('the window title', () => {
   // Desk 2 runs beside Desk: its window says which it is (index.html carries the name until the first report).
   test('names Desk 2, with how many chats are working', async () => {
     document.title = ''
+    for (const c of desk.chats.value) push({ type: 'chat.removed', chatId: c.id })
     push(hello([{ ...summary('rc-title'), status: 'working' }]))
     await until(() => document.title !== '')
     expect(document.title).toBe('(1 working) AgentHydra')

@@ -26,6 +26,15 @@ export function parseFilter(stored: string | null | undefined): SidebarFilter {
   return stored && Object.hasOwn(FILTER_LABELS, stored) ? (stored as SidebarFilter) : 'active'
 }
 
+/** What an empty list says it is empty for: a search, hidden groups, Active only (named even under another filter), or the filter. */
+export function emptyListText(s: { searching: boolean; hiddenOut: boolean; filter: SidebarFilter; activeOnly: boolean }): string {
+  if (s.searching) return 'No matching sessions'
+  if (s.hiddenOut) return 'Every group here is hidden'
+  if (s.activeOnly) return s.filter === 'archived' ? 'No active archived sessions' : 'No active sessions'
+  if (s.filter === 'archived') return 'No archived sessions'
+  return 'No sessions yet'
+}
+
 /**
  * The list a chat the current one hides is shown in (a new chat started while Archived or a search is
  * on): no search, and Active for a live chat, All for an archived one under Active.

@@ -370,8 +370,11 @@ function resumeHere(chatId: string, was: ChatSummary): void {
 type EventOf<T extends ServerEvent['type']> = Extract<ServerEvent, { type: T }>
 
 function onHello(event: EventOf<'hello'>) {
-  store.chats = event.chats.map(settleStop)
-  cacheLater('chats', event.chats)
+  // Merged, not replaced: a hello that omits a chat (a restarting server, a slow read) does not remove it; only chat.removed does.
+  const carried = new Map(event.chats.map((c) => [c.id, settleStop(c)]))
+  const known = new Set(store.chats.map((c) => c.id))
+  store.chats = [...store.chats.map((c) => carried.get(c.id) ?? c), ...[...carried.values()].filter((c) => !known.has(c.id))]
+  cacheLater('chats', store.chats)
   store.settings = event.settings
   // Full reload: clear items cache
   itemsByChat.clear()

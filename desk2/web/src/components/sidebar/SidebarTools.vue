@@ -51,7 +51,7 @@ const menuOpen = ref(false)
             role="menuitemcheckbox"
             :aria-checked="activeOnly"
             :title="ACTIVE_TIP"
-            :class="`${MENU_ITEM} pe-2`"
+            :class="`${MENU_ITEM} pe-2 ${activeOnly ? 'text-accent-text' : ''}`"
             @select.prevent="toggleActive"
           >
             <Activity />

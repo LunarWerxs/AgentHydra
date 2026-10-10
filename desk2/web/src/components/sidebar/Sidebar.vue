@@ -102,7 +102,8 @@ import {
   type SidebarEntry,
   type StatusGlyph,
   type SidebarFilter,
-  type SidebarGroups
+  type SidebarGroups,
+  emptyListText
 } from './logic'
 import { useSidebarOrder } from './order'
 import { useHiddenGroups } from './hidden'
@@ -245,15 +246,7 @@ const rowDrag = useRowDrag()
 const rowsDraggable = (g: ChatGroup) => !filtering.value && g.key !== 'archived'
 const rowLeave = leaveUnlessFiltered([query, filter, deskPcs])
 const emptyText = computed(() =>
-  query.value.trim()
-    ? 'No matching sessions'
-    : groups.value.hiddenOut
-      ? 'Every group here is hidden'
-      : filter.value === 'archived'
-        ? 'No archived sessions'
-        : activeOnly.value
-          ? 'No active sessions'
-          : 'No sessions yet'
+  emptyListText({ searching: query.value.trim() !== '', hiddenOut: !!groups.value.hiddenOut, filter: filter.value, activeOnly: activeOnly.value })
 )
 
 // Hydra Desk 2: with the chrome bar's CliMayte button on, each row of the list shown (the cloud list or the
@@ -411,7 +404,11 @@ const addedGlyph = (id: string): StatusGlyph | undefined => {
 const cloudDot = (id: string) => addedGlyph(id) ?? deskDots.value.get(id)
 /** A desk-list entry's dot, as its row draws it: a chat's, or an outside session's (an added row's, when it is one). */
 const entryGlyph = (e: SidebarEntry): StatusGlyph | undefined => (e.kind === 'chat' ? statusGlyph(e.chat) : (addedGlyph(e.id) ?? externalGlyph(e.session)))
-const showAll = () => (activeOnly.value = false)
+/** Back to the unfiltered list: the Active default and Active only off. */
+const showAll = () => {
+  activeOnly.value = false
+  filter.value = 'active'
+}
 /** How an added row's cloud pulses, from the work it stands for and lists (tasks.ts addedPulse); undefined for any other row. */
 const cloudPulse = (id: string) => {
   const a = addedRows.value.get(id)
@@ -907,7 +904,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <span class="flex-1">{{ emptyText }}</span>
           <template v-if="filtering && !searchOpen">
             <button type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="filter = 'active'">Show active</button>
-            <button v-if="activeOnly" type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="showAll">Show all</button>
+            <button type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="showAll">Show all</button>
           </template>
           <button v-if="groups.hiddenOut" type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
         </div>
