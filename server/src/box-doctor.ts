@@ -15,13 +15,26 @@
 //   pty-hosts         25+ console hosts under Claude Desktop with no terminal of their own
 //   reaper            the orphan reaper's task is missing, or its log has not moved in 30 minutes
 //   hoard:<key>       a pile the reaper reported (~/.claude/logs/box-alerts.json) whose parent lives
+//   clock             this clock is more than five minutes off (box-doctor-clock.ts)
+//   root:<path>       a drive or folder agents use exists but cannot be listed (box-doctor-roots.ts)
+//   hydra:<...>       Project Hydra's registry, record and sweeps, where it is installed
+//                     (box-doctor-hydra.ts; this doctor replaced `ph doctor`)
 // Notes (report only, never an incident): commit under 12% (CliMayte holds new workers there) and
 // the process count.
-import { execFile } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { checkClock } from './box-doctor-clock'
+import {
+  type HydraMode,
+  hydraClockStamps,
+  hydraFindings,
+  hydraRoots,
+  readHydraFacts,
+} from './box-doctor-hydra'
+import { driveRoots, probeRoots, type RootTarget, rootFindings } from './box-doctor-roots'
 import { COMMIT_FLOOR_SHARE, type MachineMemory, readMachineMemory } from './climayte-memory'
+import { spawnCaptured } from './core/process'
 import {
   type NativeProcess,
   nativeCommandLines,
@@ -46,6 +59,8 @@ export const LEAKED_HOSTS_PROBLEM = 25
 const REAPER_STALE_MS = 30 * 60_000
 const REAPER_TASK = 'ClaudeOrphanReaper'
 const EXEC_TIMEOUT_MS = 10_000
+/** A drive agents worked on this recently is one the roots check lists. */
+const RECENT_WORK_MS = 30 * 86_400_000
 const MACHINE_ENV_KEY = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'
 const USER_ENV_KEY = 'HKCU\\Environment'
 
@@ -53,7 +68,10 @@ export interface BoxFinding {
   key: string
   /** A problem is an incident until it clears; a note is only reported. */
   level: 'problem' | 'note'
+  /** Stable while the fault stands: an incident's signature includes it, so no counts or ages. */
   message: string
+  /** The live numbers and names behind it, for the report only. */
+  detail?: string
 }
 
 export interface BoxDoctorReport {
@@ -63,35 +81,22 @@ export interface BoxDoctorReport {
   processes: number | null
   memory: MachineMemory | null
   findings: BoxFinding[]
-  /** The finding families (`commit`, `path-shim:`...) read this pass. A check that could not look
-   *  is not a check that passed: an open incident outside these stays open. */
+  /** What this pass could look at: exact keys (`commit`) and families (`path-shim:` covers every
+   *  `path-shim:<name>`). A check that could not look is not a check that passed: an open incident
+   *  none of these covers stays open. */
   checked: string[]
+  /** Whether Project Hydra is installed, and how old its facts are or why they could not be read. */
+  hydra: { installed: boolean; factsAt?: string; reason?: string }
 }
 
-/** `commit` -> `commit`, `path-shim:bun` -> `path-shim:`. */
-const familyOf = (key: string) => {
-  const i = key.indexOf(':')
-  return i < 0 ? key : key.slice(0, i + 1)
-}
+const covers = (checked: ReadonlySet<string>, key: string) =>
+  checked.has(key) || [...checked].some((c) => c.endsWith(':') && key.startsWith(c))
 
 /** `exitCode` is null when the program never ran or was killed at the timeout; a number when it
  *  ran and said so itself (schtasks answers 1 for a task that does not exist). */
-function execText(
-  file: string,
-  args: string[],
-): Promise<{ exitCode: number | null; stdout: string }> {
-  return new Promise((resolve) => {
-    execFile(
-      file,
-      args,
-      { encoding: 'utf8', windowsHide: true, timeout: EXEC_TIMEOUT_MS },
-      (err, stdout) =>
-        resolve({
-          exitCode: !err ? 0 : typeof err.code === 'number' && !err.killed ? err.code : null,
-          stdout: String(stdout ?? ''),
-        }),
-    )
-  })
+async function execText(cmd: string[]): Promise<{ exitCode: number | null; stdout: string }> {
+  const r = await spawnCaptured(cmd, { timeoutMs: EXEC_TIMEOUT_MS })
+  return { exitCode: r.timedOut ? null : r.code, stdout: r.stdout }
 }
 
 /** The native exe an npm-style batch shim runs (`"%dp0%\node_modules\bun\bin\bun.exe" %*`), or
@@ -148,7 +153,7 @@ export function pathShimFindings(dirs: readonly string[]): BoxFinding[] {
 async function registryPath(): Promise<string[] | null> {
   const dirs: string[] = []
   for (const key of [MACHINE_ENV_KEY, USER_ENV_KEY]) {
-    const r = await execText('reg', ['query', key, '/v', 'Path'])
+    const r = await execText(['reg', 'query', key, '/v', 'Path'])
     if (r.exitCode === null) return null
     const m = /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(r.stdout)
     if (!m?.[1]) continue
@@ -248,7 +253,7 @@ const alertsFile = () => join(homedir(), '.claude', 'logs', 'box-alerts.json')
 
 /** Null when schtasks could not be asked (did not start, or hung past the timeout). */
 async function reaperFindings(now: number): Promise<BoxFinding[] | null> {
-  const task = await execText('schtasks', ['/query', '/tn', REAPER_TASK])
+  const task = await execText(['schtasks', '/query', '/tn', REAPER_TASK])
   if (task.exitCode === null) return null
   if (task.exitCode !== 0)
     return [
@@ -301,10 +306,20 @@ export function hoardFindings(alertsJson: string, live: ReadonlySet<number>): Bo
 }
 
 /** Read the machine and say what is wrong. Touches nothing; records nothing. */
-export async function checkBox(o: { commitOpen?: boolean } = {}): Promise<BoxDoctorReport> {
+export async function checkBox(
+  o: { commitOpen?: boolean; hydra?: HydraMode } = {},
+): Promise<BoxDoctorReport> {
   const checkedAt = new Date().toISOString()
   if (process.platform !== 'win32')
-    return { checkedAt, supported: false, processes: null, memory: null, findings: [], checked: [] }
+    return {
+      checkedAt,
+      supported: false,
+      processes: null,
+      memory: null,
+      findings: [],
+      checked: [],
+      hydra: { installed: false },
+    }
   const memory = readMachineMemory()
   const table = nativeProcessTable()
   const findings: BoxFinding[] = []
@@ -313,6 +328,32 @@ export async function checkBox(o: { commitOpen?: boolean } = {}): Promise<BoxDoc
     if (!found) return
     findings.push(...found)
     checked.push(family)
+  }
+  const ph = await readHydraFacts(o.hydra ?? 'cached')
+  const facts = ph.installed ? ph.facts : null
+  let hydra: BoxDoctorReport['hydra'] = { installed: false }
+  if (!ph.installed)
+    checked.push('hydra:') // nothing to watch, so an incident from when it was is over
+  else if ('reason' in ph) {
+    hydra = { installed: true, reason: ph.reason }
+    findings.push({
+      key: 'hydra-unreadable',
+      level: 'note',
+      message:
+        'Project Hydra is installed but its facts are not available this pass, so its checks hold where they were.',
+      detail: ph.reason,
+    })
+  } else {
+    hydra = { installed: true, factsAt: new Date(ph.at).toISOString() }
+    const h = hydraFindings(ph.facts)
+    findings.push(...h.findings)
+    checked.push(...h.checked)
+  }
+  add('clock', await checkClock(execText, facts ? hydraClockStamps(facts) : []))
+  const roots = rootFindings(await probeRoots(await rootTargets(facts)))
+  if (roots) {
+    findings.push(...roots.findings)
+    checked.push(...roots.checked)
   }
   const path = await registryPath()
   add('path-shim:', path && pathShimFindings(path))
@@ -337,7 +378,35 @@ export async function checkBox(o: { commitOpen?: boolean } = {}): Promise<BoxDoc
       message: `${table.length} processes running.`,
     })
   }
-  return { checkedAt, supported: true, processes: table?.length ?? null, memory, findings, checked }
+  return {
+    checkedAt,
+    supported: true,
+    processes: table?.length ?? null,
+    memory,
+    findings,
+    checked,
+    hydra,
+  }
+}
+
+/** The drives agents worked on in the last 30 days, then the folders Project Hydra names. */
+async function rootTargets(facts: unknown): Promise<RootTarget[]> {
+  const out: RootTarget[] = []
+  try {
+    const { listProjects } = await import('./sessions')
+    const recent = (await listProjects())
+      .filter((p) => Date.now() - p.last_activity_at < RECENT_WORK_MS)
+      .map((p) => p.cwd)
+    for (const path of driveRoots(recent)) out.push({ role: 'drive of recent agent work', path })
+  } catch {
+    // no session index: Project Hydra's folders alone
+  }
+  const seen = new Set(out.map((t) => t.path.toLowerCase().replace(/[\\/]+$/, '')))
+  for (const t of facts ? hydraRoots(facts) : []) {
+    const k = t.path.toLowerCase().replace(/[\\/]+$/, '')
+    if (!seen.has(k) && seen.add(k)) out.push(t)
+  }
+  return out
 }
 
 export interface BoxIncidentDeps {
@@ -377,7 +446,7 @@ export async function syncBoxIncidents(
   const checked = new Set(report.checked)
   let resolved = 0
   for (const open of deps.openKeys()) {
-    if (!live.has(open.key) && checked.has(familyOf(open.key)) && deps.resolve(open.id)) resolved++
+    if (!live.has(open.key) && covers(checked, open.key) && deps.resolve(open.id)) resolved++
   }
   return resolved
 }
@@ -391,9 +460,10 @@ export interface BoxDoctorPassResult {
  *  and resolves nothing. */
 export async function runBoxDoctorPass(
   deps: BoxIncidentDeps = defaultBoxIncidentDeps,
+  o: { hydra?: HydraMode } = {},
 ): Promise<BoxDoctorPassResult> {
-  const commitOpen = deps.openKeys().some((o) => o.key === 'commit')
-  const report = await checkBox({ commitOpen })
+  const commitOpen = deps.openKeys().some((i) => i.key === 'commit')
+  const report = await checkBox({ commitOpen, hydra: o.hydra ?? 'hourly' })
   return { report, resolvedIncidents: await syncBoxIncidents(report, deps) }
 }
 
