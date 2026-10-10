@@ -88,7 +88,7 @@ class PermissionBroker:
     def _ask(self, permission: str, value: str, cwd: str) -> tuple[bool, str]:
         if self._proc is None or self._proc.poll() is not None:
             self._proc = self._spawn()
-        proc = self._proc
+        proc, lines = self._proc, self._lines  # the queue its own reader fills, whatever replaces self._lines later
         self._next_id += 1
         request = {
             "v": PROTOCOL_VERSION, "pid": os.getpid(), "id": self._next_id,
@@ -103,7 +103,7 @@ class PermissionBroker:
         # The wait keeps its own clock rather than relying on a kill to end a blocking read: a kill that misses the
         # child (a reused pid, a wrapper's grandchild holding the pipe) would leave the read blocked for good.
         try:
-            line = self._lines.get(timeout=self.timeout_s)
+            line = lines.get(timeout=self.timeout_s)
         except queue.Empty:
             line = ""
         if not line:
