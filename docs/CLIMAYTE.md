@@ -539,7 +539,7 @@ append follows `CHAT_NOTE`, on every launch, continuations and account moves inc
 
 | | Ordinary worker | Chat worker |
 | --- | --- | --- |
-| Appended prompt | `WORKER_BRIEF` (`--append-system-prompt`) | `CHAT_NOTE` (it runs headless, and a markdown image of a local picture or video shows in the chat), then the owner's `~/.claude/CLAUDE.md` unless the CLI's own walk already reads it from the chat's folder (`--append-system-prompt-file <hooks>/<id>.chat.md`) |
+| Appended prompt | `WORKER_BRIEF` (`--append-system-prompt`) | `CHAT_NOTE` (it runs headless, and a markdown image of a local picture or video shows in the chat), then the owner's `~/.claude/CLAUDE.md` ([CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)) unless the CLI's own walk already reads it from the chat's folder (`--append-system-prompt-file <hooks>/<id>.chat.md`) |
 | Account folder's CLAUDE.md (the lean worker profile) | loaded | left out with `claudeMdExcludes` in its `--settings` |
 | Skills | the lean profile's | also every owner skill, command and agent, through `--add-dir <home>` |
 | MCP servers | the owner's less AgentHydra's and magnific, plus `climayte-worker` and `browser`; `deniedMcpServers` | all the owner's, AgentHydra's included; no denial |
