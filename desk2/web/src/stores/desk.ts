@@ -483,6 +483,17 @@ function handleServerEvent(event: ServerEvent) {
       dispatchNotification(event)
       break
 
+    case 'notice':
+      // About an account, not a chat: shown whether or not a chat is open, while notifications are on.
+      if (
+        store.settings?.notifications !== false &&
+        'Notification' in window &&
+        Notification.permission === 'granted'
+      ) {
+        new Notification(event.title, { body: event.body }).onclick = () => window.focus()
+      }
+      break
+
     case 'bridge.status':
       // Bridge status update
       break

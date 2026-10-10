@@ -40,6 +40,7 @@ export const freeApi = {
   rename: (id: string, name: string) => request<FreeInstance>(`instances/${encodeURIComponent(id)}`, 'PATCH', { name }),
   // The server may first set up the runtime and stop a live ChatGPT worker (its forget waits up to 4 minutes).
   logout: (id: string) => request<FreeInstance>(`instances/${encodeURIComponent(id)}/logout`, 'POST', undefined, 300_000),
+  planSeen: (id: string) => request<FreeInstance>(`instances/${encodeURIComponent(id)}/plan-seen`, 'POST'),
   remove: (id: string) => request<{ ok: true }>(`instances/${encodeURIComponent(id)}`, 'DELETE'),
   settings: () => request<FreeSettings>('settings'),
   updateSettings: (patch: Partial<FreeSettings>) => request<FreeSettings>('settings', 'PATCH', patch),

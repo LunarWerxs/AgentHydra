@@ -36,8 +36,15 @@ export default {
   unlimited: 'Unlimited', unlimitedHint: 'Text messages on {model} have no usage limit on this account.',
   unlimitedPlanHint: 'Text messages on {model} have no usage limit on this {plan} account.',
   // A paid plan the site reports, beside the name (ChatGPT Go, read 2026-10-08: the same models as Free, more room).
-  planLabel: 'ChatGPT {plan}',
+  planLabel: '{provider} {plan}',
   planHint: 'A paid plan, as ChatGPT reports it. AgentHydra sends it the same unlimited model as a Free account, and the plan gives each chat more room.',
+  planHintClaude: 'A paid plan, as Claude reports it, so this is no longer a free account. It can run as a CLI or Desktop instance: Promote in its menu.',
+  // Each account's plan is checked when it signs in and on every reading after (owner, 2026-10-09).
+  planFree: 'Free plan', planFreeHint: '{provider} reports the Free plan: this account costs nothing.',
+  planChangedPaid: 'Now on {plan}', planChangedFree: 'Back on Free',
+  planChangedHint: 'Since {when}; it was {from}. Promote it or dismiss this in its menu.',
+  planFirstPaidHint: 'Its first check found a paid plan ({when}). Promote it or dismiss this in its menu.',
+  promoteCli: 'Promote to CLI or Desktop…', promoteCodex: 'Promote to a Codex instance…', planDismiss: 'Dismiss plan change',
   working: 'Working…', recover: 'Check operation',
   // The account's last hour (server/src/free-instances/health.ts): a note in the name's hover, a mark only when failing.
   lastHour: 'last hour: {sent} sent, {failed} failed',

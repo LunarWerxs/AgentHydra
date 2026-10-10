@@ -135,6 +135,15 @@ async function logout(instance: FreeInstance): Promise<boolean> {
   }
 }
 
+/** Clears the row's plan-change mark (it has been seen); a failed call leaves the mark for next time. */
+async function planSeen(instance: FreeInstance): Promise<void> {
+  try {
+    const updated = await freeApi.planSeen(instance.id)
+    const index = instances.value.findIndex(i => i.id === updated.id)
+    if (index >= 0) instances.value.splice(index, 1, updated)
+  } catch { /* the mark stays; dismissing again works */ }
+}
+
 /** Deletes the account here and, through the login sync, on the owner's other PCs. Returns whether it
  *  worked; the reason lands in errors[instance.id]. */
 async function remove(instance: FreeInstance): Promise<boolean> {
@@ -194,6 +203,6 @@ function refreshFree(opts: { silent?: boolean } = {}): Promise<void> {
 }
 
 export function useFreeInstances() {
-  return { instances, threads, tokens, health, jobs, errors, loaded, loading, loadError, busy, run, logout, remove, forgetThread, recover, refreshFree,
+  return { instances, threads, tokens, health, jobs, errors, loaded, loading, loadError, busy, run, logout, planSeen, remove, forgetThread, recover, refreshFree,
     activeCount: computed(() => threads.value.filter(t => t.status === 'running').length) }
 }

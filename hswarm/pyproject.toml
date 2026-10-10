@@ -23,3 +23,6 @@ hswarm = ["data/*.json", "data/*.md", "outfilters.toml", "shell_rules.toml", "re
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = ["live: hits a provider API (costs money, needs a key)"]
+# Live tests run only when asked for (`-m live`, as test_live.py says): in the plain run a slow provider reply held
+# the whole suite past its per-test timeout, which on Windows ends the run (2026-10-09).
+addopts = "-m 'not live'"

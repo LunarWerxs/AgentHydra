@@ -1963,7 +1963,12 @@ onUnmounted(() => {
           :columns="columns"
           @quick-add="quickAdd?.focusEmail()"
         />
-        <FreeInstanceRows v-if="freeShown" ref="freeRows" :columns="columns" />
+        <FreeInstanceRows
+          v-if="freeShown"
+          ref="freeRows"
+          :columns="columns"
+          @promote="(p) => onCreateFor(p === 'claude' ? CLI_CREATE_ID : 'codex')"
+        />
       </InstanceTable>
     </InstanceCard>
 

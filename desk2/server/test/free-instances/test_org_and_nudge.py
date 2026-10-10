@@ -209,3 +209,24 @@ def test_a_nudge_that_may_have_been_sent_is_never_retried(tmp_path, monkeypatch,
 
     assert error is lost
     assert [m for _, _, m, _ in sent] == ["claude-haiku-9"]
+
+
+@pytest.mark.parametrize(
+    "capabilities, plan",
+    [
+        (["chat"], "free"),
+        (["chat", "claude_pro"], "pro"),
+        (["chat", "claude_max", "claude_pro"], "max"),  # the most specific marker wins
+        (["chat", "raven"], "team"),
+        ([], None),  # no capability Free lists either: unknown, never guessed as free
+        (None, None),  # an organization that does not list them
+    ],
+)
+def test_a_claude_organizations_capabilities_name_its_plan(capabilities, plan):
+    # Desk marks a Free row by it and tells the owner when an account stops being free (owner, 2026-10-09).
+    from claudfree.usage import plan_of
+
+    organization = {"uuid": ORG_A, "name": "Example Owner"}
+    if capabilities is not None:
+        organization["capabilities"] = capabilities
+    assert plan_of(organization) == plan

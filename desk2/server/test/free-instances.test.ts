@@ -467,6 +467,33 @@ describe('Free jobs and routes', () => {
     expect(service.get(chat.id).result?.ok).toBe(true)
     expect(instance.usageReadAt).toBeNumber()
   })
+  test('a move between free and paid marks the row and tells the window once; a log out forgets the plan', async () => {
+    // Owner, 2026-10-09: "If they change to not free ... let me know", so a paid account can be promoted to CLI/Desktop.
+    const plans: (string | null)[] = []
+    const { service, app, op, instance } = fixture(async (_c, r) => r.command === 'usage'
+      ? output({ ok: true, available: true, windows: [], plan: plans.shift() ?? null })
+      : { code: 0, stdout: 'Saved web session removed.' })
+    const told: string[] = []
+    service.onPlanChange = i => told.push(`${i.planChange?.from}->${i.planChange?.to}`)
+    const read = async (plan: string | null) => { plans.push(plan); service.start(op({ command: 'usage' })); await tick(); await tick() }
+    await read('free')  // the first reading, free: nothing to tell
+    await read(null)  // a reading with no plan changes nothing
+    await read('go')
+    await read('plus')  // paid to paid: the badge follows, no second notice
+    expect(told).toEqual(['free->go'])
+    expect(instance.plan).toBe('plus')
+    expect(instance.planChange).toMatchObject({ from: 'free', to: 'go' })
+    await read('free')
+    expect(told).toEqual(['free->go', 'plus->free'])
+    const seen = await app.request(`/api/free/instances/${instance.id}/plan-seen`, { method: 'POST' })
+    expect(seen.status).toBe(200)
+    expect(instance.planChange).toBeNull()
+    instance.loggedIn = true
+    expect((await app.request(`/api/free/instances/${instance.id}/logout`, { method: 'POST' })).status).toBe(200)
+    expect(instance.plan).toBeNull()
+    await read('pro')  // the next sign-in may be another account: a first reading that is already paid is told
+    expect(told.at(-1)).toBe('null->pro')
+  })
   test("a log out waits for Desk's own read instead of being refused", async () => {
     let release: (value: RunOutput) => void = () => {}
     const { service, app, op, instance } = fixture(async (_c, r) => r.command === 'usage' ? new Promise(resolve => { release = resolve }) : { code: 0, stdout: 'Saved web session removed.' })

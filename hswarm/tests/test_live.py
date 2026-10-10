@@ -28,8 +28,11 @@ if not keys.has_credit(config.DEFAULT_PROVIDER):  # keys on file that are all ou
     pytest.skip("no DeepSeek key with credit", allow_module_level=True)
 
 
+LIVE_CALL_S = 90  # a provider that does not answer in this long fails its test instead of holding the run
+
+
 def run(coro):
-    return asyncio.run(coro)
+    return asyncio.run(asyncio.wait_for(coro, LIVE_CALL_S))
 
 
 def test_ask_plain():

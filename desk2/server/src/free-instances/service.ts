@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { FREE_CHATGPT_MODELS, FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
+import { FREE_CHATGPT_MODELS, FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isPaidPlan, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
 import { addOutcome, healthOf, type SendOutcome } from './health'
 import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
@@ -76,6 +76,8 @@ export class FreeInstances {
   private outcomes = new Map<string, SendOutcome[]>()
   /** A sign-in or a log out here (the Free login sync listens, so the other PCs hear soon). */
   onLoginChange?: () => void
+  /** An account moved between free and paid (notePlan); the plugin tells the window. */
+  onPlanChange?: (instance: FreeInstance) => void
   constructor(home: string, private runner: FreeRunner = runFree, runtime?: FreeRuntime) {
     this.store = new FreeStorage(home)
     this.runtime = runtime ?? new ManagedFreeRuntime(home)
@@ -127,8 +129,10 @@ export class FreeInstances {
     instance.loggedIn = false
     instance.checkedAt = Date.now()
     instance.usage = null
-    // The next sign-in may be another account: its check reads the address again.
+    // The next sign-in may be another account: its check reads the address and the plan again.
     instance.email = null
+    instance.plan = null
+    instance.planChange = null
     // Logged out on purpose, not lost: the row offers "Sign in", and "Sign in again" stays for an expired login.
     instance.lastSignedInAt = null
     this.store.save()
@@ -370,10 +374,30 @@ export class FreeInstances {
     // Read the quota again so the window the nudge started shows.
     if (result.ok) try { this.apply({ ...r, command: 'usage' }, parseResult('usage', await this.runner(config, { ...r, command: 'usage' }, signal))) } catch { /* the nudge worked; the next refresh reads it */ }
   }
+  /** Keep the plan a reading reports; a move between free and paid (a first reading that is already paid included) is
+   *  kept on the row and told to onPlanChange. A reading with no plan changes nothing. */
+  private notePlan(instance: FreeInstance, plan: string | null): void {
+    if (!plan || plan === instance.plan) return
+    const before = instance.plan ?? null
+    instance.plan = plan
+    if (isPaidPlan(plan) === isPaidPlan(before)) return
+    instance.planChange = { from: before, to: plan, at: Date.now() }
+    this.onPlanChange?.(instance)
+  }
+  /** The row's plan-change mark has been seen. */
+  planSeen(id: string): FreeInstance {
+    const instance = this.instance(id)
+    instance.planChange = null
+    this.store.save()
+    return instance
+  }
   /** Returns the message's token estimate, or null for anything that was not an answered message. */
   private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>): TokenEntry | null {
     const instance = this.instance(r.instanceId)
-    if (result.usage) instance.usage = result.usage
+    if (result.usage) {
+      instance.usage = result.usage
+      this.notePlan(instance, result.usage.plan ?? null)
+    }
     if (r.command === 'usage') instance.usageReadAt = Date.now()
     if (result.ok && (r.command === 'chat' || r.command === 'resume')) instance.lastActiveAt = Date.now()
     if (result.chats) for (const chat of result.chats) {

@@ -43,6 +43,24 @@ def percent(value, *, fraction=False) -> float | None:
     return round(value * 100 if fraction else value, 4)
 
 
+# What an organization's capabilities say about its plan, most specific first. A Free organization lists only
+# what every plan has ("chat"); a paid one adds its own marker.
+PLAN_CAPABILITIES = (("claude_max", "max"), ("claude_pro", "pro"), ("raven", "team"), ("enterprise", "enterprise"))
+
+
+def plan_of(organization) -> str | None:
+    """The plan of the organization the login works in: "free", "pro", "max", "team", "enterprise", or None when the
+    organization does not list its capabilities (unknown, never guessed as free)."""
+    capabilities = organization.get("capabilities") if isinstance(organization, dict) else None
+    if not isinstance(capabilities, list):
+        return None
+    names = {c for c in capabilities if isinstance(c, str)}
+    for capability, plan in PLAN_CAPABILITIES:
+        if capability in names:
+            return plan
+    return "free" if "chat" in names else None
+
+
 def window(key, used, reset, status, source_field) -> dict:
     return {
         "id": key,

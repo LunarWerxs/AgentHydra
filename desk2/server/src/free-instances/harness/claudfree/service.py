@@ -389,11 +389,13 @@ def _account_command(args, api, registry, client, organization, remembered):
         return _nudge(args, client, org, remembered)
     if args.command == "usage":
         # An empty endpoint may fall back to a historical reading, never a new POST.
-        from .usage import read_cache, report
+        from .usage import plan_of, read_cache, report
 
         result = report(
             client.usage(org), read_cache(api.HTTP_CONFIG_FILE.parent / "usage-cache.json", org)
         )
+        # The plan rides on every usage read, as ChatGPT's does: Desk marks a Free row by it and says when it changes.
+        result["plan"] = plan_of(organization)
         return {"organization_id": org, **result}
     if args.command == "auth":
         update_config(api, {"organization_id": org})

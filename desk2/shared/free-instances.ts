@@ -92,6 +92,16 @@ export interface FreeInstance {
   /** When Desk last asked the provider for this account's usage (a usage read or a login check), worked or not;
    *  the rolling refresh (refresh.ts) goes by it. Absent on older records. */
   usageReadAt?: number | null
+  /** The plan the account last reported ("free", "go", "pro", "max" ...), kept across readings that report none, so a
+   *  change can be noticed; null once logged out (the next sign-in may be another account). Absent on older records. */
+  plan?: string | null
+  /** The last move between free and paid (owner, 2026-10-09: "If they change to not free ... let me know", to promote
+   *  it to CLI or Desktop): shown on the row until dismissed. `from` is null when the first reading was already paid. */
+  planChange?: { from: string | null; to: string; at: number } | null
+}
+/** A plan the provider bills for: anything reported that is not its Free plan. */
+export function isPaidPlan(plan: string | null | undefined): boolean {
+  return !!plan && plan !== 'free'
 }
 /** What a deleted account leaves behind until the login sync has told the store (sync.ts). */
 export type FreeDeleted = Pick<FreeInstance, 'id' | 'num' | 'provider' | 'name'>

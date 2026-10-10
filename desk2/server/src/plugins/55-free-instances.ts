@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { bridge } from '../bridge'
 import type { ServerContext } from '../context'
+import { planNotice } from '../free-instances/plan'
 import { FreeError, FreeInstances } from '../free-instances/service'
 import { daemonCreds, FreeSync } from '../free-instances/sync'
 import { isRealHome } from '../real-home'
@@ -10,6 +11,10 @@ import { isRealHome } from '../real-home'
 export default function plugin(app: Hono, ctx: ServerContext): void {
   const service = (ctx.deps.freeInstances as FreeInstances | undefined) ?? new FreeInstances(ctx.home)
   ctx.onStop(() => service.stop())
+  service.onPlanChange = (instance) => {
+    const notice = planNotice(instance)
+    if (notice) ctx.broadcast({ type: 'notice', ...notice })
+  }
   // The logins go to the other PCs through AgentHydra's Login sync store, from the real home only (real-home.ts): a
   // test's, an e2e script's or a probe's Desk never reaches the owner's store.
   const sync = isRealHome(ctx.home) ? new FreeSync(ctx.home, service.syncHost(), () => daemonCreds(bridge().url), () => ctx.wsVisibleCount() > 0) : undefined
@@ -45,6 +50,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   router.get('/settings', c => c.json(service.settings()))
   router.patch('/settings', async c => c.json(service.updateSettings(await c.req.json().catch(() => null))))
   router.post('/instances/:id/logout', async c => c.json(await service.logout(c.req.param('id'))))
+  router.post('/instances/:id/plan-seen', c => c.json(service.planSeen(c.req.param('id'))))
   router.get('/threads', c => c.json(service.threads()))
   // A thread's id is `<instance>/<chat>`: the slash may arrive encoded or not.
   router.delete('/threads/:id{.+}', c => c.json(service.forgetThread(c.req.param('id'))))

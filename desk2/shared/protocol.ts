@@ -695,6 +695,8 @@ export type ServerEvent =
       title: string
       body: string
     }
+  // A desktop notification about an account, not a chat (a Free account that moved between free and paid).
+  | { type: 'notice'; title: string; body: string }
   | { type: 'bridge.status'; up: boolean; url: string }
   | { type: 'external.update'; sessions: ExternalSession[] }
   | { type: 'climayte.update'; workers: CliMayteWorker[] }

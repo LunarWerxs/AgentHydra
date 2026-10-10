@@ -7,6 +7,9 @@
 // through the bundled harness (server/src/free-instances). A row's private chats open under
 // HSwarm → CliMayte.
 import {
+  ArrowUpRight,
+  BellOff,
+  Gift,
   HeartPulse,
   LogIn,
   LogOut,
@@ -22,6 +25,7 @@ import {
   type FreeCommand,
   type FreeInstance,
   type FreeProvider,
+  isPaidPlan,
 } from '@desk/shared/free-instances'
 import type { TokenParts } from '@agenthydra/server/types'
 import { computed, reactive, ref } from 'vue'
@@ -53,9 +57,11 @@ import IconTooltip from '@/shell/IconTooltip.vue'
 
 // The table's column list (lib/instance-table.ts): the one the header draws, so the cells follow it.
 defineProps<{ columns: InstanceColumn[] }>()
+// Promote: InstancesView opens its New CLI (Claude) or New Codex (ChatGPT) dialog for the account to sign in there.
+const emit = defineEmits<{ promote: [provider: FreeProvider] }>()
 
 const { t } = useI18n()
-const { instances, tokens, health, jobs, errors, loaded, loadError, busy, run, logout, remove, recover, refreshFree } =
+const { instances, tokens, health, jobs, errors, loaded, loadError, busy, run, logout, planSeen, remove, recover, refreshFree } =
   useFreeInstances()
 /** The account's last hour for its hover and its failing mark: how many messages went, how many failed. */
 function hourOf(id: string): { sent: number; failed: number; pct: number } {
@@ -69,10 +75,25 @@ function topReason(id: string): string {
   const reasons = Object.entries(health.value[id]?.reasons ?? {}).sort((a, b) => b[1] - a[1])
   return reasons[0] ? t('freeInstances.failingWhy', { reason: reasons[0][0], count: reasons[0][1] }) : ''
 }
-/** The paid plan the site reports for this login ("Go"), or '' on the Free plan or when it reports none. */
+const planName = (plan: string) => plan.charAt(0).toUpperCase() + plan.slice(1)
+/** The plan the account last reported (kept across readings that report none), or null when none is known. */
+const planOf = (i: FreeInstance) => i.plan ?? i.usage?.plan ?? null
+/** The paid plan the site reports for this login ("Go", "Pro"), or '' on the Free plan or when it reports none. */
 function paidPlan(i: FreeInstance): string {
-  const plan = i.usage?.plan
-  return plan && plan !== 'free' ? plan.charAt(0).toUpperCase() + plan.slice(1) : ''
+  const plan = planOf(i)
+  return isPaidPlan(plan) ? planName(plan!) : ''
+}
+/** The row's mark for a move between free and paid, until it is dismissed. */
+function planChangeLabel(i: FreeInstance): string {
+  const c = i.planChange
+  if (!c) return ''
+  return isPaidPlan(c.to) ? t('freeInstances.planChangedPaid', { plan: planName(c.to) }) : t('freeInstances.planChangedFree')
+}
+function planChangeHint(i: FreeInstance): string {
+  const c = i.planChange
+  if (!c) return ''
+  const when = timeAgo(c.at)
+  return c.from ? t('freeInstances.planChangedHint', { when, from: planName(c.from) }) : t('freeInstances.planFirstPaidHint', { when })
 }
 // The table's column mode and clock (composables/useUsageMode.ts), the desktop table's: one mode for
 // every kind in the one table.
@@ -486,10 +507,24 @@ defineExpose({
         <!-- A paid plan the site reports (ChatGPT Go, owner 2026-10-08: "Is there a way to note their account status?"). -->
         <IconTooltip
           v-if="paidPlan(inst)"
-          :label="$t('freeInstances.planLabel', { plan: paidPlan(inst) })"
-          :description="$t('freeInstances.planHint', { plan: paidPlan(inst) })"
+          :label="$t('freeInstances.planLabel', { provider: providerName(inst.provider), plan: paidPlan(inst) })"
+          :description="$t(inst.provider === 'claude' ? 'freeInstances.planHintClaude' : 'freeInstances.planHint')"
         >
           <Badge variant="outline" class="h-4 px-1 text-[10px]">{{ paidPlan(inst) }}</Badge>
+        </IconTooltip>
+        <!-- The Free plan, checked at sign-in and on every reading (owner, 2026-10-09: "a little free icon for the free ones"). -->
+        <IconTooltip
+          v-else-if="planOf(inst) === 'free'"
+          :label="$t('freeInstances.planFree')"
+          :description="$t('freeInstances.planFreeHint', { provider: providerName(inst.provider) })"
+        >
+          <span class="inline-flex items-center" :aria-label="$t('freeInstances.planFree')">
+            <Gift class="size-3.5 text-emerald-600 dark:text-emerald-400" />
+          </span>
+        </IconTooltip>
+        <!-- A move between free and paid, until dismissed in the menu (owner, 2026-10-09: "If they change to not free ... let me know"). -->
+        <IconTooltip v-if="inst.planChange" :label="planChangeLabel(inst)" :description="planChangeHint(inst)">
+          <Badge class="h-4 px-1 text-[10px]">{{ planChangeLabel(inst) }}</Badge>
         </IconTooltip>
       </template>
       <!-- The row's one primary action, as Open is on a desktop row. -->
@@ -528,6 +563,14 @@ defineExpose({
           @click="recover(inst.id)"
         >
           <SearchCheck /> {{ $t('freeInstances.recover') }}
+        </DropdownMenuItem>
+        <!-- A paid account can do more as a CLI, Desktop or Codex instance: Promote opens that kind's New dialog. -->
+        <DropdownMenuItem v-if="paidPlan(inst)" @click="emit('promote', inst.provider)">
+          <ArrowUpRight />
+          {{ $t(inst.provider === 'claude' ? 'freeInstances.promoteCli' : 'freeInstances.promoteCodex') }}
+        </DropdownMenuItem>
+        <DropdownMenuItem v-if="inst.planChange" @click="planSeen(inst)">
+          <BellOff /> {{ $t('freeInstances.planDismiss') }}
         </DropdownMenuItem>
       </template>
     </InstanceRow>
