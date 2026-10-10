@@ -22,6 +22,7 @@ import {
 import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
+import { startBoxDoctorWatch } from './box-doctor'
 import { startIdleSweep, stopIdleSweep } from './claude-native-idle'
 import { startClaudeNativePrewarm, stopClaudeNativePrewarm } from './claude-native-prewarm'
 import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayte'
@@ -884,6 +885,7 @@ await import('./routes/desktop-sessions')
 await import('./routes/desktop-folder')
 await import('./routes/session-message')
 await import('./routes/versions')
+await import('./routes/box-doctor')
 await import('./routes/climayte')
 await import('./routes/hswarm')
 await import('./routes/routing')
@@ -1541,6 +1543,11 @@ startTitleSweep()
 // fleet, stages the current Claude Code into closed profiles and keeps the CLI install in step.
 // See version-drift.ts.
 startVersionDriftWatch()
+
+// Every 15 minutes: the box-level faults that slow every session (a batch shim first on PATH, commit
+// charge at its limit, leaked console hosts, a stopped orphan reaper). Records incidents, changes
+// nothing. See box-doctor.ts.
+startBoxDoctorWatch()
 
 // Every minute: builds the managed Claude copy as soon as a new Claude build is installed, so the
 // first Open after an update does not copy 600 MB first. See claude-native-prewarm.ts.

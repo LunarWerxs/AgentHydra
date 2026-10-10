@@ -156,6 +156,21 @@ describe('tools/call', () => {
     expect(calls[1]!.init?.method).toBe('POST')
   })
 
+  test('box_doctor reads GET /api/box-doctor and records nothing', async () => {
+    stubResponse = { findings: [] }
+    await handleRpc(
+      {
+        jsonrpc: '2.0',
+        id: 10,
+        method: 'tools/call',
+        params: { name: 'box_doctor', arguments: {} },
+      },
+      ctx,
+    )
+    expect(calls.map((c) => c.url)).toEqual([`${daemonBase()}/api/box-doctor`])
+    expect(calls[0]!.init?.method ?? 'GET').toBe('GET')
+  })
+
   test('list_sessions passes a limit query param', async () => {
     stubResponse = []
     await handleRpc(

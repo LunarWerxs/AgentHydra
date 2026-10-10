@@ -1921,6 +1921,13 @@ export const TOOLS: McpEngineTool[] = [
     inputSchema: S(),
     run: () => api('/api/versions/sync', { method: 'POST' }),
   },
+  {
+    name: 'box_doctor',
+    description:
+      "READ-ONLY: what on this PC slows every session, read now. Returns `findings`, each `problem` (an incident until it clears; the daemon checks every 15 minutes) or `note`: a command whose first match on PATH is a batch shim fronting a native exe (every call starts a cmd.exe first; the fix is the exe's folder ahead on PATH), commit charge under 5% of its limit (new processes fail with 0xC0000142), 25+ console hosts Claude Desktop kept for terminals it stopped, the orphan reaper's task missing or idle for 30 minutes (only where ~/.claude/tools/orphan-reaper.ps1 is installed), a pile of idle children the reaper reported under a live parent; plus the process count and memory. Changes nothing on the machine. Windows only; elsewhere `supported` is false.",
+    inputSchema: S(),
+    run: () => api('/api/box-doctor'),
+  },
 
   // --- the orchestrator ------------------------------------------------------------
   // The Python toolbox under orchestrator/ decides what SHOULD happen to a chat; the daemon runs
