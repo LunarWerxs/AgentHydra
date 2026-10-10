@@ -20,6 +20,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import queue
 import shlex
 import subprocess
 import threading
@@ -45,6 +46,7 @@ class PermissionBroker:
         self.command = command
         self.timeout_s = timeout_s
         self._proc: subprocess.Popen | None = None
+        self._lines: queue.Queue[str] = queue.Queue()  # the running child's stdout, one line each, "" at its end
         self._lock = threading.Lock()
         self._next_id = 0
 
@@ -52,19 +54,24 @@ class PermissionBroker:
         # Windows hands the string to CreateProcess, which parses quoted paths itself; POSIX needs argv.
         argv = self.command if os.name == "nt" else shlex.split(self.command)
         try:
-            return subprocess.Popen(
+            proc = subprocess.Popen(
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8",
                 bufsize=1, **spawn_kwargs(),  # its own session on POSIX: see spawn_kwargs
             )
         except OSError as e:
             raise BrokerUnavailable(f"permission broker {self.command!r} could not start: {e}") from e
+        # Its own queue per child, so a late line from a dropped child can never answer the next one's request.
+        self._lines = lines = queue.Queue()
+        threading.Thread(target=_pump, args=(proc, lines), name="hswarm-broker-reader", daemon=True).start()
+        return proc
 
     def close(self) -> None:
         proc, self._proc = self._proc, None
         if proc is None:
             return
         try:
-            kill_tree(proc.pid)
+            kill_tree(proc.pid)  # the tree: a wrapper script's child may hold the pipe
+            proc.kill()  # and the child by its own handle, which a reused pid cannot misdirect
             proc.wait(5)
         except (OSError, subprocess.TimeoutExpired):
             pass
@@ -88,18 +95,17 @@ class PermissionBroker:
             "datetime": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "permission": permission, "value": value, "cwd": cwd,
         }
-        # A blocking readline cannot time out by itself; killing the tree on a timer makes it return "".
-        # The whole tree: a wrapper script's child holding the pipe open would keep readline blocked.
-        timer = threading.Timer(self.timeout_s, kill_tree, (proc.pid,))
-        timer.start()
         try:
             proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
             proc.stdin.flush()
-            line = proc.stdout.readline()
         except (OSError, ValueError) as e:
             raise BrokerUnavailable(f"permission broker unreachable: {e}") from e
-        finally:
-            timer.cancel()
+        # The wait keeps its own clock rather than relying on a kill to end a blocking read: a kill that misses the
+        # child (a reused pid, a wrapper's grandchild holding the pipe) would leave the read blocked for good.
+        try:
+            line = self._lines.get(timeout=self.timeout_s)
+        except queue.Empty:
+            line = ""
         if not line:
             raise BrokerUnavailable(f"permission broker gave no answer within {self.timeout_s:g}s (it exited or hung)")
         try:
@@ -112,6 +118,17 @@ class PermissionBroker:
         if result not in ("allow", "deny"):
             raise BrokerUnavailable(f"permission broker sent unknown result {result!r}")
         return result == "allow", str(reply.get("reason") or "")
+
+
+def _pump(proc: subprocess.Popen, lines: queue.Queue) -> None:
+    """Copy a broker child's stdout into its queue, then "" once it closes or fails."""
+    try:
+        for line in proc.stdout:
+            lines.put(line)
+    except (OSError, ValueError):
+        pass
+    finally:
+        lines.put("")
 
 
 _broker: PermissionBroker | None = None

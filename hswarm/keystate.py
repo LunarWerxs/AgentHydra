@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -30,6 +31,12 @@ CREATE INDEX IF NOT EXISTS keys_rev ON keys(rev);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 """
 _ready: set[str] = set()   # database paths this process has created and imported into
+# One idle connection held on the current database. Each read or write opens its own connection, and closing the LAST
+# connection to a WAL database checkpoints it and deletes its -wal and -shm files, so without a holder every rest
+# created and deleted two files for antivirus and the indexer to scan: 7.3 ms a rest against 2.0 ms held (median of
+# 400, 2026-10-09), and on a loaded PC a 1,030-rest test ran past 400 s. Only the newest path is held.
+_held: dict[str, sqlite3.Connection] = {}
+_held_guard = threading.Lock()
 
 
 def db_path() -> Path:
@@ -96,7 +103,23 @@ def connect() -> sqlite3.Connection:
     except BaseException:
         c.close()
         raise
+    _hold(p)
     return c
+
+
+def _hold(p: Path) -> None:
+    """Keep _held's idle connection on `p`, closing the one on any older path; a failure only costs the speed."""
+    key = str(p)
+    if key in _held:
+        return
+    with _held_guard:
+        if key in _held:
+            return
+        for old in list(_held):
+            with contextlib.suppress(sqlite3.Error):
+                _held.pop(old).close()
+        with contextlib.suppress(sqlite3.Error):
+            _held[key] = sqlite3.connect(p, timeout=LOCK_WAIT_S, isolation_level=None, check_same_thread=False)
 
 
 class Txn:
