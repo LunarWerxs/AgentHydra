@@ -426,10 +426,15 @@ def unservable(tasks: list[Task]) -> str | None:
     floor only narrows the plan, so when that task has no route, no task of the shape has one.
 
     A task CliMayte can take is never refused here: with no live leg its plan is below its floor, so
-    climayte_route.consult runs it on the owner's subscription (the refusal had sent that work to Opus sub-agents)."""
+    climayte_route.consult runs it on the owner's subscription (the refusal had sent that work to Opus sub-agents).
+    When CliMayte then does not serve it, _run_legs asks no_route_left of that one task before running it."""
+    return no_route_left([t for t in tasks if not climayte_route.can_take(t)])
+
+
+def no_route_left(tasks: list[Task]) -> str | None:
+    """unservable's refusal, CliMayte aside."""
     from .dispatch import unreachable
 
-    tasks = [t for t in tasks if not climayte_route.can_take(t)]
     shortest: dict[tuple, Task] = {}
     for t in tasks:
         if t.profile:
@@ -775,6 +780,13 @@ class JobManager:
         served, route_note = await climayte_route.consult(job.id, task)
         if served is not None:
             return served, None
+        # Let through at submit for CliMayte, which did not take it: a route that cannot serve at all is refused now,
+        # as submit would have, not run into its timeouts.
+        if route_note and route_note.get("floor_miss") and (why := no_route_left([task])):
+            res = Result(id=task.id, backend=task.backend, model=task.model, status="error", error=why,
+                         started=now_iso(), finished=now_iso())
+            res.selection = {"route": route_note}
+            return res, None
         # then the owner's Free web accounts, for a tool-free task (free_route.py)
         served, free_note = await free_route.consult(job.id, task)
         if served is not None:

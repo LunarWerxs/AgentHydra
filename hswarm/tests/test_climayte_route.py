@@ -306,3 +306,27 @@ def test_submit_never_refuses_a_task_climayte_can_take(fake, tmp_path, monkeypat
     assert refusal.startswith("NoCapableSwarmRoute") and "climayte_run" in refusal and "your own model" not in refusal
     monkeypatch.setattr(climayte_route, "_SWITCH", {"at": -1e9, "on": False})  # the owner's routing switch is off
     assert jobs.unservable([agentic]) is not None
+
+
+def test_a_below_floor_task_climayte_cannot_take_is_refused_when_its_route_is_dead(fake, tmp_path, monkeypatch):
+    # The switch is off, so no slot is waited for; its own route has nothing that serves, so it fails at once.
+    from hswarm import jobs
+
+    monkeypatch.setattr(climayte_route, "floor_miss", lambda task: "no live route can take profile critical")
+    monkeypatch.setattr(jobs, "no_route_left", lambda tasks: "NoCapableSwarmRoute: every key disabled" if tasks else None)
+    f = fake(enabled=False)
+    _, res, api = _run(tmp_path)
+    assert f.dispatched == [] and api.calls == 0
+    assert res.status == "error" and res.error.startswith("NoCapableSwarmRoute")
+    assert res.selection["route"]["floor_miss"] == "no live route can take profile critical"
+
+
+def test_a_below_floor_task_whose_worker_failed_runs_its_live_route_and_says_so(fake, tmp_path, monkeypatch):
+    from hswarm import jobs
+
+    monkeypatch.setattr(climayte_route, "floor_miss", lambda task: "no live route meets profile critical")
+    monkeypatch.setattr(jobs, "no_route_left", lambda tasks: None)
+    fake(worker={"status": "failed", "result": None})
+    _, res, api = _run(tmp_path)
+    assert api.calls == 1 and res.answer == "api route"
+    assert res.selection["route"]["floor_miss"] == "no live route meets profile critical" and res.selection["route"]["climayte_failed"] == "w1"

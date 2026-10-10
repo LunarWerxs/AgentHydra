@@ -313,22 +313,25 @@ def _result(task: Task, w: dict, note: dict, started: str, job_id: str) -> Resul
 
 async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     """(a finished Result, None) when CliMayte served the task; (None, note) when the API route runs, the note being
-    the decision to carry on its result; (None, None) when nobody was asked."""
+    the decision to carry on its result; (None, None) when nobody was asked. A task whose own route misses its bar
+    (floor_miss) and that CliMayte did not serve carries `floor_miss` on its note, so jobs can refuse it at once when
+    that route cannot serve at all, instead of running it there."""
     global _ACTIVE
     if not eligible(task):
         return None, None
     missed = floor_miss(task)
+    unserved = {"via": "api", "floor_miss": missed} if missed else None
+    if not await switch_on():  # read before any wait: a slot is no use with the owner's switch off
+        return None, unserved
     if missed and _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
         # Its own route is below its bar: worth a wait for a slot, as long as a queued worker is given to start.
         until = asyncio.get_running_loop().time() + config.ROUTE_VIA_CLIMAYTE_START_S
         while _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX and asyncio.get_running_loop().time() < until:
             await asyncio.sleep(POLL_S)
     if _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
-        return None, None
-    _ACTIVE += 1  # taken before any await, held from the question to the worker's end: the cap is on tasks in CliMayte's hands
+        return None, unserved
+    _ACTIVE += 1  # taken with no await since the cap check, held to the worker's end: the cap is on tasks in CliMayte's hands
     try:
-        if not await switch_on():
-            return None, None
         return await _consult(job_id, task, missed)
     finally:
         _ACTIVE -= 1
@@ -348,4 +351,5 @@ async def _consult(job_id: str, task: Task, missed: str | None = None) -> tuple[
     if res is not None:
         return res, None
     return None, {"via": "api", "decided": "subscription", "why": note["why"], "fallback": "CliMayte could not serve it",
+                  **({"floor_miss": missed} if missed else {}),
                   **{k: v for k, v in note.items() if k.startswith("climayte_") or k == "worker"}}
