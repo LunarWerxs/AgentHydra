@@ -91,6 +91,8 @@ export const icons = {
   readAloud: Volume2,
   statusChevron: ChevronRight, // rotates to point down when open
   scrollToBottom: ArrowDown,
+  prevUserMessage: ArrowUp,
+  nextUserMessage: ArrowDown,
   // Composer
   add: Plus,
   record: Mic,

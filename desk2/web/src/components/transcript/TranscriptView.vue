@@ -15,6 +15,7 @@ import { newestBrowserCalls } from './lib/tools'
 import { redesignState } from './lib/redesign'
 import { groupRows, rowGap, type DisplayRow } from './lib/groups'
 import { prefixOffsets, rowAt, visibleRange } from './lib/window'
+import { nextMessageStep } from './lib/steps'
 import { provideTranscript } from './context'
 import { revealTarget, type RevealTarget } from './lib/reveal'
 import { COLLAPSE_MS } from './lib/motion'
@@ -307,6 +308,55 @@ function jumpToLatest() {
 // Sending from this chat's composer goes to the bottom, even scrolled up, and stays pinned for the reply.
 function onSent(e: Event) {
   if (sentHere((e as CustomEvent<ChatSentDetail>).detail, props.chatId)) jumpToLatest()
+}
+
+// The step arrows (top right; owner, 2026-10-09: "a little floating arrow that when I click it, scrolls me up to my
+// most recent message to the AI") walk the messages the person sent, read from the rows on the list, so one not
+// rendered counts; a sub-agent's prompt and a message still queued are not theirs to step to. A step lands the message
+// STEP_MARGIN px under the header's inset; a message already there is not a step.
+const STEP_MARGIN = 8
+const stepLine = computed(() => (props.insetTop ?? 0) + STEP_MARGIN)
+const userTops = computed(() => {
+  const o = offsets.value
+  // The column's top padding (20px plus the inset) sits above the first row, as in the template.
+  const first = 20 + (props.insetTop ?? 0)
+  const tops: number[] = []
+  display.value.forEach((r, i) => {
+    if (r.kind === 'item' && r.item.kind === 'user' && !r.item.parentToolUseId && !r.item.queued) tops.push(first + (o[i] ?? 0))
+  })
+  return tops
+})
+// Where the view is headed: a glide's end while one runs, so a second click steps on from there rather than to the
+// message the first click is still gliding to.
+const gliding = ref<number | null>(null)
+let glideTimer: ReturnType<typeof setTimeout> | undefined
+const stepFrom = computed(() => gliding.value ?? scrollTop.value)
+const prevStep = computed(() => nextMessageStep(userTops.value, stepFrom.value, 'up', stepLine.value))
+const nextStep = computed(() => nextMessageStep(userTops.value, stepFrom.value, 'down', stepLine.value))
+const showStepDown = computed(() => fromBottom.value > 1)
+
+// A step is the person's own move: it lets go of the bottom at once (a streamed line does not pull it back), and the
+// view glides there. Reaching within 24px of the bottom re-pins through onScroll, as a hand's scroll does.
+function glideTo(top: number) {
+  const el = scroller.value
+  if (!el) return
+  dropHold()
+  userScrolls()
+  pinned.value = false
+  gliding.value = top
+  clearTimeout(glideTimer)
+  glideTimer = setTimeout(() => (gliding.value = null), 700)
+  el.scrollTo({ top, behavior: 'smooth' })
+}
+onBeforeUnmount(() => clearTimeout(glideTimer))
+function stepUp() {
+  if (prevStep.value !== null) glideTo(prevStep.value)
+}
+// Past the last message the person sent, the final step is the jump to the bottom, which re-pins as the jump button does.
+function stepDown() {
+  if (nextStep.value !== null) return glideTo(nextStep.value)
+  gliding.value = null
+  jumpToLatest()
 }
 
 let rowObserver: ResizeObserver | null = null
@@ -630,5 +680,26 @@ watch(
         </button>
       </Tip>
     </Transition>
+    <div
+      v-if="prevStep !== null || showStepDown"
+      class="absolute right-5 flex flex-col items-center gap-2"
+      :style="{ top: `${(insetTop ?? 0) + 12}px` }"
+    >
+      <Tip v-if="prevStep !== null" label="Previous message you sent">
+        <button type="button" aria-label="Previous message you sent" class="tx-scroll-bottom tx-step" @click="stepUp">
+          <icons.prevUserMessage class="size-5" />
+        </button>
+      </Tip>
+      <Tip v-if="showStepDown" :label="nextStep === null ? 'Back to the latest' : 'Next message you sent'">
+        <button
+          type="button"
+          :aria-label="nextStep === null ? 'Back to the latest' : 'Next message you sent'"
+          class="tx-scroll-bottom tx-step"
+          @click="stepDown"
+        >
+          <icons.nextUserMessage class="size-5" />
+        </button>
+      </Tip>
+    </div>
   </div>
 </template>

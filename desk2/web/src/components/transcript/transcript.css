@@ -690,6 +690,15 @@ button.tx-file-card:hover {
 .tx-scroll-bottom:hover {
   background: color-mix(in srgb, var(--bg-popover), white 6%);
 }
+/* The step arrows rest at half strength and come up whole on hover or keyboard focus. */
+.tx-step {
+  opacity: 0.5;
+  transition: background-color 60ms, opacity 120ms;
+}
+.tx-step:hover,
+.tx-step:focus-visible {
+  opacity: 1;
+}
 
 /* Buttons and inputs inside cards: the real 28px button (r6, 13px) language. */
 .tx-btn {
