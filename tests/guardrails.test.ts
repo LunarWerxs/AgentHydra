@@ -636,6 +636,83 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
 ]`,
     ],
   },
+  // Adapted from stablyai/orca's credential-persistence ratchet (MIT); the idea, written fresh.
+  // Top-level code sits at column 0 in these fixtures: the check treats each column-0 line as a
+  // block boundary, and a sink is judged only against the block it sits in.
+  'credential-writer-ratchet.mjs': {
+    broken: [
+      // A login's credential file written by a module that does not own logins: the shape a second
+      // writer takes when it "just saves the login" next to the owner's copy.
+      `import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+export function rememberLogin(configDir: string, credentials: string): void {
+  writeFileSync(join(configDir, '.credentials.json'), credentials)
+}
+`,
+      // A Codex home's auth.json copied through a bound name: the copy reaches the file by a variable,
+      // so a rule that only looked for the literal inside the call would have walked straight past it.
+      `import { copyFileSync } from 'node:fs'
+import { join } from 'node:path'
+export function cloneCodexHome(from: string, to: string): void {
+  const auth = join(from, 'auth.json')
+  copyFileSync(auth, join(to, 'auth.json'))
+}
+`,
+      // A token value written to disk: the refresh token leaves the process inside a JSON body.
+      `import { writeFileSync } from 'node:fs'
+export function saveSnapshot(cfg: { accessToken: string; refreshToken: string }): void {
+  writeFileSync('cache.json', JSON.stringify({ refreshToken: cfg.refreshToken }))
+}
+`,
+      // Desktop's token-store key rewritten and renamed into place: the block names oauth:tokenCacheV2,
+      // so its writes are the store's writes whichever variable they go through.
+      `import { renameSync, writeFileSync } from 'node:fs'
+export function stashGrant(path: string, cfg: Record<string, unknown>, sealed: string): void {
+  cfg['oauth:tokenCacheV2'] = sealed
+  const tmp = path + '.tmp'
+  writeFileSync(tmp, JSON.stringify(cfg))
+  renameSync(tmp, path)
+}
+`,
+      // The owner's helper imported by name: desktop-cli-feed.ts sees credPath, not the literal.
+      `import { writeFileSync } from 'node:fs'
+import { credPath } from './cli-login-move'
+export function feedLogin(configDir: string, cred: string): void {
+  writeFileSync(credPath(configDir), cred)
+}
+`,
+    ],
+    fixed: [
+      // Reading a login and writing an unrelated cache: the credential name sits in a block with no
+      // write, and the write sits in a block that names no credential. Neither is a credential write.
+      `import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+export function hasLogin(configDir: string): boolean {
+  return Boolean(readFileSync(join(configDir, '.credentials.json'), 'utf8'))
+}
+export function saveCache(file: string, cache: object): void {
+  writeFileSync(file, JSON.stringify(cache))
+}
+`,
+      // Signing out deletes the login; a delete is not a write, and cli-logout.ts is exactly this shape.
+      `import { rmSync } from 'node:fs'
+import { credPath } from './cli-login-move'
+export function signOut(configDir: string): void {
+  rmSync(credPath(configDir), { force: true })
+}
+`,
+      // A comment or a string that names the write is prose, never a call.
+      `// writeFileSync(join(configDir, '.credentials.json'), credentials) was the old shape.
+export const LABEL = 'signed in'
+`,
+      // A write to a file that holds no login key is not a credential write.
+      `import { writeFileSync } from 'node:fs'
+export function saveSettings(dir: string, settings: object): void {
+  writeFileSync(dir + '/config.json', JSON.stringify(settings))
+}
+`,
+    ],
+  },
 }
 
 // Checks that deliberately do NOT export findViolations, and why, asserted explicitly below rather
