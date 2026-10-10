@@ -22,10 +22,7 @@ function homeKey(codexHome: string): string {
 async function takeHomeTurn(codexHome: string): Promise<() => void> {
   const key = homeKey(codexHome)
   const before = homeTurns.get(key) ?? Promise.resolve()
-  let release!: () => void
-  const mine = new Promise<void>((done) => {
-    release = done
-  })
+  const { promise: mine, resolve: release } = Promise.withResolvers<void>()
   const tail = before.then(() => mine)
   homeTurns.set(key, tail)
   await before
