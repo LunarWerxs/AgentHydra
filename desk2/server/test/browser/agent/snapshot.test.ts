@@ -38,7 +38,11 @@ beforeAll(async () => {
   let port = 0
   for (let i = 0; i < 150 && !port; i++) {
     const file = join(profile, 'DevToolsActivePort')
-    if (existsSync(file)) port = Number(readFileSync(file, 'utf8').split('\n')[0])
+    try {
+      if (existsSync(file)) port = Number(readFileSync(file, 'utf8').split('\n')[0])
+    } catch {
+      // On Windows Chrome holds the file locked while it writes it (EBUSY): the port is not there yet.
+    }
     if (!port) await sleep(100)
   }
   if (!port) throw new Error('Chrome did not open a debugging port')
