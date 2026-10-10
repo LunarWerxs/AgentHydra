@@ -279,7 +279,7 @@ def best_rendered_alias(title: str, rows: list[str]) -> str | None:
     Scored in BOTH directions because either name may be the shorter one, and deliberately
     refused unless ONE row stands clear: a rename is a near-certainty to recognise, never a
     guess to make. Ambiguity keeps the original refusal, which is the honest answer."""
-    from migrate_chat import fuzzy_title_score  # local: migrate_chat imports this module too
+    from lib.titlematchlib import fuzzy_title_score
 
     scored = sorted(
         ((max(fuzzy_title_score(r, title), fuzzy_title_score(title, r)), r) for r in rows),

@@ -103,7 +103,6 @@ flipped, and the payload's `permissionMode` is what the disk said LAST, never wh
 
 from __future__ import annotations
 
-import difflib
 import json
 import re
 import shlex
@@ -120,6 +119,8 @@ from lib import ledgerlib
 from lib import mutationlib
 from lib import nativearchivelib
 from lib import stamplib
+from lib.revivecmdlib import revive
+from lib.titlematchlib import FUZZY_WORD_RATIO, _fuzzy_pick, fuzzy_title_score  # noqa: F401 (tests reach these as migrate_chat.*)
 
 
 ELIDED = ("…", "...")
@@ -168,14 +169,6 @@ DOCTRINE_RESTAMP_POLL_SECS = 0.4
 # Match hydralib's own SURVEY_CACHE_SECS: at 120 a batch running past two minutes re-paid an
 # ~80s fleet usage survey it already had a fresh answer for. 240 is the cache's own contract.
 SURVEY_MAX_AGE_SECS = 240
-# Fuzzy title matching: every query word must match some title word at least this closely
-# (difflib ratio), OR the whole normalized query must match the whole title this closely.
-# 0.8 lets one letter-pair slip in a nine-letter word ("arkitecht"/"arkitekt" = 0.82) and
-# still rejects "cleanup" against "expansion" (0.25).
-FUZZY_WORD_RATIO = 0.8
-FUZZY_WHOLE_RATIO = 0.85
-# Two candidates whose scores are this close are a tie, and a tie is a refusal, not a pick.
-FUZZY_TIE_MARGIN = 0.05
 
 
 def _wait_until(pred, timeout_secs: float, step_secs: float = 0.25) -> bool:
@@ -247,54 +240,6 @@ def _untruncated_title(session_id: str, shown: str | None) -> str | None:
     if full and not full.endswith(ELIDED):
         return full
     return shown
-
-
-def _norm_title(text: str) -> str:
-    """Lower-case, punctuation folded to spaces, whitespace collapsed - the shape both sides
-    of a fuzzy comparison are put in, so case and punctuation can never be the difference."""
-    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
-
-
-def fuzzy_title_score(query: str, title: str) -> float:
-    """0.0-1.0: how well `query` names `title`. 1.0 is a normalized substring (the old exact
-    rule); below that, the weaker of (a) every query word's best match against a title word
-    and (b) the whole-string ratio - whichever criterion the pair clears. A query with a word
-    that matches NOTHING in the title ("cleanup" vs "...design critic expansion") scores that
-    word's ratio, well under the bar, so a misspelling is forgiven but a different chat is not."""
-    q, t = _norm_title(query), _norm_title(title)
-    if not q or not t:
-        return 0.0
-    if q in t:
-        return 1.0
-    words = t.split()
-    per_word = [max((difflib.SequenceMatcher(None, qw, tw).ratio() for tw in words), default=0.0)
-                for qw in q.split()]
-    word_score = min(per_word) if per_word else 0.0
-    whole = difflib.SequenceMatcher(None, q, t).ratio()
-    if word_score >= FUZZY_WORD_RATIO or whole >= FUZZY_WHOLE_RATIO:
-        return max(word_score, whole)
-    return min(word_score, whole)
-
-
-def _fuzzy_pick(query: str, rows: list[dict]) -> list[dict]:
-    """The sessions-table rows `query` names fuzzily: the best-scoring chat alone when it is
-    clearly best, every tied chat when it is not (the caller refuses on more than one), and
-    nothing when nothing clears the bar. Rows are the daemon's (`title`, `session_id`)."""
-    scored = []
-    for r in rows:
-        s = fuzzy_title_score(query, str(r.get("title") or ""))
-        if s >= FUZZY_WORD_RATIO:
-            scored.append((s, r))
-    if not scored:
-        return []
-    scored.sort(key=lambda x: -x[0])
-    best = scored[0][0]
-    top = [r for s, r in scored if best - s <= FUZZY_TIE_MARGIN]
-    # The same chat can sit on several rows only through lineage ids; distinct session ids
-    # are distinct chats, and one chat at the top is the answer even if it tied with itself.
-    if len({r.get("session_id") for r in top}) == 1:
-        return top[:1]
-    return top
 
 
 def _in_source(instance_name, source_name: str | None) -> bool:
@@ -2244,7 +2189,7 @@ def main(argv: list[str]) -> int:
     # REVIVE is its own path: it writes one transcript file and touches no app or record, so
     # none of the move's rails (hold, breaker, collateral watch) apply to it.
     if "--revive" in argv:
-        return revive(argv)
+        return revive(argv, out)
 
     # THE COLLATERAL WATCH (lib/archivewatchlib, 2026-09-17): every chat record is read before
     # the move and after it, and a chat outside the move that went archived meanwhile is named.
@@ -2375,137 +2320,6 @@ def _dry_run_plan(match: dict, target: dict, session_id: str, chat_title, now: b
                    + would + f". Quiet window {min_quiet}s"
                    + (f"; {bg.get('why')}" if bg else "") + f".{sw.text()}"),
     }
-
-
-# --- REVIVE: rebuild a transcript the CLI deleted, or one --resume refuses -------------------
-#
-# WHY: Claude Code deletes transcripts past cleanupPeriodDays, after which `--resume` fails, and
-# a chat copied between accounts can carry signed thinking blocks or a dangling tool call that
-# make its next turn a 400. A copy often survives (delete_chat's undo copy, another account's
-# store the chat moved out of, a file saved by hand). This writes it back under the SAME
-# session id, keeping only what a replayed request accepts (lib/revivelib). No daemon call,
-# no app touched: the file is the whole job, and the chat is then resumed or imported as usual.
-
-_SESSION_ID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-# An existing transcript written to this recently may have a live CLI appending to it; a rewrite
-# would race that writer, so it is refused (exit 4) whatever --force says. Same 300s the move's
-# own quiet window uses.
-REVIVE_QUIET_SECS = 300
-
-
-def _revive_stores(into: _Path) -> list[_Path]:
-    """Every projects folder a copy of the chat may sit in: the destination, the regular CLI
-    store, then each instance's (best-effort - with no daemon, the first two still count)."""
-    stores = [into, _Path.home() / ".claude" / "projects"]
-    try:
-        fleet_data = hydralib.fleet()
-    except hydralib.DaemonError:
-        fleet_data = {}
-    for i in fleet_data.get("instances", []) or []:
-        if i.get("dir"):
-            stores.append(_Path(str(i["dir"])) / "projects")
-    seen, out_stores = set(), []
-    for s in stores:
-        key = str(s).lower()
-        if key not in seen:
-            seen.add(key)
-            out_stores.append(s)
-    return out_stores
-
-
-def revive(argv: list[str]) -> int:
-    """`--revive <sessionId> [--source FILE] [--into DIR] [--force] [--dry-run] [--json]`.
-    Exit 0 revived (or planned), 3 deterministic refusal, 4 the existing file is being written."""
-    from lib import revivelib
-
-    as_json = "--json" in argv
-
-    def flag(name: str) -> str | None:
-        if name in argv:
-            i = argv.index(name)
-            return argv[i + 1] if i + 1 < len(argv) else ""
-        return None
-
-    def refuse(code: int, why: str, **extra) -> int:
-        return out({"ok": False, "code": code, "why": why, **extra,
-                    "report": f"REVIVE REFUSED: {why}"}, as_json, code)
-
-    session_id = (flag("--revive") or "").strip()
-    if not _SESSION_ID_RE.match(session_id):
-        return refuse(3, f"--revive needs a session id (a UUID), got {session_id!r}")
-    into = _Path(flag("--into") or (_Path.home() / ".claude" / "projects"))
-    force, dry_run = "--force" in argv, "--dry-run" in argv
-
-    existing = next(iter(sorted(into.glob(f"*/{session_id}.jsonl"))), None) if into.exists() else None
-    source_arg = flag("--source")
-    if source_arg:
-        source = _Path(source_arg)
-        if not source.is_file():
-            return refuse(3, f"--source {source} is not a file")
-    else:
-        found = revivelib.candidate_sources(session_id, _revive_stores(into),
-                                            ledgerlib._state_dir() / "trash")
-        if not found:
-            return refuse(3, f"no copy of {session_id} found in any projects store or delete_chat's "
-                             f"undo copies; pass --source <file.jsonl>")
-        source = found[0]
-
-    if existing is not None:
-        if not force:
-            return refuse(3, f"{existing} already exists; --force rewrites it in place (the "
-                             f"original is kept beside it as .pre-revive-<time>)", existing=str(existing))
-        quiet = time.time() - existing.stat().st_mtime
-        if quiet < REVIVE_QUIET_SECS:
-            return refuse(4, f"{existing} was written {int(quiet)}s ago - a live CLI may still be "
-                             f"appending; wait until it has been quiet {REVIVE_QUIET_SECS}s",
-                          existing=str(existing))
-
-    try:
-        records = revivelib.parse_jsonl(source.read_text(encoding="utf-8", errors="replace"))
-    except OSError as exc:
-        return refuse(3, f"cannot read {source}: {exc}")
-    kept, stats = revivelib.rebuild_records(records, session_id)
-    if not kept:
-        return refuse(3, f"{source} holds nothing replayable (no user or assistant turn on its "
-                         f"active branch)", stats=stats)
-
-    if existing is not None:
-        dest = existing
-    elif source.name == f"{session_id}.jsonl":
-        dest = into / source.parent.name / source.name
-    else:
-        cwd = revivelib.first_cwd(kept)
-        if not cwd:
-            return refuse(3, f"{source} names no working directory (no record carries a cwd), "
-                             f"so the project folder --resume looks in is unknown")
-        dest = into / revivelib.project_folder(cwd) / f"{session_id}.jsonl"
-
-    dropped = (f"dropped {stats['thinking']} thinking block(s), {stats['unansweredToolUse']} "
-               f"unanswered tool call(s), {stats['orphanToolResult']} orphan result(s), "
-               f"{stats['nonConversation']} non-conversation record(s)")
-    payload = {"ok": True, "code": 0, "sessionId": session_id, "source": str(source),
-               "dest": str(dest), "inPlace": existing is not None, "dryRun": dry_run, **stats}
-    if dry_run:
-        payload["report"] = (f"DRY RUN: would write {stats['kept']} record(s) of {session_id[:8]} "
-                             f"from {source} to {dest}; {dropped}.")
-        return out(payload, as_json, 0)
-
-    text = revivelib.render_jsonl(kept)
-    try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if existing is not None:
-            backup = dest.with_name(f"{dest.name}.pre-revive-{int(time.time())}")
-            backup.write_bytes(dest.read_bytes())
-            payload["backup"] = str(backup)
-        tmp = dest.with_name(dest.name + ".revive-tmp")
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(dest)
-    except OSError as exc:
-        return refuse(3, f"could not write {dest}: {exc}")
-    payload["report"] = (f"revived {session_id[:8]}: {stats['kept']} record(s) written to {dest}; "
-                         f"{dropped}. Resume it with `claude --resume {session_id}` from its folder, "
-                         f"or land it in a desktop app with migrate_chat.")
-    return out(payload, as_json, 0)
 
 
 if __name__ == "__main__":
