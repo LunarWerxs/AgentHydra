@@ -4,13 +4,14 @@
 // (its animations do not run, and the row would wait there to fade when it is shown again), it goes at once.
 
 import { watch, type WatchSource } from 'vue'
+import { reducedMotion } from '@/components/transcript/lib/motion'
 
 const FADE_MS = 160
 export const CLOSE_MS = 180
 
 /** True when a leave goes at once: no Web Animations, the window hidden, or reduced motion asked for. */
 export function leavesAtOnce(el: HTMLElement): boolean {
-  return typeof el.animate !== 'function' || document.visibilityState === 'hidden' || matchMedia('(prefers-reduced-motion: reduce)').matches
+  return typeof el.animate !== 'function' || document.visibilityState === 'hidden' || reducedMotion()
 }
 
 export function rowLeave(el: Element, done: () => void): void {
