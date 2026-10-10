@@ -150,7 +150,7 @@ describe('one Chrome per saved-browser profile', () => {
   test('a Chrome started outside AgentHydra with a debug port is attached to, never doubled or killed', async () => {
     const dir = newFolder()
     const bin = chromeBin()
-    const outside = startChrome(launchArgs(dir, bin, true), bin)
+    const outside = startChrome(await launchArgs(dir, bin, true), bin)
     expect(await waitUntil(() => profileLocked(dir) && readPortFile(dir) !== null, 20_000)).toBe(true)
     expect(await answersWithin(dir, 20_000)).toBe(true)
     const before = chromePids(dir, true)

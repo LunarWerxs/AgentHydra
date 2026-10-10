@@ -81,7 +81,7 @@ class World {
         this.killed.push(pid)
         // A pid this world made up stops listening (unless stubborn); one the manager spawned (a real bun child) is
         // really ended, or every stop would wait out the grace time and leave the child behind.
-        if (!this.procs.has(pid)) killHostTree(pid)
+        if (!this.procs.has(pid)) void killHostTree(pid)
         else if (!this.stubborn.has(pid)) for (const l of this.listeners.filter((x) => x.pid === pid)) this.close(l.port)
       },
     })

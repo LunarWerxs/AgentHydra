@@ -5,7 +5,6 @@
 // .devwebui written here is kept out of `git status` through the repo's own info/exclude, which is never committed.
 // Ported from desk2/server/src/devwebui/folder.ts, calling the manager in-process instead of over HTTP.
 
-import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import { type DevWebFolder, type DevWebProject, projectForCwd } from '@shared/devwebui'
@@ -27,7 +26,7 @@ export async function setUpFolder(api: FolderApi, cwd: string): Promise<DevWebFo
     const res = await api.load(cwd)
     if ('needsScaffold' in res) {
       const made = await api.scaffold(res.dir, res.fileName, res.proposal)
-      excludeFromGit(made.created)
+      await excludeFromGit(made.created)
       project = made.project
       created = made.created
     } else project = res.project
@@ -38,17 +37,25 @@ export async function setUpFolder(api: FolderApi, cwd: string): Promise<DevWebFo
   return created ? { project, created } : { project }
 }
 
-const git = (cwd: string, ...args: string[]) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', windowsHide: true })
+async function git(cwd: string, ...args: string[]): Promise<{ status: number; stdout: string }> {
+  try {
+    const proc = Bun.spawn(['git', '-C', cwd, ...args], { stdout: 'pipe', stderr: 'ignore', stdin: 'ignore', windowsHide: true })
+    const stdout = await new Response(proc.stdout).text()
+    return { status: await proc.exited, stdout }
+  } catch {
+    return { status: -1, stdout: '' }
+  }
+}
 
 /** Adds `file` to its repo's info/exclude unless git already ignores it or it is outside a work tree. True when added. */
-export function excludeFromGit(file: string): boolean {
+export async function excludeFromGit(file: string): Promise<boolean> {
   const dir = dirname(file)
   const name = basename(file)
-  const inside = git(dir, 'rev-parse', '--is-inside-work-tree')
+  const inside = await git(dir, 'rev-parse', '--is-inside-work-tree')
   if (inside.status !== 0 || inside.stdout.trim() !== 'true') return false
-  if (git(dir, 'check-ignore', '-q', name).status === 0) return false
-  const prefix = git(dir, 'rev-parse', '--show-prefix').stdout.trim()
-  const where = git(dir, 'rev-parse', '--git-path', 'info/exclude').stdout.trim()
+  if ((await git(dir, 'check-ignore', '-q', name)).status === 0) return false
+  const prefix = (await git(dir, 'rev-parse', '--show-prefix')).stdout.trim()
+  const where = (await git(dir, 'rev-parse', '--git-path', 'info/exclude')).stdout.trim()
   if (!where) return false
   const exclude = resolve(dir, where)
   mkdirSync(dirname(exclude), { recursive: true })

@@ -42,7 +42,7 @@ export async function ensureUpstream(root: string, branch: string): Promise<void
   if (!branch || (await gitOut(root, ['config', '--get', `branch.${branch}.merge`]))) return
   if (!(await gitOut(root, ['config', '--get', 'remote.origin.url']))) return
   for (const [key, value] of [[`branch.${branch}.remote`, 'origin'], [`branch.${branch}.merge`, `refs/heads/${branch}`]]) {
-    Bun.spawnSync(['git', '-C', root, 'config', key, value], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' })
+    await Bun.spawn(['git', '-C', root, 'config', key, value], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' }).exited
   }
 }
 

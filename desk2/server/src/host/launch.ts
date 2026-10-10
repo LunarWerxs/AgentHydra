@@ -8,7 +8,7 @@
 // server is gone). WMI starts it with the user's default environment, so the chat's own environment travels in
 // the spec file (the host deletes it once read). Elsewhere a detached spawn is a real detach.
 
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { HostFile, HostSpec } from './protocol'
@@ -123,10 +123,15 @@ export function pidAlive(pid: number): boolean {
 }
 
 /** Ends a host's process tree (the host and the Claude Code under it), when it will not end itself. */
-export function killHostTree(pid: number): void {
+export async function killHostTree(pid: number): Promise<void> {
   try {
-    if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-    else process.kill(pid, 'SIGKILL')
+    if (process.platform === 'win32') {
+      const child = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      await new Promise<void>((done) => {
+        child.once('error', () => done())
+        child.once('close', () => done())
+      })
+    } else process.kill(pid, 'SIGKILL')
   } catch {
     // already gone
   }

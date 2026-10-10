@@ -644,7 +644,7 @@ export async function endHost(dir: string, chatId: string, connect?: (file: Host
     }
     const deadline = Date.now() + 3000
     while (pidAlive(file.pid) && Date.now() < deadline) await Bun.sleep(100)
-    if (pidAlive(file.pid)) killHostTree(file.pid)
+    if (pidAlive(file.pid)) await killHostTree(file.pid)
   }
   rmSync(hostFilePath(dir, chatId), { force: true })
 }

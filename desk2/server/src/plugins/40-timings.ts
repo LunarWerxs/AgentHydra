@@ -15,7 +15,7 @@ const MAX_CLIENT_MS = 600_000
 export default async function plugin(app: Hono, ctx: ServerContext): Promise<void> {
   const timings = Timings.for(ctx.home)
   ctx.onStop(watchLoopStalls(timings, LOOP_STALL_MS, { file: join(ctx.home, 'logs', 'loop-stalls.jsonl') }))
-  setSyncBlockSink((b) => timings.span({ stage: 'sync_block', name: b.label, ms: b.ms }))
+  setSyncBlockSink((b) => timings.span({ stage: 'sync_block', name: b.label, ms: b.ms, caller: b.caller }))
 
   diagnosticsRoute(app, 'timings', () => timings.report())
 

@@ -85,11 +85,11 @@ describe('browser session endpoint', () => {
     expect(again.headless).toBe(false)
   }, 30_000)
 
-  test('a headed request launches without the headless flags, which only the headless request adds', () => {
-    const headedArgs = launchArgs('/tmp/profile', '/nonexistent/chrome', false)
+  test('a headed request launches without the headless flags, which only the headless request adds', async () => {
+    const headedArgs = await launchArgs('/tmp/profile', '/nonexistent/chrome', false)
     expect(headedArgs.some((a) => a.startsWith('--headless'))).toBe(false)
     expect(headedArgs.some((a) => a.startsWith('--window-position'))).toBe(false)
-    const headlessArgs = launchArgs('/tmp/profile', '/nonexistent/chrome', true)
+    const headlessArgs = await launchArgs('/tmp/profile', '/nonexistent/chrome', true)
     expect(headlessArgs).toContain('--headless=new')
   })
 

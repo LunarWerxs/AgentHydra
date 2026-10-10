@@ -2,7 +2,7 @@
 // detached so it outlives this process (a service or Desk restart re-attaches instead of relaunching). Follows
 // Connections' browser.mjs (startBrowserSession, reconnectToProfile, markLaunch), which it never edits.
 
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { LaunchError, LIVE_CHROME_FLAGS, readPortFile } from '../cdp'
@@ -73,7 +73,8 @@ async function attachOrLaunch(dir: string, opts: EnsureOptions): Promise<Browser
   // Chrome's own port file is not deleted first: it counts only when /json/version answers with its endpoint path.
   // A stale file fails that check, and deleting a live Chrome's file would hide it from a hand-off.
   const spawned: { error: Error | null } = { error: null }
-  const child = spawn(bin, launchArgs(dir, bin, headless), {
+  const args = await launchArgs(dir, bin, headless)
+  const child = spawn(bin, args, {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
@@ -103,13 +104,13 @@ async function attachOrLaunch(dir: string, opts: EnsureOptions): Promise<Browser
   throw new LaunchError('Chrome did not announce its debugging port within 15 seconds')
 }
 
-export function launchArgs(dir: string, bin: string, headless: boolean): string[] {
+export async function launchArgs(dir: string, bin: string, headless: boolean): Promise<string[]> {
   return [
     '--remote-debugging-port=0',
     `--user-data-dir=${dir}`,
     // Connections browser.mjs:2011-2017: a headless launch is hidden by its flags, not by a window.
     ...(headless
-      ? ['--headless=new', '--window-position=-32000,-32000', ...headlessUserAgentArgs(bin)]
+      ? ['--headless=new', '--window-position=-32000,-32000', ...(await headlessUserAgentArgs(bin))]
       : []),
     '--no-first-run',
     '--no-default-browser-check',
@@ -124,8 +125,8 @@ export function launchArgs(dir: string, bin: string, headless: boolean): string[
 
 // Connections browser.mjs:103-108 and :73-82. Headless Chrome names itself in its user agent and Cloudflare blocks it,
 // so the headless launch sends the windowed user agent of the same Chrome.
-function headlessUserAgentArgs(bin: string): string[] {
-  const major = browserMajor(bin)
+async function headlessUserAgentArgs(bin: string): Promise<string[]> {
+  const major = await browserMajor(bin)
   if (!major) return []
   const os =
     process.platform === 'win32'
@@ -139,19 +140,33 @@ function headlessUserAgentArgs(bin: string): string[] {
   ]
 }
 
+const majors = new Map<string, Promise<number | null>>()
+
 // Connections browser.mjs:86-98: on Windows the version folders beside the exe (running it would open a window).
-function browserMajor(bin: string): number | null {
+export function browserMajor(bin: string, platform: NodeJS.Platform = process.platform): Promise<number | null> {
+  let major = majors.get(bin)
+  if (!major) majors.set(bin, (major = readBrowserMajor(bin, platform)))
+  return major
+}
+
+async function readBrowserMajor(bin: string, platform: NodeJS.Platform): Promise<number | null> {
   try {
-    if (process.platform === 'win32') {
-      const majors = readdirSync(dirname(bin))
+    if (platform === 'win32') {
+      const found = readdirSync(dirname(bin))
         .filter((d) => /^\d+\.\d+\.\d+\.\d+$/.test(d))
         .map((d) => Number(d.split('.')[0]))
-      return majors.length ? Math.max(...majors) : null
+      return found.length ? Math.max(...found) : null
     }
-    const m = /(\d+)\.\d+\.\d+/.exec(
-      execFileSync(bin, ['--version'], { encoding: 'utf8', timeout: 5000 }),
-    )
-    return m ? Number(m[1]) : null
+    const proc = Bun.spawn([bin, '--version'], { stdout: 'pipe', stderr: 'ignore', stdin: 'ignore' })
+    const timer = setTimeout(() => proc.kill(), 5000)
+    try {
+      const out = await new Response(proc.stdout).text()
+      if ((await proc.exited) !== 0) return null
+      const m = /(\d+)\.\d+\.\d+/.exec(out)
+      return m ? Number(m[1]) : null
+    } finally {
+      clearTimeout(timer)
+    }
   } catch {
     return null
   }

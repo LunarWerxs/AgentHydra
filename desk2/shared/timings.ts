@@ -62,6 +62,8 @@ export interface TimingSpan {
   cwd?: string
   cold?: ColdKind
   ok?: boolean
+  /** A `sync_block` line: the call that held the thread, as `server/src/engine/queue.ts:662`. */
+  caller?: string
   /** A `loop_stall` line: the process's CPU ms over the same interval (user + system, all threads). */
   cpu?: number
   /** A `turn` line: ms per stage inside it (hooks and tools summed). */
