@@ -64,9 +64,9 @@ export interface HandoffInput {
   items: TranscriptItem[]
   /** The session being left, then the ones before it, newest first. */
   sessions: string[]
-  /** About how big the old session had grown. */
-  tokens: number
-  /** Why it moved: '5-hour limit', 'signed out', ... */
+  /** About how big the old session had grown; null when it was not sized (a session that could not be reopened). */
+  tokens: number | null
+  /** Why it moved: '5-hour limit', 'signed out', ...; not used when tokens is null. */
   why: string
   /** Hydra Desk's own address, for the transcript route. */
   deskUrl: string
@@ -115,7 +115,11 @@ function finishedTurns(items: TranscriptItem[], inTail: Set<string>, max: number
 }
 
 function introSection(h: HandoffInput): string {
-  return `You were moved to another account mid-task because the previous one ${h.why === 'signed out' ? 'was signed out' : `hit its ${h.why}`}. This is a fresh session: the old one had grown to about ${Math.round(h.tokens / 1000)}k tokens, so instead of re-reading it you start from this condensed handoff, which Hydra Desk built from the chat's full record. Continue exactly where it left off; do not redo finished steps. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers.`
+  const rest = 'Continue exactly where it left off; do not redo finished steps. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers.'
+  if (h.tokens === null) {
+    return `The session this chat was in could not be reopened on this machine, so this is a fresh session: instead of re-reading it you start from this condensed handoff, which Hydra Desk built from the chat's full record. ${rest}`
+  }
+  return `You were moved to another account mid-task because the previous one ${h.why === 'signed out' ? 'was signed out' : `hit its ${h.why}`}. This is a fresh session: the old one had grown to about ${Math.round(h.tokens / 1000)}k tokens, so instead of re-reading it you start from this condensed handoff, which Hydra Desk built from the chat's full record. ${rest}`
 }
 
 function historySection(h: HandoffInput): string {

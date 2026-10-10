@@ -415,12 +415,12 @@ describe('chat routes', () => {
     // importing the same session again answers the same chat
     expect((await call<ChatSummary>(t.desk, 'POST', '/api/chats/import', { sessionId: 'ext-1' })).body.id).toBe(res.body.id)
 
-    // No folder on this machine has 'ext-1': the send says so instead of starting a resume that fails. A
-    // resume in place and one as a copy are in continue-outside.test.ts and the test below.
-    const refused = await call(t.desk, 'POST', `/api/chats/${res.body.id}/messages`, { text: 'carry on' })
-    expect(refused.status).toBe(409)
-    expect(refused.body.error).toBe('No folder on this machine has session ext-1, so it cannot be resumed.')
-    expect(t.all).toHaveLength(0)
+    // No folder on this machine has 'ext-1': the send takes it over in a fresh session instead of starting a
+    // resume that fails (the handoff is pinned in continue-outside.test.ts, with a resume in place and one as a copy).
+    const taken = await call(t.desk, 'POST', `/api/chats/${res.body.id}/messages`, { text: 'carry on' })
+    expect(taken.status).toBe(200)
+    await waitFor(() => t.all.length === 1)
+    expect(t.last().options.resume).toBeUndefined()
 
     const noCwd = await call(t.desk, 'POST', '/api/chats/import', { sessionId: 'ext-unknown' })
     expect(noCwd.status).toBe(400)
@@ -680,9 +680,12 @@ describe('the row menu routes', () => {
     const again = await call<ChatSummary>(t.desk, 'POST', '/api/chats/import', { sessionId: 'ext-1', configDir: ACCOUNT_68.configDir, fork: true })
     expect(again.body.id).not.toBe(res.body.id)
 
-    // No folder here has 'ext-1' to fork: refused (a fork of one that resumes is in continue-outside.test.ts).
-    expect((await call(t.desk, 'POST', `/api/chats/${res.body.id}/messages`, { text: 'take it from here' })).status).toBe(409)
-    expect(t.all).toHaveLength(0)
+    // No folder here has 'ext-1' to fork: the fork starts fresh from a handoff of its record instead (a fork of one
+    // that resumes is in continue-outside.test.ts).
+    expect((await call(t.desk, 'POST', `/api/chats/${res.body.id}/messages`, { text: 'take it from here' })).status).toBe(200)
+    await waitFor(() => t.all.length === 1)
+    expect(t.last().options).not.toHaveProperty('forkSession', true)
+    expect(t.last().options.resume).toBeUndefined()
   })
 
   test('reveal opens an existing folder and refuses anything else', async () => {

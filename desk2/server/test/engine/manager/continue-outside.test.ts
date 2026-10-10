@@ -192,18 +192,26 @@ test('a session its account folder holds continues in place: nothing is copied',
   expect(systemTexts(t.m.listItems(chat.id)).some((s) => s.startsWith('Copied'))).toBe(false)
 })
 
-test('a session no folder on this machine has: the send is refused, the transcript says why, nothing starts', async () => {
+// It was refused with a 409 until 2026-10-10, and so was every later send: the chat was stuck for good.
+test('a session no folder on this machine has: the chat takes it over in a fresh session, the message inside the handoff', async () => {
   const w = world()
   const t = boot(w)
   const id = '5e5e5e5e-1111-4222-8333-444455556666'
   const chat = await t.m.importSession({ sessionId: id, cwd: w.cwd, title: 'Gone', configDir: w.a.configDir })
-  const err = await refusal(t.m.send(chat.id, 'carry on'))
-  const why = `No folder on this machine has session ${id}, so it cannot be resumed.`
-  expect(err.status).toBe(409)
-  expect(err.message).toBe(why)
-  expect(t.all).toHaveLength(0)
-  expect(systemTexts(t.m.listItems(chat.id))).toContain(why)
-  expect(t.m.get(chat.id).status).toBe('closed')
+  await t.m.send(chat.id, 'carry on')
+  await waitFor(() => t.all.length === 1 && t.last().sent.length === 1)
+  // One message, not the handoff and then the owner's: a handoff alone says to carry on where the old session stopped.
+  const first = JSON.stringify(t.last().sent[0])
+  expect(first).toContain('could not be reopened on this machine')
+  expect(first).toContain(id)
+  expect(first).toContain('carry on')
+  expect(t.last().options.resume).toBeUndefined()
+  expect(t.m.get(chat.id).sessionId).toBeNull()
+  // The transcript says why, and shows what the owner typed rather than the handoff around it.
+  const items = t.m.listItems(chat.id)
+  expect(systemTexts(items)).toContain(`No folder on this machine has session ${id}, so it cannot be resumed.`)
+  expect(systemTexts(items).some((s) => s.startsWith('The saved session could not be reopened on this machine'))).toBe(true)
+  expect(items.flatMap((i) => (i.kind === 'user' ? [i.text] : []))).toEqual(['carry on'])
 })
 
 test('a fork of an outside session is copied into its account folder with its sidecar, and forked there', async () => {

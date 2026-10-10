@@ -701,17 +701,21 @@ export class ChatManager {
       this.systemLine(id, 'move-dup', 'info', `That message is already being sent again on ${accountName(e.chat.account)} after the move, so it was not sent twice.`)
       return { queued: false }
     }
+    // What the SDK is sent, when it is more than the owner's own words (a takeover's handoff around them).
+    let sdk: QueuedInput | null = null
     if (!e.runtime?.running) {
       // A cold start is a new process: the tasks the last one started ended with it.
       if (this.endTasks(e)) this.changed(e.chat)
       const seeding = this.seedResume(e)
       const cannot = seeding ? await seeding : null
       if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
-      if (cannot) throw new ChatError(409, cannot)
+      // A session that cannot be reopened here is taken over by a fresh one, not refused (takeOver).
+      if (cannot) sdk = this.takeOver(e, cannot, { text, images })
     }
     if (opts.onlyIfReady && busy(e.chat)) throw new ChatBusyError()
     e.moved = undefined // a new message starts its own tries
     this.timings.sdkSent(e.chat, e.runtime?.running === true)
+    if (sdk) return this.runtimeOf(e).send(sdk.text, sdk.images, opts.messageId, text)
     return this.runtimeOf(e).send(text, images?.length ? images : undefined, opts.messageId)
   }
 
@@ -1829,25 +1833,44 @@ export class ChatManager {
    * first message is the condensed handoff built from the chat file, with the sends the old session had not
    * answered after it.
    */
-  private handoffSend(e: Entry, big: { sessionId: string; tokens: number }, why: string, sends: QueuedInput[]): QueuedInput {
+  private handoffSend(e: Entry, left: { sessionId: string; tokens: number | null }, why: string, sends: QueuedInput[]): QueuedInput {
     const chat = e.chat
     const text = buildHandoff({
       chatId: chat.id,
       title: chat.title,
       cwd: chat.cwd,
       items: this.store.loadItems(chat.id),
-      sessions: [big.sessionId, ...(e.pastSessions ?? []).slice().reverse()],
-      tokens: big.tokens,
+      sessions: [left.sessionId, ...(e.pastSessions ?? []).slice().reverse()],
+      tokens: left.tokens,
       why,
       deskUrl: this.deskUrl(),
     })
-    e.pastSessions = [...(e.pastSessions ?? []), big.sessionId]
+    e.pastSessions = [...(e.pastSessions ?? []), left.sessionId]
     chat.sessionId = null
     chat.forkedFrom = null
     e.forkAt = undefined
     const images = sends.flatMap((s) => s.images ?? [])
-    const pending = sends.length ? `\n\n## The owner's messages the old session had not answered yet\n${sends.map((s) => s.text).join('\n\n')}` : ''
+    const heading = left.tokens === null ? "The owner's message to answer now" : "The owner's messages the old session had not answered yet"
+    const pending = sends.length ? `\n\n## ${heading}\n${sends.map((s) => s.text).join('\n\n')}` : ''
     return images.length ? { text: text + pending, images } : { text: text + pending }
+  }
+
+  /**
+   * The saved session cannot be reopened on this machine (seedResume's reason): the chat leaves it for a fresh
+   * session, whose first message is a condensed handoff of its record with the owner's message in it. Without this
+   * every later send is refused with the same 409 and the chat is stuck. One message, not the handoff and then the
+   * owner's: a handoff alone says to carry on where the old session stopped, and the fresh session would do that
+   * before it read what the owner just asked. Idea from stablyai/orca's ACP "reopen takeover" (MIT); written fresh
+   * here. The old session joins pastSessions (handoffSend), the chat keeps its record. Null with no session to leave.
+   */
+  private takeOver(e: Entry, why: string, send: QueuedInput): QueuedInput | null {
+    const chat = e.chat
+    const sessionId = chat.sessionId ?? chat.forkedFrom
+    if (!sessionId) return null
+    const handoff = this.handoffSend(e, { sessionId, tokens: null }, why, [send])
+    this.systemLine(chat.id, 'takeover', 'warn', 'The saved session could not be reopened on this machine, so this chat continues in a fresh session from a condensed handoff of its record. The chat keeps its whole record.')
+    this.changed(chat)
+    return handoff
   }
 
   /** The move could not be made: the chat keeps the error state, said once and notified. */

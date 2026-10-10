@@ -712,8 +712,9 @@ ${swap.real}` }
   /**
    * Sends a message: starts the runtime when needed; queued behind a running turn. Returns whether it was queued.
    * `messageId` becomes the SDK message uuid and the user item's id (the send queue finds a delivered send by it).
+   * `shown` is what the transcript shows when the SDK is sent more than the owner typed (a takeover's handoff).
    */
-  send(text: string, images?: ImageRef[], messageId?: string): { queued: boolean } {
+  send(text: string, images?: ImageRef[], messageId?: string, shown?: string): { queued: boolean } {
     this.clearIdleTimer()
     if (!this.q) this.start()
     const before = this.chat
@@ -723,7 +724,7 @@ ${swap.real}` }
     const msg = this.input!.push({ text, images }, messageId)
     this.unanswered.push({ text, images, uuid: msg.uuid })
     this.dispatch({ type: 'userSent', now: this.now() })
-    const item: UserItem = { kind: 'user', id: msg.uuid ?? randomUUID(), ts: this.now(), text }
+    const item: UserItem = { kind: 'user', id: msg.uuid ?? randomUUID(), ts: this.now(), text: shown ?? text }
     // The SDK gets the bytes; the transcript (and so /ws and the history file) gets the cached url.
     if (images?.length) item.images = images.map((i) => toStoredImage(i))
     if (busy) {
