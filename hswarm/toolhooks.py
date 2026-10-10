@@ -44,7 +44,7 @@ LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 # Our tool names -> the Claude Code names a hook's matcher is written against. A tool with no Claude Code
 # twin (propose, fetch_output, job_*) keeps its own name, so only a "*" or explicit matcher sees it.
 CC_NAMES = {"read_file": "Read", "write_file": "Write", "edit_file": "Edit", "list_dir": "LS", "glob": "Glob", "grep": "Grep",
-            "bash": "Bash", "bash_start": "Bash", "read_url": "WebFetch"}
+            "bash": "Bash", "bash_start": "Bash", "read_url": "WebFetch", "web_search": "WebSearch"}
 
 _CACHE: dict[tuple[str, float], dict] = {}
 _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))

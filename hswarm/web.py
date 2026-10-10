@@ -1,4 +1,5 @@
-"""The `read_url` worker tool: a GET-only web read, gated per host and routed by host to ordered backends.
+"""The `read_url` worker tool: a GET-only web read, gated per host and routed by host to ordered backends; and
+`web_search`, which finds pages for it (see the web_search section: the one call here that goes to a third party).
 
 Two halves, one tool:
 
@@ -20,7 +21,7 @@ Two halves, one tool:
   github-raw, a video without subtitles, a 404) falls through without being demoted.
   HSWARM_WEB_<CHANNEL>=a,b promotes backends by hand without a code change.
 
-Nothing here calls a third-party reader service: every request goes to the host the worker asked for (or,
+Nothing in read_url calls a third-party reader service: every request goes to the host the worker asked for (or,
 for a GitHub blob, GitHub's own raw-file host).
 """
 from __future__ import annotations
@@ -53,6 +54,9 @@ FETCH_TIMEOUT_S = 30.0
 YTDLP_TIMEOUT_S = 120
 DEMOTE_S = 600  # how long a backend that just failed sits behind the others
 USER_AGENT = "hswarm-read_url/1 (GET only)"
+SEARCH_DEFAULT, SEARCH_MAX = 5, 8  # results; a worker that wants more searches again with a sharper query
+SNIPPET_CHARS = 300
+QUERY_CHARS = 400
 
 
 def policy_file() -> Path:
@@ -507,6 +511,9 @@ class WebSession:
             return f"[read_url {channel.name}/{backend}] {final}\n\n{body}"
         return "ERROR: read_url could not read it - " + ("; ".join(failures) or f"no backend of {channel.name} can run here")
 
+    async def search(self, query: str, max_results: int = SEARCH_DEFAULT) -> str:
+        return await _search(self, query, max_results)
+
     def _suspended(self, verdict: Verdict) -> str:
         self.note(verdict)
         return (f"APPROVAL NEEDED ({verdict.request['request_id']}): {verdict.reason}, so it was not fetched. The orchestrator "
@@ -628,6 +635,121 @@ async def _ytdlp(session: WebSession, url: str) -> tuple[str, str]:
 _BACKENDS = {"direct": _direct, "github-raw": _github_raw, "yt-dlp": _ytdlp}
 
 
+# ---- web_search ---------------------------------------------------------------------------------------- slop-ok(banner: matches this module's section banners)
+# The one third-party call in this module: the query goes to a search provider on the owner's own keys (Tavily
+# first, Jina when Tavily is down or keyless), through ServiceClient, so key rotation, [limits] and the egress
+# receipt are the ones `hswarm service` uses. The web policy still decides everything else: a provider whose host
+# is on the admin block list is not asked, a result on a blocked or private host is dropped, and a result on a
+# host outside web_hosts is marked, because read_url will answer it with APPROVAL NEEDED.
+
+SEARCH = Channel("search", (), ("tavily", "jina"))
+
+
+def _search_host(provider: str) -> str:
+    from .service import _base_url
+
+    spec = config.PROVIDERS[provider]
+    return urlsplit(_base_url(spec, spec["operations"]["search"])).hostname or ""
+
+
+def _search_status(backend: str) -> tuple[str, str]:
+    if not config.load_api_keys(backend):
+        return "missing", f"no {backend} key"
+    return backend_status(SEARCH.name, backend)
+
+
+async def _service_search(session: WebSession, provider: str, payload: dict) -> dict:
+    from .client import NoUsableKey
+    from .service import ServiceClient
+    from .usage import ApiError
+
+    host = _search_host(provider)
+    if any(host_matches(host, b) for b in load_policy()["block"]):
+        raise Skip(f"{host} is on the admin block list")
+    try:
+        async with ServiceClient(provider, timeout_s=FETCH_TIMEOUT_S, transport=session.transport) as client:
+            data = await client.call("search", payload)
+    except ApiError as e:
+        raise BackendFailed(f"HTTP {e.status}", demote=_worth_demoting(e.status) or e.status in (401, 402)) from e
+    except (NoUsableKey, httpx.HTTPError) as e:
+        raise BackendFailed(f"{type(e).__name__}: {e}") from e
+    if not isinstance(data, dict):
+        raise BackendFailed("the reply was not a JSON object", demote=False)
+    return data
+
+
+async def _tavily(session: WebSession, query: str, n: int) -> list[dict]:
+    data = await _service_search(session, "tavily", {"query": query, "max_results": n, "search_depth": "basic"})
+    return [{"title": r.get("title"), "url": r.get("url"), "snippet": r.get("content")} for r in data.get("results") or []]
+
+
+async def _jina(session: WebSession, query: str, n: int) -> list[dict]:
+    data = await _service_search(session, "jina", {"q": query, "num": n})
+    return [{"title": r.get("title"), "url": r.get("url"), "snippet": r.get("description") or r.get("content")}
+            for r in data.get("data") or []]
+
+
+_SEARCH_BACKENDS = {"tavily": _tavily, "jina": _jina}
+
+
+def _search_order() -> list[str]:
+    """Like order(): HSWARM_WEB_SEARCH=jina,tavily promotes by hand, then `ok` ahead of `warn`; a keyless backend is skipped."""
+    promoted = [b.strip() for b in os.environ.get("HSWARM_WEB_SEARCH", "").split(",") if b.strip() in SEARCH.backends]
+    rows = [(b, _search_status(b)[0]) for b in dict.fromkeys(promoted + list(SEARCH.backends))]
+    return [b for b, s in rows if s == "ok"] + [b for b, s in rows if s == "warn"]
+
+
+def _one_line(text, limit: int) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+async def _search(session: WebSession, query: str, max_results: int = SEARCH_DEFAULT) -> str:
+    query = _one_line(query, QUERY_CHARS)
+    if not query:
+        return "ERROR: web_search needs a query"
+    n = max(1, min(int(max_results or SEARCH_DEFAULT), SEARCH_MAX))
+    failures = []
+    for backend in _search_order():
+        try:
+            hits = await _SEARCH_BACKENDS[backend](session, query, n)
+        except Skip as e:
+            failures.append(f"{backend}: {e}")
+            continue
+        except BackendFailed as e:
+            if e.demote:
+                demote(SEARCH.name, backend)
+            failures.append(f"{backend}: {e}")
+            continue
+        return _render_hits(session, backend, query, hits[:n])
+    return "ERROR: web_search could not search - " + ("; ".join(failures) or "no search provider has a key here")
+
+
+def _render_hits(session: WebSession, backend: str, query: str, hits: list[dict]) -> str:
+    policy = load_policy()
+    lines, dropped, outside = [], 0, 0
+    for hit in hits:
+        url = str(hit.get("url") or "")
+        verdict = gate(url, session.allowed, policy)
+        if verdict.action == "deny":
+            dropped += 1  # a blocked, private or non-http result is not shown at all
+            continue
+        mark = ""
+        if verdict.action == "suspend":
+            outside += 1
+            mark = "  [outside web_hosts]"
+        lines.append(f"{len(lines) + 1}. {_one_line(hit.get('title'), 120) or '(untitled)'}\n   {url}{mark}\n"
+                     f"   {_one_line(hit.get('snippet'), SNIPPET_CHARS)}")
+    head = f"[web_search {backend}] {query!r}: {len(lines)} result(s)"
+    if dropped:
+        head += f", {dropped} dropped by the web policy"
+    body = "\n".join(lines) or "(no results)"
+    if outside:
+        body += (f"\n\n{outside} result(s) are on hosts outside this batch's web_hosts: read_url answers them with APPROVAL "
+                 "NEEDED, so use the snippet, or name the host you need in your answer.")
+    return f"{head}\n{body}"
+
+
 def report() -> dict:
     """What `hswarm web` and the doctor show: the standing policy, and which backend serves each channel right now."""
     policy = load_policy()
@@ -637,4 +759,7 @@ def report() -> dict:
         picked = order(c)
         channels[c.name] = {"hosts": list(c.hosts) or ["*"], "serves": picked[0][0] if picked else None,
                             "backends": [{"name": b, "status": s, **({"why": w} if w else {})} for b, s, w in rows]}
+    rows = [(b, *_search_status(b)) for b in SEARCH.backends]
+    channels[SEARCH.name] = {"tool": "web_search", "serves": next(iter(_search_order()), None),
+                             "backends": [{"name": b, "status": s, **({"why": w} if w else {})} for b, s, w in rows]}
     return {"policy_file": str(policy_file()), "allow": policy["allow"], "block": policy["block"], "channels": channels}

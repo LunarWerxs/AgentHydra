@@ -230,6 +230,10 @@ These match ZSwarm (ported 2026-10-03; ideas from CopilotKit's OpenBot and OpenT
 - **A web fetch connects only to the address its check accepted.** `read_url` resolves a host and refuses a
   private answer; the connection is then pinned to those addresses, so a name that answers differently the
   second time (DNS rebinding to 127.0.0.1 or a cloud metadata address) is never reached (`web.PinnedBackend`).
+- **A web search sends only its query, and its results obey the same policy.** `web_search` (the `web` preset)
+  asks Tavily, then Jina, on the owner's keys through `ServiceClient`; a provider on the admin block list is not
+  asked, blocked or private results are dropped, results outside `web_hosts` are marked, and at most 8 short results
+  come back (`web._search`).
 - **A tool-free `cc` worker gets no built-in tools** (`--tools ""`, Read only when the task attaches files), with
   the read-only denylist kept as a belt.
 - **Every worker and ask is told today's UTC date as authoritative**, right after the safety charter

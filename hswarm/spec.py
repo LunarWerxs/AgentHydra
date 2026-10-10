@@ -581,7 +581,7 @@ class Task:
         # The per-host gate lives in the api sandbox; Claude Code would take the preset as "all tools" and
         # reach the web through its own WebFetch with no gate at all, so a cc task may not ask for it.
         if self.backend == "cc" and isinstance(self.tools, (str, list)) and WEB_TOOLS & set(tool_names(self.tools)):
-            raise ValueError(f"task {self.id}: read_url (the web preset) runs only on the api backend, where its host gate lives")
+            raise ValueError(f"task {self.id}: read_url and web_search (the web preset) run only on the api backend, where the web policy lives")
         self.verify = verify.normalise(self.verify, self.id)
         self._validate_green()
         if not isinstance(self.inventory, list) or not all(isinstance(p, str) and p.strip() for p in self.inventory):
@@ -696,6 +696,7 @@ TAINTS = {
     "T": "truncated: a reply stopped at its output-token limit (finish_reason length)",
     "B": "turn budget: the turns ran out and the answer was forced with no tools",
     "C": "cap hit: the per-task cost or context ceiling stopped the worker",
+    "W": "time wall: the clock ran low and the answer was forced with no tools from what had been gathered",
 }
 
 

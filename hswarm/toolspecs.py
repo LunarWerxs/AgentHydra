@@ -13,14 +13,14 @@ PRESETS = {
     # "all" plus background shell jobs, for a task that runs a build, a test watcher or a dev server.
     # Its own preset so the measured "all" arm keeps the tool list it was benchmarked with.
     "jobs": ["read_file", "list_dir", "glob", "grep", "outline", "unfold", "write_file", "edit_file", "bash", "bash_start", "job_wait", "job_tail", "job_input", "job_kill"],
-    # read plus a GET-only web read: no write tool and no shell, so the only way out is read_url, whose
-    # every host is gated by the batch's web_hosts (web.py).
-    "web": ["read_file", "list_dir", "glob", "grep", "read_url"],
+    # read plus a GET-only web read and a web search: no write tool and no shell, so the only ways out are read_url,
+    # whose every host is gated by the batch's web_hosts, and web_search, which sends only its query (web.py).
+    "web": ["read_file", "list_dir", "glob", "grep", "read_url", "web_search"],
     "none": [],
 }
 
 # Tools whose reach goes past the sandbox roots; web.py gates them per host.
-WEB_TOOLS = {"read_url"}
+WEB_TOOLS = {"read_url", "web_search"}
 
 SPECS: dict[str, dict] = {
     "read_file": {
@@ -208,6 +208,19 @@ SPECS: dict[str, dict] = {
             "type": "object",
             "properties": {"url": {"type": "string", "description": "an absolute http(s) URL"}},
             "required": ["url"],
+        },
+    },
+    "web_search": {
+        "description": "Search the web; returns up to 5 results (max 8), each a title, URL and short snippet. Use it to find "
+                       "the pages to read with read_url. A result marked [outside web_hosts] cannot be read here: use its "
+                       "snippet, or name the host you needed in your answer.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "what to search for, as you would type it into a search engine"},
+                "max_results": {"type": "integer", "default": 5, "description": "1 to 8"},
+            },
+            "required": ["query"],
         },
     },
     # Not in any preset: agent.run_api_task adds it to every worker that has a sandbox tool, since only those

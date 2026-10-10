@@ -110,6 +110,65 @@ def writable_rule(pattern: str, cwd: Path) -> re.Pattern:
     return _glob_regex(head.as_posix().rstrip("/") + ("/" + tail if tail else ""))
 
 
+def glob_regex(pattern: str, flags: int = 0) -> re.Pattern:
+    """A pathlib-style glob as a regex over '/'-joined relative paths: `*` and `?` stay in one segment, `**` spans any."""
+    parts = [p for p in pattern.strip("/").split("/") if p not in ("", ".")]
+    rx = ""
+    for i, part in enumerate(parts):
+        last = i == len(parts) - 1
+        if part == "**":
+            rx += ".*" if last else "(?:[^/]+/)*"
+        else:
+            rx += _segment_rx(part) + ("" if last else "/")
+    return re.compile(rx or ".*", flags)
+
+
+def _segment_rx(seg: str) -> str:
+    out, i = [], 0
+    while i < len(seg):
+        c = seg[i]
+        close = seg.find("]", i + 2) if c == "[" else -1
+        if c == "*":
+            out.append("[^/]*")
+        elif c == "?":
+            out.append("[^/]")
+        elif close != -1:
+            body = seg[i + 1 : close]
+            out.append("[" + ("^" + body[1:] if body.startswith("!") else body).replace("\\", "\\\\") + "]")
+            i = close
+        else:
+            out.append(re.escape(c))
+        i += 1
+    return "".join(out)
+
+
+def glob_files(root: Path, pattern: str):
+    """The files under `root` a pathlib-style glob names, never walking into IGNORED_DIRS.
+
+    pathlib's own glob walks node_modules and .git to the bottom before t_glob drops their hits: on 2026-10-09 one
+    `**` glob in a large repo ran for about fifteen minutes. The walk starts at the pattern's literal head and stops
+    at the depth a pattern without `**` can reach."""
+    parts = [p for p in pattern.replace("\\", "/").strip("/").split("/") if p not in ("", ".")]
+    if ".." in parts:
+        raise ValueError(f"glob pattern {pattern!r} climbs out with '..'; name the folder as `path` instead")
+    cut = next((i for i, part in enumerate(parts) if any(ch in part for ch in "*?[")), len(parts))
+    base = root.joinpath(*parts[:cut])
+    if cut == len(parts):
+        if base.is_file():
+            yield base
+        return
+    reach = None if "**" in parts[cut:] else len(parts) - cut  # levels below `base` a hit can sit at
+    rx = glob_regex("/".join(parts), re.IGNORECASE if os.name == "nt" else 0)
+    for dirpath, dirnames, filenames in os.walk(base):
+        here = Path(dirpath)
+        level = len(here.relative_to(base).parts)
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS] if reach is None or level + 1 < reach else []
+        prefix = here.relative_to(root).as_posix()
+        for name in filenames:
+            if rx.fullmatch(name if prefix == "." else f"{prefix}/{name}"):
+                yield here / name
+
+
 def fix_note(command: str, output: str, cwd: str | os.PathLike) -> str:
     """The best rule-made retry for a failed bash call, as a line to append, or "" when no rule fits.
 
@@ -594,9 +653,14 @@ class Sandbox:
             cut = next((i for i, part in enumerate(parts) if any(ch in part for ch in "*?[")), len(parts))
             path, pattern = str(Path(*parts[:cut])), "/".join(parts[cut:]) or "*"
         root = self.resolve_root(path, "glob")
+        # On a thread: this is the shared server's one event loop, and a walk on it leaves every chat and the
+        # AgentHydra window unanswered until it ends (2026-10-09, port 7793 deaf for about fifteen minutes).
+        return await asyncio.to_thread(self._glob, root, pattern)
+
+    def _glob(self, root: Path, pattern: str) -> str:
         hits = []
-        for p in root.glob(pattern):
-            if any(part in IGNORED_DIRS for part in p.relative_to(root).parts[:-1]) or not p.is_file() or not self.shown("glob", p):
+        for p in glob_files(root, pattern):
+            if any(part in IGNORED_DIRS for part in p.relative_to(root).parts[:-1]) or not self.shown("glob", p):
                 continue
             try:
                 hits.append((p.stat().st_mtime, p))
@@ -699,6 +763,10 @@ class Sandbox:
 
     async def t_read_url(self, url: str) -> str:
         return await self.web.read(url)
+
+    async def t_web_search(self, query: str, max_results: int = 5) -> str:
+        return await self.web.search(query, max_results)
+
     def bash_env(self) -> dict:
         """This process's environment with its HSWARM_ENVELOPE replaced by the task's. Inheriting it as-is let a
         hswarm started from bash run at the parent's depth (max_depth never advanced) or, at a root job, with no
