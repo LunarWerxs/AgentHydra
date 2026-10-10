@@ -3,23 +3,26 @@
 // from a throwaway folder, so a broken guard empties only that. And process.env cannot be swapped for a copy, which is
 // what had left that run with no Chrome to find.
 
-import { afterEach, expect, test } from 'bun:test'
+import { afterAll, afterEach, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const back = process.cwd()
-const temps: string[] = []
+const ROOT = mkdtempSync(join(tmpdir(), 'desk-preload-'))
 
 afterEach(() => {
   process.chdir(back)
-  for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
+afterAll(() => {
+  process.chdir(back)
+  rmSync(ROOT, { recursive: true, force: true })
 })
 
 function workIn(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'desk-preload-'))
-  temps.push(dir)
+  const dir = mkdtempSync(join(ROOT, 'work-'))
   writeFileSync(join(dir, 'keep.txt'), 'keep')
   process.chdir(dir)
   return dir
@@ -36,7 +39,7 @@ test('the promise rm rejects the same way, and a remove of a folder beside it st
   const dir = workIn()
   await expect(rm('', { recursive: true, force: true })).rejects.toThrow(/folder the tests run in/)
   expect(readFileSync(join(dir, 'keep.txt'), 'utf8')).toBe('keep')
-  const other = mkdtempSync(join(tmpdir(), 'desk-preload-other-'))
+  const other = mkdtempSync(join(ROOT, 'other-'))
   rmSync(other, { recursive: true, force: true })
   expect(existsSync(other)).toBe(false)
 })
