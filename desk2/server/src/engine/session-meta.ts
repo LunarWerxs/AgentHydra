@@ -14,16 +14,32 @@ const isUnmarked = (m: SessionMeta): boolean => (Object.keys(UNMARKED) as (keyof
 
 export class SessionMetaStore {
   readonly file: string
+  readonly tombFile: string
   private readonly byId: Map<string, SessionMeta>
+  private readonly tombs: Set<string>
 
   constructor(home: string) {
     this.file = join(home, 'session-meta.json')
+    this.tombFile = join(home, 'session-tombstones.json')
     this.byId = new Map(Object.entries(this.load()))
+    this.tombs = new Set(this.loadTombs())
   }
 
   get(sessionId: string): SessionMeta | null {
     const m = this.byId.get(sessionId)
     return m ? { ...m } : null
+  }
+
+  /** The sessions of deleted chats: never listed as outside sessions again, not even after a restart. */
+  tombstoned(): string[] {
+    return [...this.tombs]
+  }
+
+  tombstone(sessionIds: string[]): void {
+    const fresh = sessionIds.filter((id) => !this.tombs.has(id))
+    if (!fresh.length) return
+    for (const id of fresh) this.tombs.add(id)
+    writeAtomic(this.tombFile, JSON.stringify([...this.tombs], null, 2))
   }
 
   /** The session ids marked pinned (the bridge keeps them listed however old). */
@@ -74,9 +90,22 @@ export class SessionMetaStore {
     return out
   }
 
-  private save(): void {
-    const tmp = `${this.file}.${process.pid}.tmp`
-    writeFlushed(tmp, JSON.stringify(Object.fromEntries(this.byId), null, 2))
-    renameOver(tmp, this.file)
+  private loadTombs(): string[] {
+    try {
+      const raw: unknown = JSON.parse(readFileSync(this.tombFile, 'utf8'))
+      return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []
+    } catch {
+      return []
+    }
   }
+
+  private save(): void {
+    writeAtomic(this.file, JSON.stringify(Object.fromEntries(this.byId), null, 2))
+  }
+}
+
+function writeAtomic(file: string, text: string): void {
+  const tmp = `${file}.${process.pid}.tmp`
+  writeFlushed(tmp, text)
+  renameOver(tmp, file)
 }

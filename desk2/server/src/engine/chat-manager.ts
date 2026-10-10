@@ -342,7 +342,7 @@ export class ChatManager {
       this.chats.set(e.chat.id, e)
     }
     // Our own chats are not "Elsewhere".
-    this.bridge.setExcludeSessionIds(() => this.sessionIds())
+    this.bridge.setExcludeSessionIds(() => [...this.sessionIds(), ...this.sessionMeta.tombstoned()])
     this.bridge.setExtraWorkerIds(() => this.workerIdsOfChats())
     // Outside sessions are listed with Hydra Desk's marks on them.
     this.bridge.setSessionMeta((list) => this.sessionMeta.apply(list), () => this.sessionMeta.pinnedIds())
@@ -1024,6 +1024,7 @@ export class ChatManager {
   async delete(id: string): Promise<void> {
     const e = this.entry(id)
     this.onChatEnd?.(this.browserSessions(id))
+    this.sessionMeta.tombstone(this.browserSessions(id))
     this.chats.delete(id)
     const rt = e.runtime
     e.runtime = null
