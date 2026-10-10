@@ -5,6 +5,7 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { installRealHomeWriteGuard } from './real-home-guard'
 
 // Child-process tests should run the exact Bun binary that is running the suite. On Windows an npm
 // install can put a quote-lossy `bun.cmd` shim earlier on PATH than bun.exe; the updater's real
@@ -15,6 +16,11 @@ process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
 
 const realTmp = os.tmpdir()
 const scratch = mkdtempSync(path.join(realTmp, 'agenthydra-test-'))
+
+// Refuse writes into the developer's REAL agent homes (~/.claude, ~/.codex, ~/.hswarm, ~/.hydra-desk-2
+// and their CLAUDE_CONFIG_DIR / CODEX_HOME). It reads those homes from the env as the developer set
+// it, so it runs before the redirects below. Reads stay allowed. See tests/real-home-guard.ts.
+installRealHomeWriteGuard({ allowed: [scratch] })
 
 // Sweep the scratches earlier runs left behind. Nothing can delete a scratch at its own exit —
 // the sqlite handle is still open when 'exit' fires, and Windows refuses to remove an open db
