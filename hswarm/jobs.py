@@ -423,9 +423,13 @@ def unservable(tasks: list[Task]) -> str | None:
 
     An evaluated-profile task is refused when its whole plan, stepped down included, has keys on this machine and
     every one is disabled (dispatch.unreachable). Asked once per profile shape, of its shortest prompt: the context
-    floor only narrows the plan, so when that task has no route, no task of the shape has one."""
+    floor only narrows the plan, so when that task has no route, no task of the shape has one.
+
+    A task CliMayte can take is never refused here: with no live leg its plan is below its floor, so
+    climayte_route.consult runs it on the owner's subscription (the refusal had sent that work to Opus sub-agents)."""
     from .dispatch import unreachable
 
+    tasks = [t for t in tasks if not climayte_route.can_take(t)]
     shortest: dict[tuple, Task] = {}
     for t in tasks:
         if t.profile:
@@ -436,7 +440,8 @@ def unservable(tasks: list[Task]) -> str | None:
     for t in shortest.values():
         if why := unreachable(t):
             return (f"NoCapableSwarmRoute: no evaluated route can take a request now - {why}. `hswarm keys` shows the "
-                    "pools; name a model whose provider has a live key, or do this work on your own model.")
+                    "pools; name a model whose provider has a live key, give the task tools and an absolute cwd so "
+                    "CliMayte can take it, or hand it to climayte_run.")
     dead = {}
     for t in tasks:
         if t.profile:
@@ -449,7 +454,7 @@ def unservable(tasks: list[Task]) -> str | None:
         return None
     return ("NoCreditLeft: nothing on this job's route can take a request now - "
             + "; ".join(f"{m}: {', '.join(legs)}" for m, legs in dead.items())
-            + ". Do this work on your own model, or run it tool-free (tools: 'none', the files inside the prompt), "
+            + ". Hand this work to climayte_run, or run it tool-free (tools: 'none', the files inside the prompt), "
               "whose route is separate. `hswarm doctor` shows routes_now.")
 
 

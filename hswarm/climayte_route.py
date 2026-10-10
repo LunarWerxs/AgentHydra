@@ -56,6 +56,34 @@ def eligible(task: Task) -> bool:
     return True
 
 
+def can_take(task: Task) -> bool:
+    """eligible, and AgentHydra's routing switch was on when last read: jobs.unservable lets such a task through."""
+    return eligible(task) and _SWITCH["on"]
+
+
+def floor_miss(task: Task) -> str | None:
+    """Why the task's own plan cannot run it at the bar it asked for, or None. A plan that stepped down
+    (`below_floor`) or has no leg left would run below its profile or not at all; Claude on the subscription meets
+    the bar, so such a task goes to CliMayte without a price comparison (sessions had been sending this work to
+    Opus sub-agents on their own quota: 9 'critical has no live key' bypasses in 3 days, 2026-10-09)."""
+    if not task.route:
+        return None
+    if not task.profile:  # a pinned route: missed only when it has keys and none can serve now
+        from .jobs import route_health
+
+        if task.backend == "api" and task.model and not route_health(task.model)["serves"]:
+            return f"no leg of {task.model} can take a request now"
+        return None
+    from .dispatch import plan_for
+
+    plan = plan_for(task)
+    if plan.get("below_floor"):
+        return f"no live route meets profile {task.profile} (the plan stepped down to {plan['below_floor']})"
+    if not plan.get("candidates"):
+        return f"no live route can take profile {task.profile}"
+    return None
+
+
 def _say(job_id: str, msg: str) -> None:
     """One line per job, whatever happens to its other tasks."""
     if job_id not in _LOGGED:
@@ -287,24 +315,35 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     """(a finished Result, None) when CliMayte served the task; (None, note) when the API route runs, the note being
     the decision to carry on its result; (None, None) when nobody was asked."""
     global _ACTIVE
-    if not eligible(task) or _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
+    if not eligible(task):
+        return None, None
+    missed = floor_miss(task)
+    if missed and _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
+        # Its own route is below its bar: worth a wait for a slot, as long as a queued worker is given to start.
+        until = asyncio.get_running_loop().time() + config.ROUTE_VIA_CLIMAYTE_START_S
+        while _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX and asyncio.get_running_loop().time() < until:
+            await asyncio.sleep(POLL_S)
+    if _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
         return None, None
     _ACTIVE += 1  # taken before any await, held from the question to the worker's end: the cap is on tasks in CliMayte's hands
     try:
         if not await switch_on():
             return None, None
-        return await _consult(job_id, task)
+        return await _consult(job_id, task, missed)
     finally:
         _ACTIVE -= 1
 
 
-async def _consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
-    doc = await decide(job_id, task)
-    if doc is None:
-        return None, None
-    note = {"provider": "climayte", "decided": doc["route"], "why": doc.get("why", "")}
-    if doc["route"] != "subscription":
-        return None, {"via": "api", "decided": "api", "why": note["why"]}
+async def _consult(job_id: str, task: Task, missed: str | None = None) -> tuple[Result | None, dict | None]:
+    if missed:
+        note = {"provider": "climayte", "decided": "subscription", "why": missed}
+    else:
+        doc = await decide(job_id, task)
+        if doc is None:
+            return None, None
+        note = {"provider": "climayte", "decided": doc["route"], "why": doc.get("why", "")}
+        if doc["route"] != "subscription":
+            return None, {"via": "api", "decided": "api", "why": note["why"]}
     res = await run_worker(job_id, task, note)
     if res is not None:
         return res, None

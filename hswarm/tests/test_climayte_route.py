@@ -270,3 +270,39 @@ def test_agenthydras_switch_off_means_no_decide_call(fake, tmp_path):
     f = fake(enabled=False)
     _, res, api = _run(tmp_path)
     assert f.decides == [] and res.answer == "api route" and api.calls == 1
+
+
+def test_a_task_whose_plan_is_below_its_floor_goes_to_climayte_without_a_price_question(fake, tmp_path, monkeypatch):
+    # No live route meets its bar, so the API side has nothing to weigh: Claude on the subscription takes it.
+    monkeypatch.setattr(climayte_route, "floor_miss", lambda task: "no live route meets profile critical")
+    f = fake(route="api")
+    _, res, api = _run(tmp_path)
+    assert f.decides == [] and len(f.dispatched) == 1 and api.calls == 0
+    assert res.answer == "worker report"
+    assert res.selection["route"]["decided"] == "subscription" and res.selection["route"]["why"] == "no live route meets profile critical"
+
+
+def test_floor_miss_reads_the_plan(monkeypatch):
+    from hswarm import dispatch
+
+    task = Task(prompt="look at it", tools="read", profile="critical")
+    monkeypatch.setattr(dispatch, "plan_for", lambda t: {"candidates": [{"model": "m"}], "below_floor": "code"})
+    assert "stepped down to code" in climayte_route.floor_miss(task)
+    monkeypatch.setattr(dispatch, "plan_for", lambda t: {"candidates": []})
+    assert climayte_route.floor_miss(task) == "no live route can take profile critical"
+    monkeypatch.setattr(dispatch, "plan_for", lambda t: {"candidates": [{"model": "m"}]})
+    assert climayte_route.floor_miss(task) is None
+
+
+def test_submit_never_refuses_a_task_climayte_can_take(fake, tmp_path, monkeypatch):
+    from hswarm import dispatch, jobs
+
+    monkeypatch.setattr(dispatch, "unreachable", lambda t: "every key disabled")
+    fake()
+    agentic = Task(prompt="look at it", id="a", tools="read", cwd=str(tmp_path), profile="critical")
+    toolfree = Task(prompt="look at it", id="b", tools="none", profile="critical")
+    assert jobs.unservable([agentic]) is None
+    refusal = jobs.unservable([agentic, toolfree])
+    assert refusal.startswith("NoCapableSwarmRoute") and "climayte_run" in refusal and "your own model" not in refusal
+    monkeypatch.setattr(climayte_route, "_SWITCH", {"at": -1e9, "on": False})  # the owner's routing switch is off
+    assert jobs.unservable([agentic]) is not None
