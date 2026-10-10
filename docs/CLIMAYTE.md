@@ -43,7 +43,14 @@ Free accounts, then CliMayte, then HSwarm's paid API (owner, 2026-10-07: "the fr
 1. **Free accounts** take tool-free work at no cost. HSwarm tries them first when `route_via_free` is on and the
    task's profile is in `route_via_free_profiles`; no idle account or a bad reply moves on to the next step.
 2. **CliMayte** takes tasks with tools on the subscription, or what free could not take, when the cost comparison
-   (`docs/COST-MODEL.md`) puts the subscription side clearly cheaper (beyond `closeRatio`).
+   (`docs/COST-MODEL.md`) puts the subscription side clearly cheaper (beyond `closeRatio`). A task whose own HSwarm
+   plan misses its bar skips the comparison (2026-10-09, `floor_miss` in `hswarm/climayte_route.py`): the plan
+   stepped down below the task's profile (`below_floor`), has no live leg, or the task's pinned model has no key that
+   can serve now. Claude on the subscription meets the bar, so such a task goes to CliMayte, waiting up to
+   `route_via_climayte_start_s` for a slot when the cap is full. Sessions had been sending this work to Opus
+   sub-agents on their own quota instead (9 "critical has no live key" bypasses in 3 days). If CliMayte does not
+   take it (the routing switch off, or no slot), it runs on its stepped-down plan, or is refused, pointing at
+   `climayte_run`, when no route can serve it at all. HSwarm's submit no longer refuses a task CliMayte could take.
 3. **The paid API** takes the rest. When the costs are close, only `routing_api_preference_pct` (default 20) of
    the calls go to the API, so that arm stays measured.
 

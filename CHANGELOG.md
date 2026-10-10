@@ -7,6 +7,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Free accounts show their plan, and tell you when one stops being free.** Each Free row now shows its plan: a
+  badge such as Go or Pro, or a small gift icon when it is free, for Claude accounts as well as ChatGPT. When an
+  account moves between free and paid, its row is marked and you get a desktop notification, and its menu offers to
+  promote it to a CLI, Desktop or Codex instance.
+- **Two HSwarm tasks no longer land on the same Free account.** When AgentHydra was slow to say which Free accounts
+  were idle, two tasks could both be sent to the one idle account. Each task now counts the other's send.
+- **HSwarm hands CliMayte the work its own models cannot do well enough.** A task whose cheaper routes all fall short
+  of the quality it asked for now goes straight to your Claude subscription, instead of running on a weaker model or
+  being refused. It is refused only when no route at all could run it.
 - **An HSwarm task that runs out of time hands back an answer.** A task that hit its time limit used to come back
   as a list of the tool calls it made, about 800 tasks and $114 a week. Now the end of its time is kept for one last
   turn that writes the answer from what it found, marked `W` so you can tell.

@@ -675,6 +675,19 @@ accounts"): its hover leads with the account's address and a click copies it. Ev
 (`account_email`, from Claude's `/api/account` or ChatGPT's session) into the account's `email`; a log out clears it.
 Claude reports no usage for a free account until it sends a message, so such a row says "No reading yet".
 
+**Each row shows its plan** (owner, 2026-10-09: "check its status ... have a little free icon for the free ones ...
+If they change to not free, I guess let me know ... promote them"). Every usage read keeps the account's `plan`:
+ChatGPT's from its session, Claude's from its organization's capabilities (`claude_max` Max, `claude_pro` Pro,
+`raven` Team, `enterprise` Enterprise, only `chat` Free; `server/src/free-instances/harness/claudfree/usage.py`). A paid plan shows as a
+badge after the name, Free as a small gift icon. A move across the free/paid line (Go counts as paid) marks the row
+"Now on Pro" or "Back on Free" and broadcasts a `notice` event, which the window shows as a desktop notification
+when its notifications are on (`notePlan` in `server/src/free-instances/service.ts`, `plugins/55-free-instances.ts`).
+A first reading that is already paid is told too; a row read before plans were kept starts from its last reading, so
+an update does not flag every Go account at once. The row's menu then offers **Promote to CLI or Desktop…** (Claude)
+or **Promote to a Codex instance…** (ChatGPT), which opens the New CLI or New Codex dialog (a CLI or Codex login
+needs a person's own sign-in, so nothing promotes itself), and **Dismiss plan change**
+(`POST /api/free/instances/:id/plan-seen`). A log out forgets the plan.
+
 **Desk keeps the readings current itself** (owner, 2026-10-06: the 5-hour and week cells "keep spinning every
 time I view the page"; `server/src/free-instances/refresh.ts`). One read a minute, from 90 s after Desk starts,
 of the most overdue account: a login never checked first, then a login checked over an hour ago, or over 15

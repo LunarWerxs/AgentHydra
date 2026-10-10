@@ -181,7 +181,10 @@ task took 16 s at the median and 42 s at the 90th percentile against about 3 s o
 would make a burst's overflow 5-10x slower to save a fraction of a cent a task, and under steady load the accounts
 are full anyway. A ChatGPT account the daemon has paced out of new chats (`server/src/mcp-free.ts`) counts as busy.
 A live burst of 22 tasks ran 11 on Free accounts at once (job `20261009-000737-6a7e`); the fixed cap of 6 at a time
-before it had turned away about 2,800 eligible tasks in a day. `selection.route` shows the route a task took (`via: free`), the
+before it had turned away about 2,800 eligible tasks in a day. `free_status` cannot show a task sent moments ago, so
+a task subtracts from the idle count every still-running task this process sent from 2 s before it asked for its
+snapshot onward, however long that read took: counted from the answer instead, a slow read (up to 5 s) let two tasks
+take one idle account (2026-10-09). `selection.route` shows the route a task took (`via: free`), the
 ledger line says provider `free`. Order: free accounts first, then CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
 
 `hswarm_decide`'s escalations take this route one question per message. Putting all of one state's open questions in
@@ -201,6 +204,13 @@ not already inside a CliMayte worker (`AGENTHYDRA_CLIMAYTE_WORKER`). On `subscri
 answer. No answer within 2 s, any error, or a failed or cancelled worker keeps the API route (a failed worker falls back
 once). The route and the decision's reason are in the result's `selection.route`; the ledger line says provider
 `climayte`.
+
+A task whose own plan misses its bar is not priced at all (2026-10-09, `floor_miss`): its plan stepped down below its
+profile (`below_floor`) or has no live leg, or its pinned model has no key that can serve now. It goes to CliMayte,
+which meets the bar, waiting up to `route_via_climayte_start_s` for a slot when `route_via_climayte_max` is full; its
+`selection.route` says `decided: subscription` and why. If CliMayte does not take it, it runs on its stepped-down plan,
+or errors (pointing at `climayte_run`) when no route can serve it at all. `hswarm_run` refuses up front only the tasks
+CliMayte could not take either.
 
 The decision is AgentHydra's cost model (`docs/COST-MODEL.md`), changed on Hydra Desk 2's Routing page (AgentHydra
 pane, HSwarm tab, Routing) or with `PUT /api/routing/settings`. AgentHydra's routing switch is the main one;
@@ -317,6 +327,8 @@ export HSWARM_HOME=/custom/path
 export HSWARM_PORT=7793
 ```
 
-Run the tests with `python -m pytest hswarm/tests -q` from the repository root.
+Run the tests with `python -m pytest hswarm/tests -q` from the repository root. Tests that call real providers are
+marked `live` and skipped by default (`addopts` in `pyproject.toml`): on Windows a hung network call made
+pytest-timeout end the whole run. Run them with `-m live`; each call is bounded at 90 s.
 
 </details>
