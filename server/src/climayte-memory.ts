@@ -52,9 +52,14 @@ const LEARN_SAMPLE = 30
 /** Free RAM a start must leave: 8% of the machine, fairjob's floor (exit 75; 20% never opened on a
  *  busy box, 2026-09-25). */
 export const FREE_FLOOR_SHARE = 0.08
-/** Commit a start must leave on Windows: 5% of the limit. Past the limit allocations fail outright,
- *  so this floor guards crashes where the RAM floor guards speed. */
-export const COMMIT_FLOOR_SHARE = 0.05
+/** Commit a start must leave on Windows: 12% of the limit. Past the limit allocations fail outright,
+ *  so this floor guards crashes where the RAM floor guards speed. It is a reserve for everything
+ *  ALREADY running, which keeps growing after a start: at 5% (2026-10-09, owner's PC, 49 workers
+ *  beside desktop sessions holding 60 GB private and fairjob training holding 40 GB) commit reached
+ *  187.2 of 188.4 GB, renders died with 0xC0000142 four times an hour and fairjob runs queued 10+
+ *  minutes. 12% (22.6 GB there) holds the next start sooner; fairjob keeps its own 5% floor, so the
+ *  owner's own runs still start after CliMayte has stopped adding workers. */
+export const COMMIT_FLOOR_SHARE = 0.12
 /** A worker that started this recently is still growing: it reserves what it has yet to grow. */
 export const RAMP_MS = 120_000
 

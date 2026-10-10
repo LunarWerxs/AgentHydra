@@ -48,12 +48,12 @@ describe('memoryShort: a growing worker reserves only what it has left to grow',
     // floor 3.83 GB, need 0.45 GB
     expect(memoryShort(box(4.2), none)).toContain('RAM free')
     expect(memoryShort(box(4.4), none)).toBeNull()
-    // commit: 5% of 100 GB = 5 GB, a worker commits 0.75 GB however much RAM there is
-    expect(memoryShort(box(40, 47.9, { left: 5.5, limit: 100 }), none)).toContain('commit limit')
-    expect(memoryShort(box(40, 47.9, { left: 6, limit: 100 }), none)).toBeNull()
+    // commit: 12% of 100 GB = 12 GB, a worker commits 0.75 GB however much RAM there is
+    expect(memoryShort(box(40, 47.9, { left: 12.5, limit: 100 }), none)).toContain('commit limit')
+    expect(memoryShort(box(40, 47.9, { left: 13, limit: 100 }), none)).toBeNull()
     // the commit check stays on private bytes for every recent worker, grown or not
     expect(
-      memoryShort(box(40, 47.9, { left: 8, limit: 100 }), {
+      memoryShort(box(40, 47.9, { left: 15, limit: 100 }), {
         expectedBytes: DEFAULT_GROWN_BYTES,
         sets: sets(4, 0.45),
       }),
