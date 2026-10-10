@@ -1,6 +1,42 @@
 import { spawn } from 'node:child_process'
+import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { resolveCodexExe } from '../config'
+
+// ONE APP-SERVER PER CODEX HOME AT A TIME. A Codex login is <codexHome>/auth.json, and its refresh
+// token ROTATES: each refresh spends the old token and saves a new one. Two app-servers on one home
+// (the usage refresh and a chat move, say) can both refresh with the same token, and the loser's
+// write leaves a token the server has already retired: the account is signed out until someone signs
+// in again. So the connections this daemon opens on one home take turns, each holding it from spawn
+// until its process has closed. A Codex Desktop or CLI the person runs on that home is not ours to
+// queue (codex-logout.ts names the same gap). Idea from stablyai/orca's
+// src/main/codex-cli/codex-home-process-lock.ts (MIT).
+const homeTurns = new Map<string, Promise<void>>()
+
+function homeKey(codexHome: string): string {
+  const full = resolve(codexHome)
+  return process.platform === 'win32' ? full.toLowerCase() : full
+}
+
+/** Waits for this home's earlier connections to close; answers the release for this one (idempotent). */
+async function takeHomeTurn(codexHome: string): Promise<() => void> {
+  const key = homeKey(codexHome)
+  const before = homeTurns.get(key) ?? Promise.resolve()
+  let release!: () => void
+  const mine = new Promise<void>((done) => {
+    release = done
+  })
+  const tail = before.then(() => mine)
+  homeTurns.set(key, tail)
+  await before
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    release()
+    if (homeTurns.get(key) === tail) homeTurns.delete(key)
+  }
+}
 
 /** Short-lived, local app-server connection. It never starts a model turn. */
 export interface CodexRpc {
@@ -13,12 +49,24 @@ export async function connectCodexRpc(
   options: { command?: string[]; timeoutMs?: number } = {},
 ): Promise<CodexRpc> {
   const command = options.command ?? [resolveCodexExe(), 'app-server']
-  const child = spawn(command[0]!, command.slice(1), {
-    env: { ...process.env, CODEX_HOME: codexHome },
-    cwd: codexHome,
-    stdio: ['pipe', 'pipe', 'ignore'],
-    windowsHide: true,
-  })
+  const releaseHome = await takeHomeTurn(codexHome)
+  const child = (() => {
+    try {
+      return spawn(command[0]!, command.slice(1), {
+        env: { ...process.env, CODEX_HOME: codexHome },
+        cwd: codexHome,
+        stdio: ['pipe', 'pipe', 'ignore'],
+        windowsHide: true,
+      })
+    } catch (error) {
+      releaseHome()
+      throw error
+    }
+  })()
+  // The home is held until the process is gone, not until close() is called: a refresh it started
+  // can still be writing auth.json while it shuts down.
+  child.once('close', releaseHome)
+  child.once('error', releaseHome)
   let nextId = 0
   let closed = false
   let closing = false

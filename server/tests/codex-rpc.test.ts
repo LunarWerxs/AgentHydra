@@ -89,3 +89,24 @@ test('Codex RPC times out and closes the connection', async () => {
     await rpc.close()
   }
 }, 20_000)
+
+// A Codex refresh token rotates: two app-servers refreshing one home can sign the account out. The
+// daemon's own connections to a home take turns; other homes never wait.
+test('connections to one Codex home take turns, other homes do not wait', async () => {
+  const a = fixture()
+  const b = fixture()
+  const first = await connectCodexRpc(a.home, { command: a.command })
+  let secondOpen = false
+  const second = connectCodexRpc(a.home, { command: a.command }).then((rpc) => {
+    secondOpen = true
+    return rpc
+  })
+  const other = await connectCodexRpc(b.home, { command: b.command })
+  await Bun.sleep(300)
+  expect(secondOpen).toBe(false)
+  await first.close()
+  const rpc = await second
+  expect(secondOpen).toBe(true)
+  await rpc.close()
+  await other.close()
+}, 20_000)
