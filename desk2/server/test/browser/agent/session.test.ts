@@ -27,22 +27,18 @@ async function versionOf(port: number): Promise<{ webSocketDebuggerUrl?: string 
 }
 
 // Chrome releases its profile files several seconds after Browser.close answers, so every folder is closed first and removal waits on one shared deadline.
-async function removeWhenUnlocked(dir: string, until: number): Promise<void> {
+afterAll(async () => {
+  await Promise.all(folders.map((dir) => closeBrowser(dir).catch(() => false)))
+  const until = Date.now() + 40_000
   for (;;) {
     try {
-      rmSync(dir, { recursive: true, force: true })
+      rmSync(ROOT, { recursive: true, force: true })
       return
     } catch (e) {
       if (Date.now() > until) throw e
       await new Promise((r) => setTimeout(r, 200))
     }
   }
-}
-
-afterAll(async () => {
-  await Promise.all(folders.map((dir) => closeBrowser(dir).catch(() => false)))
-  const until = Date.now() + 40_000
-  await removeWhenUnlocked(ROOT, until)
 }, 120_000)
 
 describe('browser session endpoint', () => {
