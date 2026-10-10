@@ -11,6 +11,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   QuickDictate and the games server, so a busy PC ran dozens of each and ran short of memory. AgentHydra now runs one
   copy and every session connects to it through the daemon, and the original entries are kept so turning it off
   restores them. The CLI accounts that workers and Desk chats run on use the shared copy too.
+- **A task that lands on a signed-out account moves on at once.** A CliMayte task that bounced off an account whose
+  login had expired could wait for another account's pace before starting again. It now starts on the next account
+  with room in the same moment, and the signed-out account is used again only after its login changes.
 - **Choose which accounts AgentHydra uses first, and how much of each.** In the CLI table, an account's menu now
   has **Priority and caps**: set it to Top, High, Normal or Low, and cap how much of its 5-hour and weekly usage
   AgentHydra may use (for example 50% and 50%). New work goes to the highest-priority account it fits, AgentHydra
