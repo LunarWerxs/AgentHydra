@@ -62,7 +62,11 @@ function fakeRedesign(): Fake {
 describe('redesign connector', () => {
   let tmp: string
   let fake: Fake
-  const saved = { ...process.env }
+  // Only the keys these tests change are put back. Assigning a copy back to process.env (as this did until
+  // 2026-10-10) left later files with a plain object holding Bun's upper-cased Windows keys, so
+  // process.env.ProgramFiles read undefined, findChrome found no Chrome and six browser test files failed.
+  const KEYS = ['REDESIGN_HOME', 'REDESIGN_EXE', 'REDESIGN_URL', 'PORT'] as const
+  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
 
   beforeAll(() => {
     tmp = mkdtempSync(join(tmpdir(), 'redesign-test-'))
@@ -70,7 +74,10 @@ describe('redesign connector', () => {
   })
   afterAll(() => {
     fake.server.stop(true)
-    process.env = saved
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
     rmSync(tmp, { recursive: true, force: true })
   })
 

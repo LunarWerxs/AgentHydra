@@ -1,0 +1,4 @@
+# Every `bun test` run from this folder (the server, web and hydra suites) loads server/test/preload.ts first: it
+# refuses a remove of the folder the suite runs in, which Bun on Windows does for rmSync('') (2026-10-10).
+[test]
+preload = ["./server/test/preload.ts"]
