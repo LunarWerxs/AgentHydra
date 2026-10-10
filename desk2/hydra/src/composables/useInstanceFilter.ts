@@ -115,7 +115,7 @@ export type KindView = (typeof KIND_VIEWS)[number]
  *  and "Instances" read as the one that was on. */
 const kindView = useStorage<KindView>(`${KEY}.kindView`, 'all')
 
-/** The header's search box. Not stored: a search is for now, and an old one left in place would hide
+/** The header's search box. Not stored: a search is for this visit only, and an old one left in place would hide
  *  rows the next time the tab opens with nothing on screen to say why but the box. */
 const searchQuery = ref('')
 const terms = computed(() => searchTerms(searchQuery.value))

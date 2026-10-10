@@ -322,7 +322,7 @@ export function pickFreeAccount(
   busy: ReadonlySet<string>,
   want: { account?: number; provider?: Provider },
 ): FreeInstance | null {
-  // A paced account is busy for now, not ineligible: the task waits for its next send, never fails for it.
+  // A paced account is busy until its next send, not ineligible: the task waits for that send, never fails for it.
   const free = eligibleAccounts(instances, want).filter(
     (i) => !busy.has(i.id) && (want.account != null || !pacedOut(i)),
   )
