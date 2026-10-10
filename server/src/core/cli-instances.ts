@@ -29,6 +29,8 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import { ownerClaudeDir } from '../climayte-core'
+import { syncOwnerClaude } from '../climayte-owner-sync'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
 import type { AccountPlacement, CliInstance, CliLimitResetResult, UsageSnapshot } from '../types'
 import { pinHaikuModel } from './haiku-pin'
@@ -74,7 +76,9 @@ function userHome(): string {
  * carried five, so a session launched into it silently had none of the tooling every other session
  * on that machine had. It looked healthy and was blind — the worst shape for a bug to take.
  *
- * Only `mcpServers` is copied. NOT logins, NOT `projects` trust (that is `ensureProjectTrusted`'s job,
+ * Only `mcpServers` is copied here. CLAUDE.md and skills are NOT copied by this seed: they are synced
+ * by syncOwnerClaude (climayte-owner-sync.ts), which launchCliInstance runs before every launch.
+ * NOT logins, NOT `projects` trust (that is `ensureProjectTrusted`'s job,
  * per-folder and deliberate), NOT onboarding state — login stays the user's step. Best-effort by
  * design: a machine with no `~/.claude.json`, or an unreadable one, just yields an unseeded instance,
  * which is exactly today's behaviour.
@@ -983,6 +987,13 @@ export function launchCliInstance(id: string, opts: LaunchOpts = {}): CMActionRe
       message: optionError,
       data: { id },
     }
+
+  // The owner's global CLAUDE.md and skills go into the account folder before the terminal opens, so
+  // the owner's own `claude` on this account gets the rules a CliMayte worker gets (the same sync as
+  // climayte-launch.ts). Credit: the per-account profile that shares the owner's commands, skills and
+  // CLAUDE.md is an idea from stablyai/orca's claude-accounts (MIT). syncOwnerClaude never throws: a
+  // failed sync is logged there and the launch goes on. No owner dir (turned off, or tests) is no sync.
+  if (ownerClaudeDir) syncOwnerClaude(ownerClaudeDir, rec.configDir)
 
   const exe = resolveClaudeExe()
   const claudeArgs: string[] = []
