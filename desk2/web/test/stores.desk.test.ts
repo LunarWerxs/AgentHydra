@@ -1,21 +1,31 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'bun:test'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'bun:test'
 
-// Mock DOM globals
-if (typeof document === 'undefined') {
-  ;(global as any).document = {
-    title: 'Hydra Desk',
-    hidden: false
+// Mock DOM globals, for this file only: left behind, a `document` with no documentElement breaks the
+// next file in the process that boots the i18n (hydra/src/i18n reads documentElement.lang).
+// The hooks sit in the describe below: a file-level afterAll did not run before the next file loaded.
+const mockedGlobals: string[] = []
+const mockDomGlobals = () => {
+  if (typeof document === 'undefined') {
+    ;(global as any).document = {
+      title: 'Hydra Desk',
+      hidden: false
+    }
+    mockedGlobals.push('document')
+  }
+  if (typeof window === 'undefined') {
+    ;(global as any).window = {
+      location: {
+        protocol: 'http:',
+        host: 'localhost:4796'
+      },
+      addEventListener: vi.fn(),
+      focus: vi.fn()
+    }
+    mockedGlobals.push('window')
   }
 }
-if (typeof window === 'undefined') {
-  ;(global as any).window = {
-    location: {
-      protocol: 'http:',
-      host: 'localhost:4796'
-    },
-    addEventListener: vi.fn(),
-    focus: vi.fn()
-  }
+const unmockDomGlobals = () => {
+  for (const name of mockedGlobals.splice(0)) delete (global as any)[name]
 }
 import { ref } from 'vue'
 import { useDesk } from '@/stores/desk'
@@ -65,6 +75,9 @@ const mockFetch = vi.fn((path: string, init?: RequestInit) => {
 
 describe('useDesk store', () => {
   let mockWs: MockWebSocket | null = null
+
+  beforeAll(mockDomGlobals)
+  afterAll(unmockDomGlobals)
 
   beforeEach(() => {
     // Mock global fetch and WebSocket
