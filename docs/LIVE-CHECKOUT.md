@@ -7,6 +7,11 @@ keep editing the working checkout, `app/`. (Why: field notes 74 and 75 in
 [CLIMAYTE-FIELD-NOTES.md](CLIMAYTE-FIELD-NOTES.md). A restart once loaded a half-written file and every
 queue upload failed.)
 
+All work happens on `main`. The `live` branch is only the name git needs for a second folder on the same
+repository (two worktrees cannot check out one branch). It never holds a commit of its own: it is `main`, or
+a few commits behind it. Never open a chat with `live/` as its folder. A chat there edits `live/` and blocks
+the updater (2026-10-10).
+
 ## What runs where
 
 | What | Runs from | Notes |
@@ -48,6 +53,12 @@ dashboard keeps its log open), `-Apply` stops before the move, names the process
 2. Then either let the updater take it (Settings, or auto-update: `git pull --ff-only origin main` in
    `live/`, `bun install`, then `bun install` and `bun run build` in `live/desk2`, restart), or rerun
    `-Apply`, which pulls and builds the same way, then the restart step above.
+3. If `live/` already has the commit but the daemon started before it (`GET /api/health` shows
+   `restartNeeded: true`, `bootCommit` older than `diskCommit`), restart it in place with
+   `POST /api/daemon/restart` (the app header's Restart). The new daemon starts first and takes over the
+   same port; CliMayte workers under their runners keep going and the new daemon picks them up (50 ran
+   through one on 2026-10-10). It answers 409 while a worker runs inside the daemon itself or a chat move
+   is in flight. The auto-update loop waits for running work on its own.
 
 Never edit files in `live/`. If it has local edits, `-Plan` reports a problem and the updater refuses
 the pull.
