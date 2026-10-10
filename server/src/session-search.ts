@@ -114,6 +114,19 @@ function buildMatcher(opts: SearchOptions): Matcher {
   }
 }
 
+/** Where the first of `words` (lowercased, as the index splits them) appears, case-insensitively. */
+function anyWordMatcher(words: string[]): Matcher {
+  return (haystack: string) => {
+    const h = haystack.toLowerCase()
+    let first = -1
+    for (const w of words) {
+      const at = h.indexOf(w)
+      if (at >= 0 && (first < 0 || at < first)) first = at
+    }
+    return first
+  }
+}
+
 /** Streams a file's lines with constant memory via Bun's native ReadableStream, decoding and
  *  splitting on '\n' manually (mirrors dispatch.ts's `for await (const chunk of proc.stdout)`
  *  pump idiom, different source, same shape). Never buffers the whole file into memory.
@@ -586,16 +599,25 @@ async function searchViaIndex(
   const coverage = searchIndexCoverage(files)
   const ready = coverage.covered / files.length >= INDEX_READY_RATIO
   if (!ready) warmIndexInBackground(files)
-  const candidates = ready
-    ? searchIndexCandidates(query, { regex: opts.regex, source: opts.source })
+  const answer = ready
+    ? searchIndexCandidates(query, {
+        regex: opts.regex,
+        source: opts.source,
+        exact: opts.caseSensitive,
+      })
     : null
-  if (!candidates) return null
+  if (!answer) return null
+  const candidates = answer.keys
+  // A looser rung answered (all the words apart, a typo the index spells otherwise, any word): none
+  // of these sessions need hold the phrase, so the substring matcher would throw every one away.
+  // Their snippets are read for the words that answered instead, and the response says so.
+  const fileMatcher = answer.relaxed ? anyWordMatcher(answer.relaxed.words) : matcher
 
   const hits = files
     .filter((f) => candidates.has(dedupeKey(f)))
     .slice(0, Math.max(0, limit - found.length))
   const outcomes = await pooledMap(hits, CONCURRENCY, (tf) =>
-    searchOneFile(tf, matcher, perFileLimit, deadline),
+    searchOneFile(tf, fileMatcher, perFileLimit, deadline),
   )
   let ranOut = false
   for (const o of outcomes) {
@@ -615,6 +637,7 @@ async function searchViaIndex(
     filesSearched: files.length,
     filesTotal: files.length,
     budgetMs,
+    ...(answer.relaxed ? { relaxed: answer.relaxed } : {}),
   }
 }
 

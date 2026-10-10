@@ -22,6 +22,7 @@ import {
   DEFAULT_CODEX_INSTANCE_ID,
   deleteCodexInstance,
 } from '../src/core/codex-instances'
+import { refreshSearchIndex } from '../src/search-index'
 import { searchSessionBodies } from '../src/session-search'
 import { listSessions } from '../src/sessions'
 import {
@@ -281,6 +282,24 @@ test(
     await indexReady()
     const found = await searchSessionBodies({ query: NEEDLE, instance: NAME, limit: 10 })
     expect(found.results.some((r) => r.session_id === LIVE_ID)).toBe(true)
+  },
+  SWEEP_TIMEOUT_MS,
+)
+
+// The index answers a query whose words are all there but not as the phrase (search-index.ts's ladder).
+// The transcripts it names were then re-read with the PHRASE's substring matcher, which threw every one
+// of them away: the ladder found sessions and the search still came back empty.
+test(
+  'search_sessions finds the words apart when no session has the phrase, and says so',
+  async () => {
+    await indexReady()
+    // The conversation index, warm over every transcript in scope, as a search's background pass leaves it.
+    // Only this instance's: the developer's own stores are in the list too, and indexing them is minutes.
+    await refreshSearchIndex(listTranscriptFiles().filter((f) => instanceScopeMatches(f, NAME)))
+    const [word, tail] = NEEDLE.split('-') as [string, string]
+    const found = await searchSessionBodies({ query: `${tail} ${word}`, instance: NAME, limit: 10 })
+    expect(found.results.some((r) => r.session_id === LIVE_ID)).toBe(true)
+    expect(found.relaxed).toEqual({ rung: 'all-words', words: [tail, word] })
   },
   SWEEP_TIMEOUT_MS,
 )

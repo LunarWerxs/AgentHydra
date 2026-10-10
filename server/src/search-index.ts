@@ -40,6 +40,7 @@ import { open as open_ } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import { dedupeKey } from './session-locator'
+import { isCodexInjectedUserText } from './transcript'
 import type { SearchIndexStatus, SessionSource } from './types'
 
 let indexPath = join(DATA_DIR, 'search-index.db')
@@ -144,12 +145,33 @@ function open(): Database | null {
     db.exec(
       "create virtual table if not exists conv using fts5(body, tokenize='unicode61', content='', contentless_delete=1)",
     )
+    // The index's own word list, read-only. Typo repair suggests only words this returns, so a
+    // suggestion can never be a word the index does not hold.
+    db.exec("create virtual table if not exists conv_vocab using fts5vocab(conv, 'row')")
     if (version !== SCHEMA_VERSION) {
       db.exec('delete from conv')
       db.query('insert or replace into meta (k, v) values (?, ?)').run(
         'schema',
         String(SCHEMA_VERSION),
       )
+    }
+    // Until 2026-10-10 a Codex rollout was recorded with none of its words (only Claude's lines were
+    // read), so the index claimed Codex sessions it could never match. Those rows are dropped once;
+    // the next refresh reads them again. Claude's rows are kept: a full rebuild would re-read them all.
+    if (
+      (db.query('select v from meta where k = ?').get('codex_text') as { v?: string } | null)?.v !==
+      '1'
+    ) {
+      const conn = db
+      conn.transaction(() => {
+        const dropSegments = conn.query('delete from conv where rowid >= ? and rowid < ?')
+        for (const { rowid } of conn
+          .query("select rowid from doc where source = 'codex'")
+          .all() as Array<{ rowid: number }>)
+          dropSegments.run(rowid * SEGMENT_STRIDE, (rowid + 1) * SEGMENT_STRIDE)
+        conn.exec("delete from doc where source = 'codex'")
+        conn.query('insert or replace into meta (k, v) values (?, ?)').run('codex_text', '1')
+      })()
     }
     return db
   } catch {
@@ -184,11 +206,33 @@ function pushConversationLine(line: string, out: string[]): void {
     let ev: {
       type?: string
       message?: { content?: unknown }
+      payload?: { type?: string; role?: string; content?: unknown }
     }
     try {
       ev = JSON.parse(line)
     } catch {
       return // partial trailing write, or a record we do not understand
+    }
+    // A Codex rollout says it as `response_item` messages: input_text from the person, output_text back.
+    // The runtime's own context, sent as user-role blocks, is left out as the transcript view leaves it out.
+    if (ev.type === 'response_item') {
+      const p = ev.payload
+      if (
+        p?.type !== 'message' ||
+        (p.role !== 'user' && p.role !== 'assistant') ||
+        !Array.isArray(p.content)
+      )
+        return
+      for (const block of p.content) {
+        if (block?.type !== 'input_text' && block?.type !== 'output_text') continue
+        if (
+          typeof block.text !== 'string' ||
+          (p.role === 'user' && isCodexInjectedUserText(block.text))
+        )
+          continue
+        out.push(block.text)
+      }
+      return
     }
     if (ev.type !== 'user' && ev.type !== 'assistant') return
     const content = ev.message?.content
@@ -240,19 +284,32 @@ export function queryUsableByIndex(query: string, regex: boolean | undefined): b
   return query.trim().length > 0
 }
 
-/** Turn a user's plain search into an FTS5 MATCH expression, safely.
- *
- *  Everything that is not a word character becomes a separator, and the whole thing is quoted as
- *  ONE phrase — so "rate limit" means the words adjacent in that order, which is what someone
- *  typing it into a search box means. Quoting also makes FTS5 operator syntax (`OR`, `NEAR`, `*`,
- *  `-`) inert rather than a parse error or a surprise. */
-export function toMatchExpression(query: string): string | null {
-  const words = query
+/** The query's words: lowercased, with every non-word character a separator. Every rung of the
+ *  search ladder builds from this one split, so the rungs cannot disagree about what the words are. */
+function queryWords(query: string): string[] {
+  return query
     .toLowerCase()
     .split(/[^\p{L}\p{N}_]+/u)
     .filter(Boolean)
+}
+
+/** Each word as its own quoted token, so FTS5 operator syntax inside a word stays inert. */
+const quoteWord = (word: string) => `"${word}"`
+
+/** The words as ONE adjacent phrase: the first rung, so "rate limit" still means those words in
+ *  that order and an exact phrase keeps its ranking. */
+const phraseOf = (words: string[]) => `"${words.join(' ')}"`
+
+/** Turn a user's plain search into the FTS5 MATCH expression for its phrase, safely.
+ *
+ *  Everything that is not a word character becomes a separator, and the whole thing is quoted as
+ *  ONE phrase. Quoting also makes FTS5 operator syntax (`OR`, `NEAR`, `*`, `-`) inert rather than a
+ *  parse error or a surprise. searchIndexCandidates falls back to the looser rungs when this finds
+ *  nothing. */
+export function toMatchExpression(query: string): string | null {
+  const words = queryWords(query)
   if (words.length === 0) return null // nothing but punctuation: the index cannot help
-  return `"${words.join(' ')}"`
+  return phraseOf(words)
 }
 
 export interface IndexRefreshResult {
@@ -600,32 +657,135 @@ export async function refreshSearchIndex(
   return result
 }
 
+const andOf = (words: string[]) => words.map(quoteWord).join(' AND ')
+const orOf = (words: string[]) => words.map(quoteWord).join(' OR ')
+
+/** Session keys whose conversation matches one MATCH expression, optionally from one source. */
+function keysMatching(conn: Database, match: string, source?: SessionSource): Set<string> {
+  const rows = conn
+    .query(
+      source
+        ? 'select d.key as key from conv c join doc d on d.rowid = c.rowid / 65536 where conv match ? and d.source = ?'
+        : 'select d.key as key from conv c join doc d on d.rowid = c.rowid / 65536 where conv match ?',
+    )
+    .all(...(source ? [match, source] : [match])) as Array<{ key: string }>
+  return new Set(rows.map((r) => r.key))
+}
+
+/** Edit distance between two words, two rows at a time: words are short, so this is cheap. */
+function levenshtein(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]
+    for (let j = 1; j <= b.length; j++) {
+      const subst = prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, subst)
+    }
+    prev = cur
+  }
+  return prev[b.length]
+}
+
+/** How alike a typo and a word must be, as 1 - distance / longer length. 0.8 is one wrong letter in
+ *  a five-letter word, and one in a four-letter word is too many to guess at. */
+const TYPO_MIN_SIMILARITY = 0.8
+
+/** The closest word the index itself holds to `word`, or null. Candidates share its first letter
+ *  and are within two letters in length, which keeps the vocabulary scan small. */
+function closestIndexedWord(conn: Database, word: string): string | null {
+  const head = word.codePointAt(0) ?? 0
+  const rows = conn
+    .query(
+      'select term, doc from conv_vocab where term >= ? and term < ? and length(term) between ? and ? and doc > 0',
+    )
+    .all(
+      String.fromCodePoint(head),
+      String.fromCodePoint(head + 1),
+      word.length - 2,
+      word.length + 2,
+    ) as Array<{ term: string; doc: number }>
+  let best: { term: string; score: number; doc: number } | null = null
+  for (const { term, doc } of rows) {
+    const score = 1 - levenshtein(word, term) / Math.max(word.length, term.length)
+    if (score < TYPO_MIN_SIMILARITY) continue
+    // Ties go to the word more sessions use: a typo of "tests" is more likely "test" than "texts".
+    if (!best || score > best.score || (score === best.score && doc > best.doc)) {
+      best = { term, score, doc }
+    }
+  }
+  return best?.term ?? null
+}
+
+/** The words with each one the index has no postings for swapped for its closest indexed word, or
+ *  null when nothing needed or could be swapped. */
+function repairedWords(conn: Database, words: string[]): string[] | null {
+  let changed = false
+  const out = words.map((word) => {
+    if (conn.query('select 1 from conv where conv match ? limit 1').get(quoteWord(word))) {
+      return word
+    }
+    const fix = closestIndexedWord(conn, word)
+    if (fix === null) return word
+    changed = true
+    return fix
+  })
+  return changed ? out : null
+}
+
+/** A looser rung of the ladder answered: the session has `words` (each of them for 'all-words', the
+ *  index's own spelling of a typo for 'repaired', at least one for 'any-word'), not the phrase. */
+export interface RelaxedMatch {
+  rung: 'all-words' | 'repaired' | 'any-word'
+  words: string[]
+}
+
+export interface IndexCandidates {
+  keys: Set<string>
+  /** null when the phrase itself answered. Otherwise the caller matches each transcript against
+   *  these words, since none of the sessions need hold the phrase. */
+  relaxed: RelaxedMatch | null
+}
+
 /**
  * Session keys whose CONVERSATION matches, or null when the index cannot answer.
  *
  * Null is the important return: it means "ask the scanner", not "no matches". Every caller has to
- * keep those apart, which is the same distinction the search budget flag exists for.
+ * keep those apart, which is the same distinction the search budget flag exists for. `exact` keeps
+ * to the phrase (a case-sensitive search asked for exactly that).
  */
 export function searchIndexCandidates(
   query: string,
-  opts: { regex?: boolean; source?: SessionSource } = {},
-): Set<string> | null {
+  opts: { regex?: boolean; source?: SessionSource; exact?: boolean } = {},
+): IndexCandidates | null {
   if (!queryUsableByIndex(query, opts.regex)) return null
-  const match = toMatchExpression(query)
-  if (!match) return null
+  const words = queryWords(query)
+  if (words.length === 0) return null // nothing but punctuation: the index cannot help
   const conn = open()
   if (!conn) return null
   try {
-    const rows = conn
-      .query(
-        opts.source
-          ? 'select d.key as key from conv c join doc d on d.rowid = c.rowid / 65536 where conv match ? and d.source = ?'
-          : 'select d.key as key from conv c join doc d on d.rowid = c.rowid / 65536 where conv match ?',
-      )
-      .all(...(opts.source ? [match, opts.source] : [match])) as Array<{ key: string }>
-    return new Set(rows.map((r) => r.key))
+    // The retrieval ladder, adapted from the idea in stablyai/orca's AI vault search (MIT); the code
+    // here is written fresh. The first rung with any hit answers, so a looser rung never adds noise
+    // to a tighter one that already found something. Typo repair runs before OR so a misspelt word
+    // beside a common one is not rescued by the common word's hits alone.
+    const phrase = keysMatching(conn, phraseOf(words), opts.source)
+    if (phrase.size > 0 || opts.exact) return { keys: phrase, relaxed: null }
+    const multi = words.length > 1
+    const rungs: Array<[string, RelaxedMatch]> = []
+    if (multi) rungs.push([andOf(words), { rung: 'all-words', words }])
+    const fixed = repairedWords(conn, words)
+    if (fixed) {
+      const repaired: RelaxedMatch = { rung: 'repaired', words: fixed }
+      rungs.push([phraseOf(fixed), repaired])
+      if (multi) rungs.push([andOf(fixed), repaired])
+    }
+    if (multi) rungs.push([orOf(words), { rung: 'any-word', words }])
+    for (const [match, relaxed] of rungs) {
+      const keys = keysMatching(conn, match, opts.source)
+      if (keys.size > 0) return { keys, relaxed }
+    }
+    return { keys: new Set(), relaxed: null }
   } catch {
-    return null // malformed match expression or a damaged index: fall back, never throw
+    return null // a damaged index: fall back, never throw
   }
 }
 

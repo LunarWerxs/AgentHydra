@@ -839,6 +839,10 @@ export interface SessionSearchResponse {
   filesTotal: number
   /** The wall-clock budget that applied, so a caller can say "stopped after 7 s". */
   budgetMs: number
+  /** Set when no session held the exact phrase and the index answered on a looser rung: every one of
+   *  the words apart ('all-words'), the index's own spelling of a typo ('repaired'), or any of them
+   *  ('any-word'). The snippets are for `words`. Absent when the phrase itself matched. */
+  relaxed?: { rung: 'all-words' | 'repaired' | 'any-word'; words: string[] }
 }
 
 export interface Account {

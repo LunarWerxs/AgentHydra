@@ -10,6 +10,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The PC stays awake while your agents work.** While a CliMayte worker runs or a chat is working, AgentHydra
   stops the PC going to sleep on its own, and lets it sleep again once nothing works. The screen still turns off
   and Sleep still works. It is on by default; Settings -> CliMayte -> This PC turns it off.
+- **Searching chats finds more than the exact phrase.** When no chat holds the words in the order you typed them,
+  search now looks for all of them apart, then fixes a small typo, then takes any of them, and says which it did.
+  A case-sensitive search still looks for the exact phrase only.
+- **Codex chats are found by search again.** Once AgentHydra's search index was built, it held none of the words of
+  Codex chats, so searching them found nothing. They are indexed now, and an existing index reads them again by itself.
 - **A dev server shows the address it actually printed.** When a dev server starts somewhere other than the
   address in its settings (another port, a sub-path), the Dev servers page and its Open button now use the "Local:"
   address the server printed for itself.
