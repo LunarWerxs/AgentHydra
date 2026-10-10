@@ -10,6 +10,7 @@ import { ownPage } from '../ledger'
 import { listProfiles, storeRoot } from '../store'
 import type { ToolCaller } from './contract'
 import { ToolInputError } from './errors'
+import { dialogAnswerer } from './page-dialogs'
 import { ensureBrowserEndpoint, findBrowserBinary } from './session'
 
 const pages = new Map<string, string>()
@@ -135,7 +136,12 @@ export function forgetPagesOf(browserKey: string): void {
   for (const key of pages.keys()) if (key.startsWith(prefix)) pages.delete(key)
 }
 
-export function connect(url: string, onEvent?: (method: string, params: unknown) => void): Promise<Link> {
+/** A link to one CDP endpoint; `onClose` hears when the browser drops it (its page or the browser went away). */
+export function connect(
+  url: string,
+  onEvent?: (method: string, params: unknown) => void,
+  onClose?: () => void,
+): Promise<Link> {
   return new Promise<Link>((resolve, reject) => {
     const ws = new WebSocket(url)
     const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
@@ -154,6 +160,7 @@ export function connect(url: string, onEvent?: (method: string, params: unknown)
       else waiting.resolve(msg.result)
     }
     ws.onerror = () => reject(new Error(`the browser did not accept ${url}`))
+    if (onClose) ws.onclose = () => onClose()
     ws.onopen = () =>
       resolve({
         send: (method, params) =>
@@ -171,10 +178,47 @@ export function connect(url: string, onEvent?: (method: string, params: unknown)
   })
 }
 
+// Each agent page keeps one link open with the Page domain on, answering its JavaScript dialogs (page-dialogs.ts)
+// whenever they open: during a tool call or a moment after it. Chrome tells only a session that had Page enabled when
+// a dialog opened, and a dialog it told nobody about cannot be answered over CDP at all (measured 2026-10-10: a later
+// session's Page.enable gets no answer, and Page.handleJavaScriptDialog says "No dialog is showing"), so the page stays
+// stuck until it is closed. Only the agent's own pages are watched: a tab in a person's own Chrome keeps its dialogs.
+const dialogWatchers = new Map<string, Promise<void>>()
+// A page already stuck behind a dialog nobody was told about never answers Page.enable; the tool goes on without it.
+const WATCH_READY_MS = 2000
+
+function watchDialogs(port: number, targetId: string): Promise<void> {
+  const key = `${port}|${targetId}`
+  const known = dialogWatchers.get(key)
+  if (known) return known
+  // Dropped when its link closes, so the next tool call on a page that is back (or a new browser) watches again.
+  const forget = () => {
+    if (dialogWatchers.get(key) === ready) dialogWatchers.delete(key)
+  }
+  const ready = openDialogWatcher(port, targetId, forget)
+  dialogWatchers.set(key, ready)
+  return ready
+}
+
+async function openDialogWatcher(port: number, targetId: string, forget: () => void): Promise<void> {
+  let link: Link | null = null
+  const answer = dialogAnswerer(targetId, (method, params) =>
+    link ? link.send(method, params) : Promise.reject(new Error('the page link is not open')),
+  )
+  try {
+    link = await connect(`ws://127.0.0.1:${port}/devtools/page/${targetId}`, answer, forget)
+  } catch {
+    forget()
+    return
+  }
+  await Promise.race([link.send('Page.enable', {}).catch(() => undefined), new Promise((r) => setTimeout(r, WATCH_READY_MS))])
+}
+
 export async function callerPage(params: Params, caller: ToolCaller): Promise<{ browser: Browser; targetId: string }> {
   const browser = await resolveBrowser(params, caller)
   const targetId = await pageFor(browser, `${browser.key}|${callerKey(caller)}`)
   if (browser.dir) ownPage(browser.dir, targetId, caller.session)
+  await watchDialogs(browser.port, targetId)
   return { browser, targetId }
 }
 

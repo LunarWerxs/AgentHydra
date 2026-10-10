@@ -10,6 +10,7 @@ import type { ToolCaller, ToolReply } from './contract'
 import { ToolInputError } from './errors'
 import { adopt, callerPage, connect, resolveBrowser } from './navigate'
 import type { Browser, Link } from './navigate'
+import { pageDialogs } from './page-dialogs'
 import type { ToolDef } from './registry'
 
 type Params = Record<string, unknown>
@@ -328,7 +329,9 @@ async function probeTab(port: number, targetId: string, timeoutMs: number) {
       deadline,
     ])
     await Promise.race([link.send('Runtime.enable', {}).then(() => link?.send('Log.enable', {})), deadline])
-    return { errorCount: errors.length, errors: errors.slice(-TAB_ERRORS_PER_TAB_MAX) }
+    // The dialogs answered on this tab (page-dialogs.ts), this link's included: why a click there may have done nothing.
+    const dialogs = pageDialogs(targetId)
+    return { errorCount: errors.length, errors: errors.slice(-TAB_ERRORS_PER_TAB_MAX), ...(dialogs.length ? { dialogs } : {}) }
   } finally {
     clearTimeout(timer)
     link?.close()
@@ -448,7 +451,7 @@ export const PAGE_TOOLS: ToolDef[] = [
   {
     name: 'browser_tab_errors',
     description:
-      'Ask EVERY open tab what is broken on the page right now: uncaught exceptions, unhandled promise rejections, console.error/console.assert calls, and browser-logged errors (failed loads, CSP and CORS refusals) - including ones logged BEFORE this call, with no reload and without switching the tab you are driving. Each tab answers on its own; the call returns when all have answered, or after timeoutMs (default 5000) with the tabs that did plus a `missing` list naming the ones that did not (a paused or frozen tab). Pass match to ask only tabs whose URL or title contains it (e.g. \'localhost:5173\'). To read a dev server\'s tabs in your OWN Chrome, start it with --remote-debugging-port and pass attachPort.',
+      'Ask EVERY open tab what is broken on the page right now: uncaught exceptions, unhandled promise rejections, console.error/console.assert calls, and browser-logged errors (failed loads, CSP and CORS refusals) - including ones logged BEFORE this call, with no reload and without switching the tab you are driving. Each tab answers on its own; the call returns when all have answered, or after timeoutMs (default 5000) with the tabs that did plus a `missing` list naming the ones that did not (a paused or frozen tab). A tab you drive also lists the JavaScript dialogs it opened, each already answered (alert and beforeunload accepted, confirm and prompt dismissed): why a click there may have changed nothing. Pass match to ask only tabs whose URL or title contains it (e.g. \'localhost:5173\'). To read a dev server\'s tabs in your OWN Chrome, start it with --remote-debugging-port and pass attachPort.',
     inputSchema: {
       type: 'object',
       properties: {
