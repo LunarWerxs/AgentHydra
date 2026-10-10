@@ -155,45 +155,60 @@ def test_list_glob_grep(tmp_path, monkeypatch):
     (tmp_path / "src" / "b.py").write_text("print(1)\n")
     (tmp_path / "node_modules").mkdir()
     (tmp_path / "node_modules" / "junk.py").write_text("import os\n")
-    ls = run(sb.run("list_dir", {"path": ".", "depth": 2}))
+    # A folder link back to the root: a walk that follows it goes round until the path is too long. On Windows it is a
+    # junction, which os.path.islink does not call a link and which os.walk and pathlib's glob both go through.
+    loop = tmp_path / "src" / "loop"
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(tmp_path), str(loop))
+    else:
+        loop.symlink_to(tmp_path, target_is_directory=True)
+    ls = run(sb.run("list_dir", {"path": ".", "depth": 3}))
     assert "src/" in ls and "a.py" in ls and "node_modules" not in ls
-    walked, real_walk = [], os.walk
+    assert "loop/" in ls and ls.count("src/") == 1  # the link is listed, not entered
+    walked, real_scandir = [], os.scandir
 
-    def walk(top, *args, **kwargs):
-        for step in real_walk(top, *args, **kwargs):
-            walked.append(Path(step[0]).name)
-            yield step
+    def scandir(path="."):
+        walked.append(Path(path).name)
+        return real_scandir(path)
 
-    monkeypatch.setattr(os, "walk", walk)
+    monkeypatch.setattr(os, "scandir", scandir)
     g = run(sb.run("glob", {"pattern": "**/*.py"}))
-    assert "src/a.py" in g and "junk.py" not in g
-    assert "src" in walked and "node_modules" not in walked  # its hits were always dropped; now it is not walked at all
+    assert sorted(g.splitlines()) == ["src/a.py", "src/b.py"]
+    assert "src" in walked and "node_modules" not in walked and "loop" not in walked  # neither is walked at all
     assert sorted(run(sb.run("glob", {"pattern": "*.py", "path": "src"})).splitlines()) == ["src/a.py", "src/b.py"]
     assert run(sb.run("glob", {"pattern": "*.py"})) == "(no matches)"  # `*` stays in one folder, as pathlib's does
     gr = run(sb.run("grep", {"pattern": "import os"}))
     assert "src/a.py:1:" in gr and "junk" not in gr
 
 
-def test_glob_leaves_the_shared_server_answering(tmp_path, monkeypatch):
+@pytest.mark.parametrize("tool, args, answer", [
+    ("glob", {"pattern": "**/*.py"}, "a.py"),
+    ("list_dir", {"path": "."}, "a.py"),
+    ("grep", {"pattern": "x = 1"}, "a.py:1:x = 1"),
+])
+def test_walks_leave_the_shared_server_answering(tmp_path, monkeypatch, tool, args, answer):
     # 2026-10-09: a worker's `**` glob in a large repo ran on the shared server's one event loop for about fifteen
-    # minutes, and port 7793 answered no chat and no AgentHydra window until it ended.
+    # minutes, and port 7793 answered no chat and no AgentHydra window until it ended. The same day a 60-task run sat
+    # twelve hours with one thread at a full core, its walks holding the run's loop so no task timeout fired: a
+    # depth-2 list_dir of that repo held it 53 s a call, and grep judged every hit line on the loop for minutes.
     (tmp_path / "a.py").write_text("x = 1\n")
-    answered, real = threading.Event(), tools.glob_files
+    real, loops = Sandbox.shown, []
 
-    def slow(root, pattern):
+    def slow(self, name, path):  # each tool asks this of every entry or hit it found
+        answered = threading.Event()
+        loops[0].call_soon_threadsafe(answered.set)  # runs only while the loop is free
         if not answered.wait(5):
-            raise AssertionError("the glob held the event loop: nothing else ran while it walked")
-        yield from real(root, pattern)
+            raise AssertionError(f"the {tool} held the event loop: nothing else ran while it walked")
+        return real(self, name, path)
 
-    monkeypatch.setattr(tools, "glob_files", slow)
+    monkeypatch.setattr(Sandbox, "shown", slow)
 
     async def main():
-        glob = asyncio.create_task(Sandbox(tmp_path).run("glob", {"pattern": "**/*.py"}))
-        await asyncio.sleep(0.05)
-        answered.set()  # runs only while the loop is free
-        return await glob
+        loops.append(asyncio.get_running_loop())
+        return await Sandbox(tmp_path).run(tool, args)
 
-    assert run(main()) == "a.py"
+    assert run(main()) == answer
 
 
 def test_glob_takes_an_absolute_pattern_and_never_kills_the_task(tmp_path):

@@ -9,6 +9,7 @@ toolspecs.py, the subprocess runner is procs.py, the grep engines are grep.py.
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import os
@@ -26,7 +27,7 @@ from .grep import GREP_LINE_RX, py_grep, relative_hits, rg_lines
 from .guard import restore
 from .outfilters import filter_output, strip_raw
 from .redaction import RESTORE_TOOLS, Redactor, restore as restore_tags
-from . import config, receipts
+from . import config, receipts, walk
 from .procs import CREATE_NO_WINDOW, TIMEOUT_EXIT, find_bash, kill_tree, run_hidden, scrubbed_env  # noqa: F401 - re-exported
 from .survival import MAX_BYTES, read_text
 from .outline import LANGS, language_of, render_outline, render_unfold
@@ -51,13 +52,20 @@ def is_key_path(path: Path) -> bool:
     if any(part.casefold() == ".secrets" for part in path.parts):
         return True
     for folder in (config.SECRETS_DIR, config.PROVIDERS_DIR):
-        try:
-            held = folder.resolve()
-        except OSError:
-            continue
-        if path == held or held in path.parents:
+        held = _resolved(folder)
+        if held is not None and (path == held or held in path.parents):
             return True
     return False
+
+
+@functools.lru_cache(maxsize=8)
+def _resolved(folder: Path) -> Path | None:
+    """A key folder, resolved once: list_dir and grep ask is_key_path about every entry and every hit, and resolving
+    both folders each time was most of a 53 s depth-2 listing of a large repo (2026-10-09)."""
+    try:
+        return folder.resolve()
+    except OSError:
+        return None
 
 
 # A worker's shell runs in the CALLER'S working tree, and on a shared checkout other sessions commit
@@ -143,11 +151,11 @@ def _segment_rx(seg: str) -> str:
 
 
 def glob_files(root: Path, pattern: str):
-    """The files under `root` a pathlib-style glob names, never walking into IGNORED_DIRS.
+    """The files under `root` a pathlib-style glob names, never walking into IGNORED_DIRS or a folder link.
 
     pathlib's own glob walks node_modules and .git to the bottom before t_glob drops their hits: on 2026-10-09 one
-    `**` glob in a large repo ran for about fifteen minutes. The walk starts at the pattern's literal head and stops
-    at the depth a pattern without `**` can reach."""
+    `**` glob in a large repo ran for about fifteen minutes. The walk starts at the pattern's literal head, stops
+    at the depth a pattern without `**` can reach, and raises walk.WalkStopped when its minute is up."""
     parts = [p for p in pattern.replace("\\", "/").strip("/").split("/") if p not in ("", ".")]
     if ".." in parts:
         raise ValueError(f"glob pattern {pattern!r} climbs out with '..'; name the folder as `path` instead")
@@ -157,16 +165,12 @@ def glob_files(root: Path, pattern: str):
         if base.is_file():
             yield base
         return
-    reach = None if "**" in parts[cut:] else len(parts) - cut  # levels below `base` a hit can sit at
+    reach = None if "**" in parts[cut:] else len(parts) - cut  # folder levels, `base` the first, a hit can sit in
     rx = glob_regex("/".join(parts), re.IGNORECASE if os.name == "nt" else 0)
-    for dirpath, dirnames, filenames in os.walk(base):
-        here = Path(dirpath)
-        level = len(here.relative_to(base).parts)
-        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS] if reach is None or level + 1 < reach else []
+    for here, entry in walk.files(base, reach):
         prefix = here.relative_to(root).as_posix()
-        for name in filenames:
-            if rx.fullmatch(name if prefix == "." else f"{prefix}/{name}"):
-                yield here / name
+        if rx.fullmatch(entry.name if prefix == "." else f"{prefix}/{entry.name}"):
+            yield here / entry.name
 
 
 def fix_note(command: str, output: str, cwd: str | os.PathLike) -> str:
@@ -625,24 +629,29 @@ class Sandbox:
     async def t_list_dir(self, path: str = ".", depth: int = 1) -> str:
         root = self.resolve_root(path, "list_dir")
         depth = max(1, min(int(depth or 1), 3))
-        out: list[str] = []
+        # On a thread, as glob is: on the event loop a depth-2 listing of a large repo left the whole run deaf for 53 s.
+        return await asyncio.to_thread(self._list_dir, root, depth)
 
-        def walk(d: Path, level: int) -> None:
-            try:
-                entries = sorted(d.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
-            except PermissionError:
-                return
-            for e in entries:
+    def _list_dir(self, root: Path, depth: int) -> str:
+        out: list[str] = []
+        until = walk.deadline()
+
+        def visit(d: Path, level: int) -> None:
+            for e in sorted(walk.scan(d, until), key=lambda e: (not e.is_dir(), e.name.lower())):
+                p = Path(e.path)
                 # A denied entry is hidden and never walked; .secrets entries are also skipped silently.
-                if e.name in IGNORED_DIRS or (self.capability and self.capability.denies("list_dir", e, self.cwd)) or not self.shown("list_dir", e):
+                if e.name in IGNORED_DIRS or (self.capability and self.capability.denies("list_dir", p, self.cwd)) or not self.shown("list_dir", p):
                     continue
                 out.append(f"{'  ' * (level - 1)}{e.name}{'/' if e.is_dir() else ''}")
-                if e.is_dir() and level < depth:
-                    walk(e, level + 1)
+                if level < depth and walk.enters(e):  # a folder link is listed, not entered
+                    visit(p, level + 1)
                 if len(out) > 2000:
                     return
 
-        walk(root, 1)
+        try:
+            visit(root, 1)
+        except walk.WalkStopped as stop:
+            out.append(str(stop))
         return "\n".join(out) or "(empty)"
 
     async def t_glob(self, pattern: str, path: str = ".") -> str:
@@ -658,18 +667,21 @@ class Sandbox:
         return await asyncio.to_thread(self._glob, root, pattern)
 
     def _glob(self, root: Path, pattern: str) -> str:
-        hits = []
-        for p in glob_files(root, pattern):
-            if any(part in IGNORED_DIRS for part in p.relative_to(root).parts[:-1]) or not self.shown("glob", p):
-                continue
-            try:
-                hits.append((p.stat().st_mtime, p))
-            except OSError:
-                pass
-            if len(hits) > 5000:
-                break
+        hits, stopped = [], ""
+        try:
+            for p in glob_files(root, pattern):
+                if any(part in IGNORED_DIRS for part in p.relative_to(root).parts[:-1]) or not self.shown("glob", p):
+                    continue
+                try:
+                    hits.append((p.stat().st_mtime, p))
+                except OSError:  # floor-ok: gone between the walk and the stat; unchanged, only re-indented
+                    pass
+                if len(hits) > 5000:
+                    break
+        except walk.WalkStopped as stop:
+            stopped = str(stop)
         hits.sort(key=lambda t: -t[0])  # newest first: the file just edited is usually the one wanted
-        return "\n".join(self.rel(p) for _, p in hits[:500]) or "(no matches)"
+        return "\n".join([self.rel(p) for _, p in hits[:500]] + ([stopped] if stopped else [])) or "(no matches)"
 
     MAX_PROPOSALS = 50
 
@@ -751,15 +763,35 @@ class Sandbox:
         root = self.resolve_root(path, "grep")
         max_results = max(1, min(int(max_results or 200), 1000))
         rg = shutil.which("rg")
-        lines = await rg_lines(rg, self.cwd, pattern, root, glob, ignore_case) if rg else py_grep(pattern, root, glob, ignore_case, max_results)
+        stopped = ""
+        try:
+            lines = await rg_lines(rg, self.cwd, pattern, root, glob, ignore_case) if rg else await asyncio.to_thread(py_grep, pattern, root, glob, ignore_case, max_results)
+        except walk.WalkStopped as stop:
+            lines, stopped = stop.found or [], str(stop)
         if isinstance(lines, str):
             return lines
-        lines = [ln for ln in lines if self.shown("grep", _hit_path(ln, self.cwd))]  # file contents only from allowed paths, never key files
-        total = len(lines)
-        body = "\n".join(relative_hits(self.rel, lines[:max_results], root)) or "(no matches)"
+        hits = await asyncio.to_thread(self._shown_hits, lines)
+        total = len(hits)
+        body = "\n".join(relative_hits(self.rel, hits[:max_results], root)) or "(no matches)"
         if total > max_results:
             body += f"\n... {total - max_results} more matches not shown"
-        return body
+        return body + ("\n" + stopped if stopped else "")
+
+    def _shown_hits(self, lines: list[str]) -> list[str]:
+        """The grep lines whose file the worker may see: file contents only from allowed paths, never key files.
+
+        Judged once per file, off the loop: a common word across a large repo is a great many lines from far fewer
+        files, and resolving every line's path on the event loop held a whole run for minutes (2026-10-10)."""
+        verdicts: dict[str, bool] = {}
+        kept = []
+        for ln in lines:
+            m = GREP_LINE_RX.match(ln)
+            key = m.group(1) if m else ln
+            if key not in verdicts:
+                verdicts[key] = self.shown("grep", _hit_path(ln, self.cwd))
+            if verdicts[key]:
+                kept.append(ln)
+        return kept
 
     async def t_read_url(self, url: str) -> str:
         return await self.web.read(url)

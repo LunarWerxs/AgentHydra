@@ -237,6 +237,10 @@ These match ZSwarm (ported 2026-10-03; ideas from CopilotKit's OpenBot and OpenT
   policy refuses a command naming one of them or a `*_api_keys` / `*_api_key` file; and every tool result has any
   token equal to a key this process holds replaced by `[hswarm key withheld]`, redaction on or off. No grant,
   capability or preset lifts it (`tools.is_key_path`, `shellpolicy._secrets_access`, `redaction.scrub_keys`).
+- **A worker's search never stalls the run.** `list_dir`, `glob` and grep's hit filter run beside the event loop,
+  so task time limits and checkpoints keep firing while one walks. A walk never enters `node_modules`-style folders
+  or a folder link (a symlink or a Windows junction, which rg does not follow either), and it stops after a minute
+  with what it found and a line saying so, so no walk outlives its task and holds the process open (`walk.py`).
 - **A web fetch connects only to the address its check accepted.** `read_url` resolves a host and refuses a
   private answer; the connection is then pinned to those addresses, so a name that answers differently the
   second time (DNS rebinding to 127.0.0.1 or a cloud metadata address) is never reached (`web.PinnedBackend`).

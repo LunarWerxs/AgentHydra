@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **An HSwarm run no longer freezes for hours on a big repo.** A worker listing or searching a very large folder
+  could stop a whole run: no task's time limit fired, nothing was saved, and one CPU core stayed busy for twelve
+  hours. Listing, file finding and text search now run beside the run, skip folder links, and stop after a minute
+  with what they found and a note to look somewhere narrower.
 - **Closing an unused terminal no longer leaves a console host behind.** When AgentHydra closes the terminal Claude
   Desktop opened ahead of time for a chat you are not looking at, it now closes that terminal's console host too.
   Before, each one stayed running until the app quit.

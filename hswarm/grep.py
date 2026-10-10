@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from typing import Callable
 
+from . import walk
 from .procs import run_hidden
 from .toolspecs import IGNORED_DIRS
 
@@ -33,19 +34,25 @@ async def rg_lines(rg: str, cwd: Path, pattern: str, root: Path, glob: str | Non
 
 
 def py_grep(pattern: str, root: Path, glob: str | None, ignore_case: bool, limit: int) -> list[str]:
+    """Blocking: call it on a thread. Raises walk.WalkStopped carrying the hits so far when the walk's minute is up."""
     rx = re.compile(pattern, re.I if ignore_case else 0)
     lines: list[str] = []
-    for p in root.rglob("*"):
-        if not p.is_file() or any(part in IGNORED_DIRS for part in p.parts) or (glob and not fnmatch.fnmatch(p.name, glob)):
-            continue
-        try:
-            for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-                if rx.search(line):
-                    lines.append(f"{p}:{i}:{line}")
-                    if len(lines) >= limit:
-                        return lines
-        except OSError:
-            continue
+    try:
+        for folder, entry in walk.files(root):
+            if glob and not fnmatch.fnmatch(entry.name, glob):
+                continue
+            p = folder / entry.name
+            try:
+                for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                    if rx.search(line):
+                        lines.append(f"{p}:{i}:{line}")
+                        if len(lines) >= limit:
+                            return lines
+            except OSError:
+                continue
+    except walk.WalkStopped as stop:
+        stop.found = lines
+        raise
     return lines
 
 
