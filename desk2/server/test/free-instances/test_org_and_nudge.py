@@ -163,10 +163,15 @@ def test_desk_argv_for_a_nudge_parses():
         ("claude-sonnet-9", "haiku", [{"model": "claude-opus-9"}, {"model": "claude-haiku-4-5"}], "claude-sonnet-9"),
         # A remembered Haiku 4.x is never used again.
         ("claude-haiku-4-5", "sonnet", OFFERED, "claude-sonnet-9"),
+        # A new chat asked for Sonnet gets one even when the login last chatted on Haiku (2026-10-10: every Free
+        # Claude account answered Sonnet asks on Haiku 5.5).
+        ("claude-haiku-9", "sonnet", OFFERED, "claude-sonnet-9"),
+        # Asked for nothing: the login's own model.
+        ("claude-haiku-9", None, OFFERED, "claude-haiku-9"),
     ],
 )
 def test_a_new_chat_picks_its_model(tmp_path, monkeypatch, remembered, prefer, offered, expected):
-    args = cli.parse_args(["chat", "--prompt", "hello", "--prefer", prefer, "--request-timeout", "5"])
+    args = cli.parse_args(["chat", "--prompt", "hello", *(["--prefer", prefer] if prefer else []), "--request-timeout", "5"])
     _, sent = execute(tmp_path, monkeypatch, {"model": remembered}, args, offered=offered)
 
     assert [m for _, _, m, _ in sent] == [expected]

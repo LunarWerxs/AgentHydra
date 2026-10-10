@@ -254,17 +254,20 @@ def _read_or_track(args, registry, org, active_chat, name, conversation):
 
 def _turn_model(args, client, org, conversation, remembered):
     # A login that never chatted remembers no model: it takes the one claude.ai would (owner, 2026-10-06).
-    # A NEW chat asked for Haiku takes the newest Haiku the account offers ahead of the login's remembered
-    # model, or a login that ever chatted on Sonnet would never get it (owner, 2026-10-07: Haiku 5.5 work
-    # goes through the free accounts); an account that offers no newer Haiku gets what a chat would. A
-    # continued chat keeps its own model unless that is a retired Haiku.
+    # A NEW chat asked for a family (--prefer haiku or sonnet) takes the newest of it the account offers ahead
+    # of the login's remembered model, which is the model of its last turn: a login that ever chatted on
+    # Sonnet would otherwise never get Haiku (owner, 2026-10-07: Haiku 5.5 work goes through the free
+    # accounts), and one that ever chatted on Haiku never Sonnet again (2026-10-10: every Free Claude account
+    # answered a Sonnet ask on Haiku 5.5, HSwarm's Haiku asks having become each login's remembered model).
+    # An account that offers none of the family gets what a chat would. A continued chat keeps its own model
+    # unless that is a retired Haiku.
     continued = (conversation or {}).get("model")
     continued = None if continued and http.retired_haiku(continued) else continued
-    haiku = None
-    if args.prefer == "haiku" and not (args.model or continued):
-        haiku = client.model_for(org, "haiku", own_default=False)
-        haiku = haiku if haiku and "haiku" in haiku else None
-    model = args.model or continued or haiku or remembered or client.model_for(org, "sonnet")
+    asked = None
+    if args.prefer in ("haiku", "sonnet") and not (args.model or continued):
+        asked = client.model_for(org, args.prefer, own_default=False)
+        asked = asked if asked and args.prefer in asked else None
+    model = args.model or continued or asked or remembered or client.model_for(org, "sonnet")
     if not model:
         raise ClaudeError("Choose a Claude model with --model.", code="model_required")
     if not isinstance(model, str) or not re.fullmatch(r"claude-[a-zA-Z0-9._-]+", model):

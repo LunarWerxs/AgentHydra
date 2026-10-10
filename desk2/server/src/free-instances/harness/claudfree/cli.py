@@ -118,9 +118,10 @@ def _build_parser():
     parser.add_argument(
         "--prefer",
         choices=["haiku", "sonnet", "gpt-6", "luna-thinking"],
-        default="sonnet",
-        help="Model for a new chat: Claude's haiku or sonnet family when no model is named or remembered (default: "
-        "sonnet); ChatGPT's gpt-6 or luna-thinking when the account offers it, else GPT-5.6 Luna Instant",
+        default=None,
+        help="Model for a new chat: the newest of Claude's haiku or sonnet family the account offers, ahead of the "
+        "login's remembered model (none: the remembered one, else sonnet); ChatGPT's gpt-6 or luna-thinking when the "
+        "account offers it, else GPT-5.6 Luna Instant",
     )
     parser.add_argument(
         "--web-search",

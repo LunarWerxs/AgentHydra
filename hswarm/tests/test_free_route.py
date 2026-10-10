@@ -141,13 +141,13 @@ def test_a_climayte_workers_ask_is_answered_by_a_free_account(fake, monkeypatch)
     assert res is not None and res.model == "free:gpt-5-6-mini" and len(f.chats) == 1
 
 
-def test_only_narrow_profiles_ask_for_haiku(fake):
+def test_narrow_profiles_ask_for_haiku_and_the_rest_for_sonnet(fake):
     f = fake()
     for profile in ("routine", "general", "research", "decision"):
         task = _task()
         task.profile = profile
         _consult(task)
-    assert [c["tasks"][0].get("model") for c in f.chats] == ["haiku", "haiku", None, None]
+    assert [c["tasks"][0].get("model") for c in f.chats] == ["haiku", "haiku", "sonnet", "sonnet"]
 
 
 def test_the_ledger_line_of_a_free_task_has_provider_free_and_no_cost(fake, monkeypatch):

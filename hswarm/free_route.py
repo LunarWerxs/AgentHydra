@@ -139,10 +139,11 @@ async def _serve(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     name = f"hswarm {job_id} {task.id}"
     try:
         item = {"prompt": shape(task), "name": name}
-        # Narrow work asks for the lightest Claude model (Haiku 5.5); research and decision keep the account's usual one
-        # (owner, 2026-10-07: low-impact Haiku 5.5 through free instances where possible).
-        if task.profile in HAIKU_PROFILES:
-            item["model"] = "haiku"
+        # Narrow work asks for the lightest Claude model (Haiku 5.5) (owner, 2026-10-07: low-impact Haiku 5.5 through
+        # free instances where possible); research and decision ask for Sonnet by name, since "the account's usual
+        # one" is its last turn's model, which those Haiku asks made Haiku 5.5 on every account (2026-10-10). A
+        # ChatGPT account ignores both.
+        item["model"] = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
         sent = await _call("free_chat", {"tasks": [item], "wait_s": WAIT_S}, WAIT_S + 5)
     except _ERRORS as e:
         _say(job_id, f"free chat send failed ({type(e).__name__}); the task runs on its API route")
