@@ -83,8 +83,8 @@ const MEASURE = `(() => {
     if (titleSpan.clientWidth < need - 0.5) titleRule = 'title shows ' + titleSpan.clientWidth.toFixed(1) + 'px, under six characters and an ellipsis (' + need.toFixed(1) + 'px)'
   }
   return {
-    hr: box(h), col: box(h.parentElement), pl: parseFloat(cs.paddingLeft), pr: parseFloat(cs.paddingRight), side: parseFloat(cs.getPropertyValue('--side')) || 0,
-    gap: parseFloat(cs.columnGap) || 0, controls, right, mid: box(mid), natural, spacer: box(h.children[0]).w, rightBox: box(h.children[2]), rightMl: parseFloat(getComputedStyle(h.children[2]).marginLeft) || 0, clipped, titleRule,
+    hr: box(h), col: box(h.parentElement), pl: parseFloat(cs.paddingInlineStart), pr: parseFloat(cs.paddingInlineEnd), side: parseFloat(cs.getPropertyValue('--side')) || 0,
+    gap: parseFloat(cs.columnGap) || 0, controls, right, mid: box(mid), natural, spacer: box(h.children[0]).w, rightBox: box(h.children[2]), rightMl: parseFloat(getComputedStyle(h.children[2]).marginInlineStart) || 0, clipped, titleRule,
   }
 })()`
 

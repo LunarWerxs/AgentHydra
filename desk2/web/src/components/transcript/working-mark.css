@@ -90,7 +90,7 @@
   left: 50%;
   width: 3px;
   height: 3px;
-  margin-left: -1.5px;
+  margin-inline-start: -1.5px;
   border-radius: 9999px;
   background: currentColor;
 }
