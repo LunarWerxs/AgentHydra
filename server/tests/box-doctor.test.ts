@@ -95,7 +95,7 @@ describe('memoryFindings', () => {
     commitLimitBytes: 1000,
   })
   const read = (share: number, open: boolean) =>
-    memoryFindings(at(share), open).map((f) => `${f.level}:${f.key}`)
+    memoryFindings(at(share), open)!.map((f) => `${f.level}:${f.key}`)
 
   test('the commit incident opens under 5%, holds until 8% once open, and 5-12% is only a note', () => {
     expect(read(0.04, false)).toEqual(['problem:commit'])
@@ -103,7 +103,8 @@ describe('memoryFindings', () => {
     expect(read(0.06, true)).toEqual(['problem:commit'])
     expect(read(0.09, true)).toEqual(['note:commit-low'])
     expect(read(0.2, true)).toEqual([])
-    expect(memoryFindings({ ...at(0.01), commitLimitBytes: null }, true)).toEqual([])
+    // Unreadable is "could not look", never "fine": the open incident must not resolve on it.
+    expect(memoryFindings({ ...at(0.01), commitLimitBytes: null }, true)).toBeNull()
   })
 })
 
@@ -121,26 +122,29 @@ describe('hoardFindings', () => {
         { key: 'node.exe:8:cmd.exe', parent: 'node.exe', parentPid: 8, child: 'cmd.exe' },
       ],
     })
-    expect(hoardFindings(doc, new Set([7])).map((f) => f.key)).toEqual([
+    expect(hoardFindings(doc, new Set([7]))!.map((f) => f.key)).toEqual([
       'hoard:claude.exe:7:conhost.exe',
     ])
-    expect(hoardFindings('{not json', new Set([7]))).toEqual([])
+    expect(hoardFindings('{not json', new Set([7]))).toBeNull()
   })
 })
 
 describe('syncBoxIncidents', () => {
-  test('records each problem, never a note, and resolves every open box incident whose problem is gone', async () => {
+  test('records each problem, never a note, and resolves a gone problem only where its check ran', async () => {
     const recorded: string[] = []
     const resolved: string[] = []
     const deps = {
       record: (async (o: { key: string }) => {
         recorded.push(o.key)
+        if (o.key === 'reaper') throw new Error('database is locked')
         return { id: `i-${o.key}`, isNew: true }
       }) as never,
       notify: (async () => ({})) as never,
       openKeys: () => [
         { id: 'i-commit', key: 'commit' },
         { id: 'i-old', key: 'path-shim:bun' },
+        { id: 'i-pile', key: 'hoard:node.exe:8:cmd.exe' },
+        { id: 'i-hosts', key: 'pty-hosts' },
       ],
       resolve: (id: string) => {
         resolved.push(id)
@@ -148,13 +152,19 @@ describe('syncBoxIncidents', () => {
       },
     }
     const n = await syncBoxIncidents(
-      [
-        { key: 'commit', level: 'problem', message: 'x' },
-        { key: 'processes', level: 'note', message: '1 processes running.' },
-      ],
+      {
+        findings: [
+          { key: 'reaper', level: 'problem', message: 'x' },
+          { key: 'commit', level: 'problem', message: 'x' },
+          { key: 'processes', level: 'note', message: '1 processes running.' },
+        ],
+        // The process table could not be read this pass: no pty-hosts or hoard check ran.
+        checked: ['path-shim:', 'commit', 'reaper'],
+      },
       deps,
     )
-    expect(recorded).toEqual(['commit'])
+    // The reaper's failed write did not stop commit's, nor the resolving after it.
+    expect(recorded).toEqual(['reaper', 'commit'])
     expect(resolved).toEqual(['i-old'])
     expect(n).toBe(1)
   })

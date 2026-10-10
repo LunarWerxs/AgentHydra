@@ -63,15 +63,33 @@ export interface BoxDoctorReport {
   processes: number | null
   memory: MachineMemory | null
   findings: BoxFinding[]
+  /** The finding families (`commit`, `path-shim:`...) read this pass. A check that could not look
+   *  is not a check that passed: an open incident outside these stays open. */
+  checked: string[]
 }
 
-function execText(file: string, args: string[]): Promise<{ ok: boolean; stdout: string }> {
+/** `commit` -> `commit`, `path-shim:bun` -> `path-shim:`. */
+const familyOf = (key: string) => {
+  const i = key.indexOf(':')
+  return i < 0 ? key : key.slice(0, i + 1)
+}
+
+/** `exitCode` is null when the program never ran or was killed at the timeout; a number when it
+ *  ran and said so itself (schtasks answers 1 for a task that does not exist). */
+function execText(
+  file: string,
+  args: string[],
+): Promise<{ exitCode: number | null; stdout: string }> {
   return new Promise((resolve) => {
     execFile(
       file,
       args,
       { encoding: 'utf8', windowsHide: true, timeout: EXEC_TIMEOUT_MS },
-      (err, stdout) => resolve({ ok: !err, stdout: String(stdout ?? '') }),
+      (err, stdout) =>
+        resolve({
+          exitCode: !err ? 0 : typeof err.code === 'number' && !err.killed ? err.code : null,
+          stdout: String(stdout ?? ''),
+        }),
     )
   })
 }
@@ -125,11 +143,13 @@ export function pathShimFindings(dirs: readonly string[]): BoxFinding[] {
   return out
 }
 
-/** PATH as a new process gets it: the machine's entries, then the user's, %VARS% expanded. */
-async function registryPath(): Promise<string[]> {
+/** PATH as a new process gets it: the machine's entries, then the user's, %VARS% expanded. Null
+ *  when reg could not be asked: half a PATH would flag shims an unread folder's exe outranks. */
+async function registryPath(): Promise<string[] | null> {
   const dirs: string[] = []
   for (const key of [MACHINE_ENV_KEY, USER_ENV_KEY]) {
     const r = await execText('reg', ['query', key, '/v', 'Path'])
+    if (r.exitCode === null) return null
     const m = /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(r.stdout)
     if (!m?.[1]) continue
     for (const raw of m[1].split(';')) {
@@ -141,9 +161,10 @@ async function registryPath(): Promise<string[]> {
   return dirs.filter((d) => !seen.has(d.toLowerCase()) && seen.add(d.toLowerCase()))
 }
 
-/** `commitOpen`: the commit incident is open now, so it holds until the share passes the clear bar. */
-export function memoryFindings(m: MachineMemory | null, commitOpen: boolean): BoxFinding[] {
-  if (!m?.commitLimitBytes || m.commitFreeBytes == null) return []
+/** `commitOpen`: the commit incident is open now, so it holds until the share passes the clear bar.
+ *  Null when commit charge cannot be read. */
+export function memoryFindings(m: MachineMemory | null, commitOpen: boolean): BoxFinding[] | null {
+  if (!m?.commitLimitBytes || m.commitFreeBytes == null) return null
   const share = m.commitFreeBytes / m.commitLimitBytes
   if (share < COMMIT_PROBLEM_SHARE || (commitOpen && share < COMMIT_CLEAR_SHARE))
     return [
@@ -196,7 +217,10 @@ export function leakedPtyHosts(
   return leaked
 }
 
-function ptyHostFindings(table: readonly NativeProcess[], reaperInstalled: boolean): BoxFinding[] {
+function ptyHostFindings(
+  table: readonly NativeProcess[],
+  reaperInstalled: boolean,
+): BoxFinding[] | null {
   const claude = new Set(
     table.filter((p) => p.name.toLowerCase() === 'claude.exe').map((p) => p.pid),
   )
@@ -205,7 +229,8 @@ function ptyHostFindings(table: readonly NativeProcess[], reaperInstalled: boole
     if (claude.has(p.ppid) && p.name.toLowerCase() === 'conhost.exe') wanted.add(p.pid).add(p.ppid)
   }
   const lines = wanted.size ? nativeCommandLines([...wanted]) : new Map<number, string>()
-  if (!lines || leakedPtyHosts(table, (pid) => lines.get(pid)) < LEAKED_HOSTS_PROBLEM) return []
+  if (!lines) return null
+  if (leakedPtyHosts(table, (pid) => lines.get(pid)) < LEAKED_HOSTS_PROBLEM) return []
   return [
     {
       key: 'pty-hosts',
@@ -221,9 +246,11 @@ const reaperScript = () => join(homedir(), '.claude', 'tools', 'orphan-reaper.ps
 const reaperLog = () => join(process.env.TEMP || tmpdir(), 'orphan-reaper.log')
 const alertsFile = () => join(homedir(), '.claude', 'logs', 'box-alerts.json')
 
-async function reaperFindings(now: number): Promise<BoxFinding[]> {
+/** Null when schtasks could not be asked (did not start, or hung past the timeout). */
+async function reaperFindings(now: number): Promise<BoxFinding[] | null> {
   const task = await execText('schtasks', ['/query', '/tn', REAPER_TASK])
-  if (!task.ok)
+  if (task.exitCode === null) return null
+  if (task.exitCode !== 0)
     return [
       {
         key: 'reaper',
@@ -254,14 +281,15 @@ interface HoardAlert {
   child: string
 }
 
-/** Each pile the reaper reported whose parent still lives (the file is rewritten only on change). */
-export function hoardFindings(alertsJson: string, live: ReadonlySet<number>): BoxFinding[] {
+/** Each pile the reaper reported whose parent still lives (the file is rewritten only on change).
+ *  Null when the file does not parse. */
+export function hoardFindings(alertsJson: string, live: ReadonlySet<number>): BoxFinding[] | null {
   let hoards: HoardAlert[] = []
   try {
     const doc = JSON.parse(alertsJson) as { hoards?: HoardAlert[] }
     hoards = Array.isArray(doc.hoards) ? doc.hoards : []
   } catch {
-    return []
+    return null
   }
   return hoards
     .filter((h) => typeof h.key === 'string' && live.has(h.parentPid))
@@ -276,32 +304,40 @@ export function hoardFindings(alertsJson: string, live: ReadonlySet<number>): Bo
 export async function checkBox(o: { commitOpen?: boolean } = {}): Promise<BoxDoctorReport> {
   const checkedAt = new Date().toISOString()
   if (process.platform !== 'win32')
-    return { checkedAt, supported: false, processes: null, memory: null, findings: [] }
+    return { checkedAt, supported: false, processes: null, memory: null, findings: [], checked: [] }
   const memory = readMachineMemory()
   const table = nativeProcessTable()
-  const findings: BoxFinding[] = [
-    ...pathShimFindings(await registryPath()),
-    ...memoryFindings(memory, o.commitOpen ?? false),
-  ]
-  const reaperInstalled = existsSync(reaperScript())
-  if (table) findings.push(...ptyHostFindings(table, reaperInstalled))
-  if (reaperInstalled) findings.push(...(await reaperFindings(Date.now())))
-  if (table && existsSync(alertsFile())) {
-    try {
-      findings.push(
-        ...hoardFindings(readFileSync(alertsFile(), 'utf8'), new Set(table.map((p) => p.pid))),
-      )
-    } catch {
-      // unreadable alerts file: the reaper rewrites it on the next change
-    }
+  const findings: BoxFinding[] = []
+  const checked: string[] = []
+  const add = (family: string, found: BoxFinding[] | null) => {
+    if (!found) return
+    findings.push(...found)
+    checked.push(family)
   }
-  if (table)
+  const path = await registryPath()
+  add('path-shim:', path && pathShimFindings(path))
+  add('commit', memoryFindings(memory, o.commitOpen ?? false))
+  const reaperInstalled = existsSync(reaperScript())
+  if (table) add('pty-hosts', ptyHostFindings(table, reaperInstalled))
+  // Not installed: nothing to watch, so an incident from when it was is over.
+  add('reaper', reaperInstalled ? await reaperFindings(Date.now()) : [])
+  if (table) {
+    let hoards: BoxFinding[] | null = []
+    if (existsSync(alertsFile())) {
+      try {
+        hoards = hoardFindings(readFileSync(alertsFile(), 'utf8'), new Set(table.map((p) => p.pid)))
+      } catch {
+        hoards = null // unreadable for now: the reaper rewrites it on the next change
+      }
+    }
+    add('hoard:', hoards)
     findings.push({
       key: 'processes',
       level: 'note',
       message: `${table.length} processes running.`,
     })
-  return { checkedAt, supported: true, processes: table?.length ?? null, memory, findings }
+  }
+  return { checkedAt, supported: true, processes: table?.length ?? null, memory, findings, checked }
 }
 
 export interface BoxIncidentDeps {
@@ -321,21 +357,27 @@ export const defaultBoxIncidentDeps: BoxIncidentDeps = {
   resolve: resolveIncident,
 }
 
-/** One incident per problem (a repeat bumps a count and pages nobody); every box-doctor incident
- *  whose problem is gone is resolved. Notes never become incidents. Returns how many it resolved. */
+/** One incident per problem (a repeat bumps a count and pages nobody); a box-doctor incident whose
+ *  problem is gone is resolved only when its check ran this pass. Notes never become incidents. One
+ *  problem that fails to record never stops the rest, or the resolving. Returns how many it resolved. */
 export async function syncBoxIncidents(
-  findings: readonly BoxFinding[],
+  report: Pick<BoxDoctorReport, 'findings' | 'checked'>,
   deps: BoxIncidentDeps = defaultBoxIncidentDeps,
 ): Promise<number> {
-  const problems = findings.filter((f) => f.level === 'problem')
+  const problems = report.findings.filter((f) => f.level === 'problem')
   for (const f of problems) {
     const opts = { scope: BOX_DOCTOR_SCOPE, key: f.key, error: f.message, failureType: 'machine' }
-    await deps.notify(await deps.record(opts), opts)
+    try {
+      await deps.notify(await deps.record(opts), opts)
+    } catch (err) {
+      console.error(`[agenthydra] box doctor: could not record ${f.key}:`, err)
+    }
   }
   const live = new Set(problems.map((f) => f.key))
+  const checked = new Set(report.checked)
   let resolved = 0
   for (const open of deps.openKeys()) {
-    if (!live.has(open.key) && deps.resolve(open.id)) resolved++
+    if (!live.has(open.key) && checked.has(familyOf(open.key)) && deps.resolve(open.id)) resolved++
   }
   return resolved
 }
@@ -345,14 +387,14 @@ export interface BoxDoctorPassResult {
   resolvedIncidents: number
 }
 
-/** Check the box and bring its incidents in line. Off Windows it records and resolves nothing. */
+/** Check the box and bring its incidents in line. Off Windows nothing is checked, so it records
+ *  and resolves nothing. */
 export async function runBoxDoctorPass(
   deps: BoxIncidentDeps = defaultBoxIncidentDeps,
 ): Promise<BoxDoctorPassResult> {
   const commitOpen = deps.openKeys().some((o) => o.key === 'commit')
   const report = await checkBox({ commitOpen })
-  if (!report.supported) return { report, resolvedIncidents: 0 }
-  return { report, resolvedIncidents: await syncBoxIncidents(report.findings, deps) }
+  return { report, resolvedIncidents: await syncBoxIncidents(report, deps) }
 }
 
 let timer: ReturnType<typeof setInterval> | null = null
