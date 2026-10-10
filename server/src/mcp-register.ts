@@ -390,7 +390,7 @@ function planKey(spec: KeySpec, enabled: boolean, current: unknown, configPath: 
     next: McpHttpEntry | null,
     conflict: string | null = null,
   ): KeyPlan => ({ spec, current, action, conflict, write, next })
-  const present = current !== undefined && current !== null
+  const present = current != null
   if (present && !spec.ours(current))
     return plan('conflict', false, null, foreignMessage(configPath, spec.key))
   if (!enabled) return present ? plan('removed', true, null) : plan('absent', false, null)

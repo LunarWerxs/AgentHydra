@@ -81,7 +81,7 @@ export function searchTerms(query: string): string[] {
 
 /** One row's searchable text from its parts (number, name, account, plan); empty parts are skipped. */
 export function searchText(...parts: (string | number | null | undefined)[]): string {
-  return fold(parts.filter((p) => p !== null && p !== undefined && p !== '').join(' '))
+  return fold(parts.filter((p) => p != null && p !== '').join(' '))
 }
 
 /** Every word is somewhere in the row's text. No words matches every row. */

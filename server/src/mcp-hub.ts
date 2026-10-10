@@ -117,7 +117,7 @@ export class SharedServer {
 
   private ensure(): Promise<void> {
     const dead = this.proc?.exitCode
-    if (this.proc && dead !== null && dead !== undefined) this.exited(this.proc, dead)
+    if (this.proc && dead != null) this.exited(this.proc, dead)
     this.ready ??= this.start().catch((err) => {
       this.stop()
       throw err
