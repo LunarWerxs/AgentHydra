@@ -161,6 +161,20 @@ describe('ChatStore items', () => {
     expect(new ChatStore(h).loadItems('c5').map((i) => (i as { text: string }).text)).toEqual(['final'])
   })
 
+  test('a flush that wrote an in-flight line, then the in-flight write landing late, still reads the newest line', async () => {
+    const h = home()
+    const store = new ChatStore(h)
+    store.appendItem('c6', text('x', 'running'))
+    await new Promise((r) => setImmediate(r))
+    store.appendItem('c6', text('x', 'final'))
+    store.flush()
+    // The earlier async append lands after flush's synchronous write: the file now ends with the stale line.
+    appendFileSync(store.itemsFile('c6'), JSON.stringify(text('x', 'running')) + '\n')
+    expect(store.loadItems('c6').map((i) => (i as { text: string }).text)).toEqual(['final'])
+    await store.settledItems()
+    expect(store.loadItems('c6').map((i) => (i as { text: string }).text)).toEqual(['final'])
+  })
+
   test('a torn last line is skipped, and the next append starts on its own line', async () => {
     const h = home()
     const store = new ChatStore(h)

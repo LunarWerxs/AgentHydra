@@ -248,7 +248,9 @@ export class ChatStore {
   /** The lines given to appendItem that may not be in the file yet, oldest first. */
   private pendingLines(file: string): string {
     const q = this.appends.get(file)
-    return q ? (q.flightWritten ? '' : q.flying.join('')) + q.waiting.join('') : ''
+    // After a flush wrote the in-flight batch, that batch's own async write may still land later and sit newest in the
+    // file, so what flush wrote (reissue, which also holds the in-flight lines) is laid over it until drainAppends rewrites it.
+    return q ? (q.flightWritten ? q.reissue.join('') : q.flying.join('')) + q.waiting.join('') : ''
   }
 
   /** Changes whenever the chat's item file or the media folder changes; '' when the chat has no file. */
