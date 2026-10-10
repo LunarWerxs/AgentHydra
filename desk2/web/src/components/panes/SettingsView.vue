@@ -453,7 +453,7 @@ onBeforeUnmount(() => {
         <span v-if="saveError || ah.error.value || dw.error.value" class="text-danger-text">Not saved: {{ saveError || ah.error.value || dw.error.value }}</span>
       </div>
 
-      <div v-if="!local && needsSettings" class="text-[13px] leading-4.75" :class="loadError ? 'text-danger-text' : 'text-text-muted'">
+      <div v-if="!local && needsSettings" class="text-[13px]/4.75" :class="loadError ? 'text-danger-text' : 'text-text-muted'">
         {{ loadError ? `Could not load settings: ${loadError}` : 'Loading…' }}
       </div>
 

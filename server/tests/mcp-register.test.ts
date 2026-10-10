@@ -215,6 +215,33 @@ test('a failed WRITE is reported by the read-only status, not silently dropped',
   expect(mcpRegistrationStatus({ daemonUrl: URL_, configPath }).error).toBeNull()
 })
 
+// A write failure belongs only to the keys that were being written. A browser entry already correct
+// is not written, so it must not report the agenthydra entry's EACCES.
+test('a failed write is reported only against the key that was being written', () => {
+  const configPath = join(scratch(), '.claude.json')
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      mcpServers: { [MCP_BROWSER_KEY]: { type: 'http', url: deskBrowserMcpUrl() } },
+    }),
+  )
+  resetMcpRegisterMemory()
+  const res = syncMcpRegistration(
+    { daemonUrl: URL_, enabled: true, configPath },
+    {
+      writeConfig: () => {
+        throw new Error('EACCES: permission denied')
+      },
+    },
+  )
+  expect(res.action).toBe('failed')
+  expect(res.error).toContain('EACCES')
+  expect(res.browser.action).toBe('unchanged')
+  expect(res.browser.registered).toBe(true)
+  expect(res.browser.error).toBeNull()
+  expect(mcpRegistrationStatus({ daemonUrl: URL_, configPath }).browser.error).toBeNull()
+})
+
 // A dotfile manager may have made ~/.claude.json a symlink into its own store. Renaming over the
 // LINK replaces it with a regular file and orphans the real config.
 test('a symlinked config is written through, not replaced by a regular file', () => {

@@ -279,7 +279,7 @@ const ACT = 'flex h-6 items-center rounded-[var(--radius-6)] px-2.5 text-[13px] 
       </form>
 
       <div v-else-if="panel === 'step'" class="flex flex-col gap-2" role="alertdialog" aria-label="Confirm">
-        <p class="text-[13px] leading-4.75">{{ stepText }}</p>
+        <p class="text-[13px]/4.75">{{ stepText }}</p>
         <div class="flex justify-end gap-1.5">
           <button type="button" :class="ACT" class="text-(--text-muted) hover:bg-(--fill-hover)" @click="panel = null">Cancel</button>
           <button type="button" :class="ACT" class="bg-(--fill-secondary) hover:bg-(--fill-secondary-hover)" @click="runStep">

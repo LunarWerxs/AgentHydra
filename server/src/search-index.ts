@@ -193,6 +193,16 @@ function close() {
   db = null
 }
 
+/** A Codex rollout's `response_item` payload: a message, or some other record we do not read. */
+type CodexPayload = { type?: string; role?: string; content?: unknown }
+
+/** The fields of a transcript line this index reads; every other field is ignored. */
+type ConversationRecord = {
+  type?: string
+  message?: { content?: unknown }
+  payload?: CodexPayload
+}
+
 /**
  * The searchable half of a transcript: what the person said and what the model said back.
  *
@@ -201,51 +211,59 @@ function close() {
  * index into a 200 MB one.
  */
 function pushConversationLine(line: string, out: string[]): void {
-  {
-    if (line.charCodeAt(0) !== 123 /* '{' */) return
-    let ev: {
-      type?: string
-      message?: { content?: unknown }
-      payload?: { type?: string; role?: string; content?: unknown }
-    }
-    try {
-      ev = JSON.parse(line)
-    } catch {
-      return // partial trailing write, or a record we do not understand
-    }
-    // A Codex rollout says it as `response_item` messages: input_text from the person, output_text back.
-    // The runtime's own context, sent as user-role blocks, is left out as the transcript view leaves it out.
-    if (ev.type === 'response_item') {
-      const p = ev.payload
-      if (
-        p?.type !== 'message' ||
-        (p.role !== 'user' && p.role !== 'assistant') ||
-        !Array.isArray(p.content)
-      )
-        return
-      for (const block of p.content) {
-        if (block?.type !== 'input_text' && block?.type !== 'output_text') continue
-        if (
-          typeof block.text !== 'string' ||
-          (p.role === 'user' && isCodexInjectedUserText(block.text))
-        )
-          continue
-        out.push(block.text)
-      }
-      return
-    }
-    if (ev.type !== 'user' && ev.type !== 'assistant') return
-    const content = ev.message?.content
-    if (typeof content === 'string') {
-      out.push(content)
-      return
-    }
-    if (!Array.isArray(content)) return
-    for (const block of content) {
-      // `text` only: thinking is filtered out of the transcript view too, and tool_use/tool_result
-      // are the bulk this index exists to skip.
-      if (block?.type === 'text' && typeof block.text === 'string') out.push(block.text)
-    }
+  const ev = parseConversationLine(line)
+  if (!ev) return
+  // A Codex rollout says it as `response_item` messages: input_text from the person, output_text back.
+  // The runtime's own context, sent as user-role blocks, is left out as the transcript view leaves it out.
+  if (ev.type === 'response_item') {
+    pushCodexMessage(ev.payload, out)
+    return
+  }
+  if (ev.type !== 'user' && ev.type !== 'assistant') return
+  pushClaudeMessage(ev.message?.content, out)
+}
+
+/** The record on a line, or null for a line that is not a JSON object. */
+function parseConversationLine(line: string): ConversationRecord | null {
+  if (line.charCodeAt(0) !== 123 /* '{' */) return null
+  try {
+    return JSON.parse(line)
+  } catch {
+    return null // partial trailing write, or a record we do not understand
+  }
+}
+
+/** A Codex message from the person or the model: its text blocks, in order. */
+function pushCodexMessage(p: CodexPayload | undefined, out: string[]): void {
+  if (p?.type !== 'message') return
+  if (p.role !== 'user' && p.role !== 'assistant') return
+  if (!Array.isArray(p.content)) return
+  for (const block of p.content) pushCodexBlock(block, p.role, out)
+}
+
+/** One block of a Codex message: its text, unless it is not text or is the runtime's own context. */
+function pushCodexBlock(
+  block: { type?: string; text?: unknown } | null,
+  role: string | undefined,
+  out: string[],
+): void {
+  if (block?.type !== 'input_text' && block?.type !== 'output_text') return
+  if (typeof block.text !== 'string') return
+  if (role === 'user' && isCodexInjectedUserText(block.text)) return
+  out.push(block.text)
+}
+
+/** A Claude message: a plain string, or a content list whose text blocks are kept. */
+function pushClaudeMessage(content: unknown, out: string[]): void {
+  if (typeof content === 'string') {
+    out.push(content)
+    return
+  }
+  if (!Array.isArray(content)) return
+  for (const block of content) {
+    // `text` only: thinking is filtered out of the transcript view too, and tool_use/tool_result
+    // are the bulk this index exists to skip.
+    if (block?.type === 'text' && typeof block.text === 'string') out.push(block.text)
   }
 }
 

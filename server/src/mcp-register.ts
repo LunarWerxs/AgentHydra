@@ -446,6 +446,34 @@ function assemble(
 
 const allKeys = (outcome: KeyOutcome): [KeyOutcome, KeyOutcome] => [outcome, outcome]
 
+/** Both keys' outcomes once the write has been attempted. settle ignores a failure for an unwritten key. */
+const settleAll = (
+  plans: [KeyPlan, KeyPlan],
+  enabled: boolean,
+  failure: string | null,
+): [KeyOutcome, KeyOutcome] =>
+  plans.map((p) => settle(p, enabled, failure)) as [KeyOutcome, KeyOutcome]
+
+/** Puts each planned key into the servers record: the new entry, or a delete when it is off. */
+function applyPlans(servers: Record<string, unknown>, plans: [KeyPlan, KeyPlan]): void {
+  for (const p of plans) {
+    if (!p.write) continue
+    if (p.next) servers[p.spec.key] = p.next
+    else delete servers[p.spec.key]
+  }
+}
+
+/** Remembers a failed write for each key we tried to write, so the read-only status can say why. */
+function rememberWriteErrors(configPath: string, plans: [KeyPlan, KeyPlan], failure: string): void {
+  for (const p of plans)
+    if (p.write) lastWriteErrors.set(p.spec.key, { configPath, error: failure })
+}
+
+/** A sync that ends without a failed write clears any failure remembered for these keys. */
+function forgetWriteErrors(plans: [KeyPlan, KeyPlan]): void {
+  for (const p of plans) lastWriteErrors.delete(p.spec.key)
+}
+
 /**
  * Bring the registration in line with the setting. Called at boot (once the bound port is known)
  * and again whenever the setting is flipped in Settings.
@@ -502,28 +530,16 @@ export function syncMcpRegistration(
     // Nothing to write is not a race, so it returns before the stamp check: not writing cannot lose
     // anyone's work, and a concurrent writer is none of our business here.
     if (!plans.some((p) => p.write)) {
-      for (const p of plans) lastWriteErrors.delete(p.spec.key)
-      return assemble(
-        enabled,
-        configPath,
-        specs,
-        plans.map((p) => settle(p, enabled, null)) as [KeyOutcome, KeyOutcome],
-      )
+      forgetWriteErrors(plans)
+      return assemble(enabled, configPath, specs, settleAll(plans, enabled, null))
     }
 
-    for (const p of plans) {
-      if (!p.write) continue
-      if (p.next) servers[p.spec.key] = p.next
-      else delete servers[p.spec.key]
-    }
+    applyPlans(servers, plans)
     config.mcpServers = servers
 
     if (stamp(configPath) !== before) {
       const raceError = `${configPath} was written by another process while this update was being prepared`
-      raced = plans.map((p) => settle(p, enabled, p.write ? raceError : null)) as [
-        KeyOutcome,
-        KeyOutcome,
-      ]
+      raced = settleAll(plans, enabled, raceError)
       continue
     }
 
@@ -531,22 +547,11 @@ export function syncMcpRegistration(
       writeConfig(configPath, config)
     } catch (e) {
       const failure = writeFailure(configPath, e)
-      for (const p of plans)
-        if (p.write) lastWriteErrors.set(p.spec.key, { configPath, error: failure })
-      return assemble(
-        enabled,
-        configPath,
-        specs,
-        plans.map((p) => settle(p, enabled, p.write ? failure : null)) as [KeyOutcome, KeyOutcome],
-      )
+      rememberWriteErrors(configPath, plans, failure)
+      return assemble(enabled, configPath, specs, settleAll(plans, enabled, failure))
     }
-    for (const p of plans) lastWriteErrors.delete(p.spec.key)
-    return assemble(
-      enabled,
-      configPath,
-      specs,
-      plans.map((p) => settle(p, enabled, null)) as [KeyOutcome, KeyOutcome],
-    )
+    forgetWriteErrors(plans)
+    return assemble(enabled, configPath, specs, settleAll(plans, enabled, null))
   }
 
   return assemble(

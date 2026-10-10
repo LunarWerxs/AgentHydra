@@ -110,42 +110,88 @@ interface Measure {
 
 /** The failures at one width: an empty list is a pass. */
 function judge(m: Measure, needAlert: boolean): string[] {
+  return [
+    ...headerFailures(m, needAlert),
+    ...controlFailures(m),
+    ...overlapFailures(m.controls),
+    ...minimumWidthFailures(m.controls),
+    ...rightButtonFailures(m.right),
+    ...(m.titleRule ? [m.titleRule] : []),
+    ...titleGroupFailures(m),
+    ...clippedFailures(m),
+  ]
+}
+
+/** The header's own height and its place in its column, and the alert when there is room for it. */
+function headerFailures(m: Measure, needAlert: boolean): string[] {
   const out: string[] = []
   const { hr } = m
   if (hr.h > 32.5) out.push(`header ${hr.h.toFixed(1)}px tall`)
   if (hr.r > m.col.r + 0.5 || hr.l < m.col.l - 0.5) out.push(`header ${hr.l.toFixed(0)}-${hr.r.toFixed(0)} runs outside its column ${m.col.l.toFixed(0)}-${m.col.r.toFixed(0)}`)
   // Below 286px of room the alert is screen-reader-only (the container query on its class): there is no space beside the buttons.
   if (needAlert && hr.w - m.pl - m.pr >= 286 && !m.controls.some((c) => c.name === 'alert')) out.push('alert not shown')
+  return out
+}
+
+/** Each control stays inside the header, is whole, and is what a click at its centre hits. */
+function controlFailures(m: Measure): string[] {
+  const out: string[] = []
+  const { hr } = m
   for (const c of m.controls) {
     if (c.l < hr.l - 0.5 || c.r > hr.r + 0.5 || c.t < hr.t - 0.5 || c.b > hr.b + 0.5) out.push(`${c.name} outside the header`)
     if (c.cut && c.name !== 'title' && c.name !== 'alert') out.push(`${c.name} is cut off by its container`)
     if (!c.hit) out.push(`${c.name} is covered: a click at its centre hits something else`)
   }
-  for (let i = 0; i < m.controls.length; i++) {
-    for (let j = i + 1; j < m.controls.length; j++) {
-      const a = m.controls[i]!
-      const b = m.controls[j]!
+  return out
+}
+
+/** No two visible controls overlap. */
+function overlapFailures(controls: Control[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < controls.length; i++) {
+    for (let j = i + 1; j < controls.length; j++) {
+      const a = controls[i]!
+      const b = controls[j]!
       const ix = Math.min(a.r, b.r) - Math.max(a.l, b.l)
       const iy = Math.min(a.b, b.b) - Math.max(a.t, b.t)
       if (ix > 0.5 && iy > 0.5) out.push(`${a.name} overlaps ${b.name}`)
     }
   }
-  for (const c of m.controls) {
+  return out
+}
+
+/** The Connections logo and the folder pill keep their smallest widths. */
+function minimumWidthFailures(controls: Control[]): string[] {
+  const out: string[] = []
+  for (const c of controls) {
     if (c.name.startsWith('Connections workspace') && c.w < 19) out.push(`${c.name} shows ${c.w.toFixed(1)}px, less than its logo`)
     if (c.name === 'folder' && c.w < 63.5) out.push(`folder pill ${c.w.toFixed(1)}px, neither 64px nor hidden`)
   }
-  for (const c of m.right) if (Math.abs(c.w - 26) > 0.5 || Math.abs(c.h - 26) > 0.5) out.push(`${c.name} is ${c.w.toFixed(1)}x${c.h.toFixed(1)}, not 26`)
-  if (m.titleRule) out.push(m.titleRule)
-  const content = hr.w - m.pl - m.pr
-  if (m.natural <= content - 2 * m.side - 2 * m.gap) {
-    const off = (m.mid.l + m.mid.r) / 2 - (hr.l + m.pl + content / 2)
-    if (Math.abs(off) > 1) out.push(`title group ${off.toFixed(1)}px off centre`)
-  } else {
-    const gap = m.rightBox.l - m.mid.r
-    if (Math.abs(gap - (m.gap + m.rightMl)) > 1) out.push(`title group ${gap.toFixed(1)}px from the buttons, not ${m.gap + m.rightMl}`)
-  }
-  if (m.spacer > 1 && m.clipped.length) out.push(`clipped with ${m.spacer.toFixed(0)}px spare: ${m.clipped.join(', ')}`)
   return out
+}
+
+/** The right-hand pane buttons keep their 26px. */
+function rightButtonFailures(right: Control[]): string[] {
+  const out: string[] = []
+  for (const c of right) if (Math.abs(c.w - 26) > 0.5 || Math.abs(c.h - 26) > 0.5) out.push(`${c.name} is ${c.w.toFixed(1)}x${c.h.toFixed(1)}, not 26`)
+  return out
+}
+
+/** The title group is centred while it fits, and otherwise sits the gap from the buttons. */
+function titleGroupFailures(m: Measure): string[] {
+  const content = m.hr.w - m.pl - m.pr
+  if (m.natural <= content - 2 * m.side - 2 * m.gap) {
+    const off = (m.mid.l + m.mid.r) / 2 - (m.hr.l + m.pl + content / 2)
+    return Math.abs(off) > 1 ? [`title group ${off.toFixed(1)}px off centre`] : []
+  }
+  const gap = m.rightBox.l - m.mid.r
+  return Math.abs(gap - (m.gap + m.rightMl)) > 1 ? [`title group ${gap.toFixed(1)}px from the buttons, not ${m.gap + m.rightMl}`] : []
+}
+
+/** Nothing in the title group is clipped while the bar has spare room. */
+function clippedFailures(m: Measure): string[] {
+  if (m.spacer > 1 && m.clipped.length) return [`clipped with ${m.spacer.toFixed(0)}px spare: ${m.clipped.join(', ')}`]
+  return []
 }
 
 const SCRATCH = mkdtempSync(join(tmpdir(), 'desk2-header-fit-'))

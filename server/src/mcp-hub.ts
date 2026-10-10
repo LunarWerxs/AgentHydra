@@ -334,6 +334,114 @@ function syncInstanceFiles(
   return { written, problems }
 }
 
+/** A config entry when enabled: a hub entry whose port moved is rewritten, and a shareable stdio entry is saved in the
+ *  store and rewritten to the hub. Returns whether the entry changed. */
+function shareEntry(
+  servers: Json,
+  nextStore: Json,
+  name: string,
+  entry: unknown,
+  daemonUrl: string,
+): boolean {
+  const url = sharedUrl(daemonUrl, name)
+  if (hubNameOf(entry) === name) {
+    if ((entry as Json).url === url) return false
+    servers[name] = { type: 'http', url }
+    return true
+  }
+  if (!shareableSpec(entry)) return false
+  nextStore[name] = entry
+  servers[name] = { type: 'http', url }
+  return true
+}
+
+/** A config entry when disabled: a hub entry goes back to its stored original, which then leaves the store. Returns
+ *  whether the entry changed. */
+function restoreEntry(servers: Json, nextStore: Json, name: string, entry: unknown): boolean {
+  if (hubNameOf(entry) !== name || !(name in nextStore)) return false
+  servers[name] = nextStore[name]
+  delete nextStore[name]
+  return true
+}
+
+/** Applies the setting to each config entry the hub may serve, and returns the names that changed. */
+function applySetting(
+  servers: Json,
+  nextStore: Json,
+  enabled: boolean,
+  daemonUrl: string,
+): string[] {
+  const changed: string[] = []
+  for (const [name, entry] of Object.entries(servers)) {
+    if (!SHARE_NAME.test(name)) continue
+    const moved = enabled
+      ? shareEntry(servers, nextStore, name, entry, daemonUrl)
+      : restoreEntry(servers, nextStore, name, entry)
+    if (moved) changed.push(name)
+  }
+  return changed
+}
+
+/** The store keeps only originals whose entry is still in the config. */
+function pruneStore(nextStore: Json, servers: Json): void {
+  for (const name of Object.keys(nextStore)) if (!(name in servers)) delete nextStore[name]
+}
+
+/** Both files are read before anything is written; a failed read is returned as the error instead. */
+function readSharedFiles(
+  configPath: string,
+  storePath: string,
+): { config: Json; store: Json } | { error: string | null } {
+  const read = readConfig(configPath)
+  if (!read.config) return { error: read.error }
+  const storeRead = readConfig(storePath)
+  if (!storeRead.config) return { error: storeRead.error }
+  return { config: read.config, store: storeRead.config }
+}
+
+/** True when this sync would write and the config changed since it was read: another process owns it now. */
+function writtenByAnother(configPath: string, before: string | null, wouldWrite: boolean): boolean {
+  return wouldWrite && stampOf(configPath) !== before
+}
+
+/** The store is written only when this sync changed it. */
+function writeStore(storePath: string, nextStore: Json, storeChanged: boolean): void {
+  if (storeChanged) writeConfigAtomic(storePath, nextStore)
+}
+
+/** The config is written only when an entry changed, and then its servers map is replaced whole. */
+function writeConfig(configPath: string, config: Json, servers: Json, changed: string[]): void {
+  if (!changed.length) return
+  config.mcpServers = servers
+  writeConfigAtomic(configPath, config)
+}
+
+/** A hub whose entry has left the store is stopped and forgotten. */
+function stopUnstoredHubs(nextStore: Json): void {
+  for (const [name, hub] of hubs)
+    if (!(name in nextStore)) {
+      hub.stop()
+      hubs.delete(name)
+    }
+}
+
+/** The sync's result. A guarded sync changed nothing and says why, ahead of any instance problems. */
+function syncReport(
+  guarded: boolean,
+  configPath: string,
+  changed: string[],
+  instances: { written: number; problems: string[] },
+): { changed: string[]; instances: number; error: string | null } {
+  const problems = guarded
+    ? [`${configPath} was written by another process; the next sync retries`, ...instances.problems]
+    : instances.problems
+  return {
+    changed: guarded ? [] : changed,
+    instances: instances.written,
+    error: problems.join('; ') || null,
+  }
+}
+
 /**
  * Make ~/.claude.json and each CLI instance's config agree with the setting. Enabled: each shareable stdio entry is
  * kept in the store and rewritten to the hub URL, and a hub entry whose port moved is rewritten to the new one.
@@ -358,76 +466,35 @@ export function syncSharedMcp(opts: {
     return { changed: [], instances: 0, error: null }
   try {
     const before = stampOf(configPath)
-    const read = readConfig(configPath)
-    if (!read.config) return { changed: [], instances: 0, error: read.error }
-    const storeRead = readConfig(storePath)
-    if (!storeRead.config) return { changed: [], instances: 0, error: storeRead.error }
-    const config = read.config
+    const files = readSharedFiles(configPath, storePath)
+    if ('error' in files) return { changed: [], instances: 0, error: files.error }
+    const { config, store } = files
     const servers = mcpServersOf(config)
-    const store = storeRead.config
     const nextStore: Json = { ...store }
-    const changed: string[] = []
-    for (const [name, entry] of Object.entries(servers)) {
-      if (!SHARE_NAME.test(name)) continue
-      const url = sharedUrl(opts.daemonUrl, name)
-      if (enabled) {
-        if (hubNameOf(entry) === name) {
-          if ((entry as Json).url !== url) {
-            servers[name] = { type: 'http', url }
-            changed.push(name)
-          }
-        } else if (shareableSpec(entry)) {
-          nextStore[name] = entry
-          servers[name] = { type: 'http', url }
-          changed.push(name)
-        }
-      } else if (hubNameOf(entry) === name && name in nextStore) {
-        servers[name] = nextStore[name]
-        delete nextStore[name]
-        changed.push(name)
-      }
-    }
-    for (const name of Object.keys(nextStore)) if (!(name in servers)) delete nextStore[name]
+    const changed = applySetting(servers, nextStore, enabled, opts.daemonUrl)
+    pruneStore(nextStore, servers)
     const storeChanged = JSON.stringify(nextStore) !== JSON.stringify(store)
-    const guarded = (changed.length > 0 || storeChanged) && stampOf(configPath) !== before
-    const writeStore = () => {
-      if (storeChanged) writeConfigAtomic(storePath, nextStore)
-    }
-    const writeConfig = () => {
-      if (!changed.length) return
-      config.mcpServers = servers
-      writeConfigAtomic(configPath, config)
-    }
-    if (enabled && !guarded) {
-      writeStore()
-      writeConfig()
+    const guarded = writtenByAnother(configPath, before, changed.length > 0 || storeChanged)
+    const sharing = enabled && !guarded
+    const restoring = !enabled && !guarded
+    // Sharing saves each original before an entry points at the hub.
+    if (sharing) {
+      writeStore(storePath, nextStore, storeChanged)
+      writeConfig(configPath, config, servers, changed)
     }
     const instances = syncInstanceFiles(
       opts.instancePaths ?? [],
-      enabled && !guarded ? nextStore : store,
+      sharing ? nextStore : store,
       enabled,
       opts.daemonUrl,
     )
-    if (!enabled && !guarded) {
-      writeConfig()
-      writeStore()
-      for (const [name, hub] of hubs)
-        if (!(name in nextStore)) {
-          hub.stop()
-          hubs.delete(name)
-        }
+    // Restoring puts each original back before the store forgets it, and the hubs it no longer feeds stop.
+    if (restoring) {
+      writeConfig(configPath, config, servers, changed)
+      writeStore(storePath, nextStore, storeChanged)
+      stopUnstoredHubs(nextStore)
     }
-    const problems = guarded
-      ? [
-          `${configPath} was written by another process; the next sync retries`,
-          ...instances.problems,
-        ]
-      : instances.problems
-    return {
-      changed: guarded ? [] : changed,
-      instances: instances.written,
-      error: problems.join('; ') || null,
-    }
+    return syncReport(guarded, configPath, changed, instances)
   } catch (err) {
     return { changed: [], instances: 0, error: `shared MCP sync failed: ${errorText(err)}` }
   }

@@ -352,6 +352,7 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
 
 /** The project list, its folders, roots and hidden choices, and each project's icon. */
 function projectRoutes(app: Hono, ctx: ServerContext, projects: ProjectList): void {
+  app.get('/api/projects', (c) => answer(c, () => projects.list({ wait: c.req.query('wait') === '1', hidden: c.req.query('hidden') === '1' })))
   const choiceFields = { folders: 'projectFolders', roots: 'projectRoots', hidden: 'hiddenProjects' } as const
   for (const kind of Object.keys(choiceFields) as (keyof typeof choiceFields)[]) {
     const field = choiceFields[kind]
@@ -377,23 +378,18 @@ function projectRoutes(app: Hono, ctx: ServerContext, projects: ProjectList): vo
   })
 }
 
-export default async function plugin(app: Hono, ctx: ServerContext): Promise<void> {
-  const deps = ctx.deps
-  // The send queue sees every chat event; it is built after the manager it sends through.
-  const toQueue = { fn: (_event: ServerEvent): void => {} }
-  const manager = createManager(ctx, toQueue)
-  // Taken over behind the server's start, so /api/health does not wait on it; the hello and every route on the
-  // chats wait for it, so no window sees an adopted chat as stopped.
-  const hosts = adoptHosts(manager)
+/** Chats and the queue answer only once the adopted hosts are taken over (see adoptHosts). */
+function waitForHosts(app: Hono, hosts: Promise<void>): void {
   const afterHosts = async (_c: Context, next: () => Promise<void>): Promise<void> => {
     await hosts
     await next()
   }
   for (const path of ['/api/chats', '/api/chats/*', '/api/sessions/*', '/api/queue', '/api/queue/*']) app.use(path, afterHosts)
-  // The browser plugin (65) reads a chat's session ids here: which browser pages are the chat's own.
-  ctx.deps.chatSessions = (chatId: string): string[] => manager.browserSessions(chatId)
-  // The headless audio plugin (67) names the chat that owns a Claude Code session.
-  ctx.deps.chatForSession = (sessionId: string): string | null => manager.chatForSession(sessionId)
+}
+
+/** The send queue, built after the manager it sends through: `toQueue` hands it every chat event, and its stop is a stop hook. */
+function buildQueue(ctx: ServerContext, manager: ChatManager, toQueue: { fn: (event: ServerEvent) => void }): QueueManager {
+  const deps = ctx.deps
   const queue = new QueueManager({
     home: ctx.home,
     manager,
@@ -402,17 +398,13 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     retryMs: typeof deps.queueRetryMs === 'number' ? deps.queueRetryMs : undefined,
   })
   toQueue.fn = (event) => queue.observe(event)
-  // Stop hooks run in order: this one before closeAll (below), so the chats closing do not read as their turns ending.
+  // Stop hooks run in order: this one before closeAll (in the plugin's last stop hook), so the chats closing do not read as their turns ending.
   ctx.onStop(() => queue.stop())
+  return queue
+}
 
-  ctx.registerHello(async () => {
-    await hosts
-    return { type: 'hello', version: ctx.version, chats: manager.list({ archived: true }), settings: ctx.settings(), queue: queue.state() }
-  })
-
-  queueRoutes(app, queue)
-
-  // Diagnostics (SPEC "Diagnostics"): ?since= (epoch ms or a date), ?cause=, ?limit= (default 100, at most 1000).
+/** The failures ledger (SPEC "Diagnostics"): ?since= (epoch ms or a date), ?cause=, ?limit= (default 100, at most 1000). */
+function failuresRoute(app: Hono, manager: ChatManager): void {
   diagnosticsRoute(app, 'failures', (c) => {
     const limit = Number(c.req.query('limit'))
     return manager.failures.read({
@@ -421,10 +413,17 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 1000) : 100,
     })
   })
+}
 
-  chatRoutes(app, manager, queue)
-  const folders = new RecentFolders(join(ctx.home, 'folders.json'))
-  const recent = () => folders.list(manager.list({ archived: true }))
+/** The folder menu's Recent list, read against the chats that are listed (archived ones included). */
+function recentFolders(folders: RecentFolders, manager: ChatManager): ReturnType<RecentFolders['list']> {
+  return folders.list(manager.list({ archived: true }))
+}
+
+/** The folder menu's rows: Recent, Add (the folder dialog), and the reveal of a folder or a file. */
+function folderRoutes(app: Hono, ctx: ServerContext, manager: ChatManager, folders: RecentFolders): void {
+  const deps = ctx.deps
+  const recent = () => recentFolders(folders, manager)
   const pickFolder = (deps.pickFolder as PickFolder | undefined) ?? nativeFolderPicker(ctx.home)
   app.get('/api/folders/recent', (c) => c.json(recent()))
   app.post('/api/folders/recent', (c) =>
@@ -450,14 +449,19 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       revealFile(await body(c), MEDIA_ROUTE, { file: openFile, folder: openFolder, sourceOf: (id) => mediaCache(manager.store.home)?.sourceOf(id) ?? null }),
     ),
   )
+}
+
+/** The project list: Project Hydra's projects, the chats and outside sessions filed into them, and the folder choices. */
+function projectList(ctx: ServerContext, manager: ChatManager, folders: RecentFolders): ProjectList {
+  const deps = ctx.deps
   const mainFile = mainConfigFile(deps.mainClaudeJson as string | null | undefined, deps.agentHydraMcp)
   const projectEnv = (deps.env as Record<string, string | undefined> | undefined) ?? process.env
   const hydraOverride = deps.projectHydra as { location: HydraLocation | null; read: HydraRead } | undefined
   const sessions = (deps.bridge as ManagerBridge | undefined) ?? bridge()
-  const projects = new ProjectList({
+  return new ProjectList({
     findHydra: () => (hydraOverride ? hydraOverride.location : findHydra(projectEnv, mainFile)),
     readHydra: (at) => (hydraOverride ? Promise.resolve(hydraOverride.read) : readHydra(at, projectEnv)),
-    recent,
+    recent: () => recentFolders(folders, manager),
     chats: () =>
       manager
         .list({ archived: true })
@@ -472,7 +476,10 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     }),
     cacheFile: join(ctx.home, 'projects.json'),
   })
-  projectRoutes(app, ctx, projects)
+}
+
+/** Sweeps the project list on a timer, and flushes the projects and the recent folders to disk when the server stops. */
+function keepProjectsSwept(ctx: ServerContext, projects: ProjectList, folders: RecentFolders): void {
   // Chats are filed into their project's group with New closed too (owner, 2026-10-08: "I wouldn't mind if Agent
   // Hydra automatically applies the right folders").
   const sweep = setInterval(() => void projects.sweep().catch(() => {}), PROJECTS_SWEEP_MS)
@@ -482,7 +489,11 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     projects.flushSync()
     folders.flushSync()
   })
-  app.get('/api/mcp-servers', (c) => answer(c, () => mcpServersRoute(c, deps)))
+}
+
+/** The MCP servers: the list, a chat's status, and the switch that turns one server on or off for a chat. */
+function mcpRoutes(app: Hono, ctx: ServerContext, manager: ChatManager): void {
+  app.get('/api/mcp-servers', (c) => answer(c, () => mcpServersRoute(c, ctx.deps)))
   app.get('/api/chats/:id/mcp', (c) => answer(c, () => manager.mcpStatus(c.req.param('id'))))
   app.post('/api/chats/:id/mcp/:name', (c) =>
     answer(c, async () => {
@@ -492,15 +503,13 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       return { ok: true }
     }),
   )
+}
 
-  // Where Claude Code's binary is from (the installed package, the cache, a download running or still needed): a
-  // release has no package, so this is how a smoke test or a person sees whether the first chat will wait.
-  app.get('/api/claude-code', (c) => answer(c, () => claudeCodeBinaryFor(ctx.home).status()))
-
-  // The launcher's stop and restart (SPEC "Launcher"): the server stops the way SIGTERM stops it, the chats running
-  // on in their hosts for the next server; `chats: true` ends them first, once they are taken over. A plain stop
-  // answers without waiting on the takeover, which a host that never answers holds up for its whole connect timeout.
-  const shutdown = (deps.shutdown as (() => void) | undefined) ?? (() => void process.emit('SIGTERM'))
+/** The launcher's stop and restart (SPEC "Launcher"): the server stops the way SIGTERM stops it, the chats running
+ * on in their hosts for the next server; `chats: true` ends them first, once they are taken over. A plain stop
+ * answers without waiting on the takeover, which a host that never answers holds up for its whole connect timeout. */
+function shutdownRoute(app: Hono, ctx: ServerContext, manager: ChatManager, hosts: Promise<void>): void {
+  const shutdown = (ctx.deps.shutdown as (() => void) | undefined) ?? (() => void process.emit('SIGTERM'))
   app.post('/api/server/shutdown', (c) => {
     const refused = callerKind(c.req.raw.headers) === 'other'
     logRestartAsk(ctx.home, `shutdown asked: ${describeCaller(c.req.raw.headers)} -> ${refused ? 'refused' : 'accepted'}`)
@@ -516,17 +525,53 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       return { ok: true, chats }
     })
   })
+}
+
+/** The sessions whose browser tabs are the chats' own: each chat's pages, and each active worker's session. */
+async function tabSweepSessions(manager: ChatManager, deps: ServerContext['deps']): Promise<Set<string>> {
+  const ids = new Set<string>()
+  for (const chat of manager.list()) for (const id of manager.browserSessions(chat.id)) ids.add(id)
+  const workers = await ((deps.bridge as ReturnType<typeof bridge> | undefined) ?? bridge()).workers({ all: true })
+  for (const w of workers) if (w.active && w.sessionId) ids.add(w.sessionId)
+  return ids
+}
+
+export default async function plugin(app: Hono, ctx: ServerContext): Promise<void> {
+  // The send queue sees every chat event; it is built after the manager it sends through.
+  const toQueue = { fn: (_event: ServerEvent): void => {} }
+  const manager = createManager(ctx, toQueue)
+  // Taken over behind the server's start, so /api/health does not wait on it; the hello and every route on the
+  // chats wait for it, so no window sees an adopted chat as stopped.
+  const hosts = adoptHosts(manager)
+  waitForHosts(app, hosts)
+  // The browser plugin (65) reads a chat's session ids here: which browser pages are the chat's own.
+  ctx.deps.chatSessions = (chatId: string): string[] => manager.browserSessions(chatId)
+  // The headless audio plugin (67) names the chat that owns a Claude Code session.
+  ctx.deps.chatForSession = (sessionId: string): string | null => manager.chatForSession(sessionId)
+  const queue = buildQueue(ctx, manager, toQueue)
+
+  ctx.registerHello(async () => {
+    await hosts
+    return { type: 'hello', version: ctx.version, chats: manager.list({ archived: true }), settings: ctx.settings(), queue: queue.state() }
+  })
+
+  queueRoutes(app, queue)
+  failuresRoute(app, manager)
+  chatRoutes(app, manager, queue)
+  const folders = new RecentFolders(join(ctx.home, 'folders.json'))
+  folderRoutes(app, ctx, manager, folders)
+  const projects = projectList(ctx, manager, folders)
+  projectRoutes(app, ctx, projects)
+  keepProjectsSwept(ctx, projects, folders)
+  mcpRoutes(app, ctx, manager)
+
+  // Where Claude Code's binary is from (the installed package, the cache, a download running or still needed): a
+  // release has no package, so this is how a smoke test or a person sees whether the first chat will wait.
+  app.get('/api/claude-code', (c) => answer(c, () => claudeCodeBinaryFor(ctx.home).status()))
+  shutdownRoute(app, ctx, manager, hosts)
 
   const stopClimayte = pollClimayte(ctx, manager)
-  const stopSweep = startTabSweep({
-    deskSessions: async () => {
-      const ids = new Set<string>()
-      for (const chat of manager.list()) for (const id of manager.browserSessions(chat.id)) ids.add(id)
-      const workers = await ((deps.bridge as ReturnType<typeof bridge> | undefined) ?? bridge()).workers({ all: true })
-      for (const w of workers) if (w.active && w.sessionId) ids.add(w.sessionId)
-      return ids
-    },
-  })
+  const stopSweep = startTabSweep({ deskSessions: () => tabSweepSessions(manager, ctx.deps) })
 
   ctx.onStop(async () => {
     stopClimayte()

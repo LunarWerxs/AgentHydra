@@ -77,7 +77,7 @@ const actText = (a: OrchestratorAct): string =>
 </script>
 
 <template>
-  <div class="text-[13px] leading-4.75" data-testid="orchestrator">
+  <div class="text-[13px]/4.75" data-testid="orchestrator">
     <p v-if="armed" class="text-text-muted">
       What the orchestrator does next in each open chat. Armed: a model judges the running chats and the Desk chats an error stopped, and sends the message it writes when the limits allow; the rest it only plans. A usage limit's stop is the babysitter's.
     </p>

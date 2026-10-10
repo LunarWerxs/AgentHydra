@@ -726,3 +726,10 @@ test('GET /api/diagnostics/failures answers the ledger rows with counts, filtere
   const one = await call(desk, 'GET', '/api/diagnostics/failures?cause=network&limit=5')
   expect(one.body.rows.map((r: { cause: string }) => r.cause)).toEqual(['network'])
 })
+
+test('GET /api/projects answers the New screen project grid: the projects, Project Hydra state and the choices', async () => {
+  const { desk } = await boot()
+  const grid = await call(desk, 'GET', '/api/projects')
+  expect(grid.status).toBe(200)
+  expect(grid.body).toMatchObject({ projects: expect.any(Array), hydra: expect.any(Object), choices: expect.any(Object), pending: expect.any(Boolean) })
+})

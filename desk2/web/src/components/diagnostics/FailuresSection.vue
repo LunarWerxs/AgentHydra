@@ -45,7 +45,7 @@ const known = (id: string): boolean => knownIds.value.has(id)
 </script>
 
 <template>
-  <div class="text-[13px] leading-4.75" data-testid="failures">
+  <div class="text-[13px]/4.75" data-testid="failures">
     <p v-if="error" class="text-danger-text">Could not load failures: {{ error }}</p>
     <p v-else-if="!week" class="text-text-muted">Loading…</p>
     <template v-else>

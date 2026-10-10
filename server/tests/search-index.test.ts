@@ -143,6 +143,23 @@ describe('conversationText', () => {
     )
     expect(text).toBe('where is the postcode validator\nin checkout')
   })
+
+  test('keeps a plain-string message and adds nothing for a message with no content list or a Codex non-message', () => {
+    const text = conversationText(
+      [
+        JSON.stringify({
+          type: 'user',
+          message: { role: 'user', content: 'a plain string message' },
+        }),
+        JSON.stringify({ type: 'assistant', message: { role: 'assistant' } }),
+        JSON.stringify({
+          type: 'response_item',
+          payload: { type: 'function_call', name: 'shell' },
+        }),
+      ].join('\n'),
+    )
+    expect(text).toBe('a plain string message')
+  })
 })
 
 describe('an index from before Codex text was read', () => {

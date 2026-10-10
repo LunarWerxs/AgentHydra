@@ -48,7 +48,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
 </script>
 
 <template>
-  <div class="text-[13px] leading-4.75" data-testid="speed">
+  <div class="text-[13px]/4.75" data-testid="speed">
     <p v-if="error" class="text-danger-text">Could not load timings: {{ error }}</p>
     <p v-else-if="!data" class="text-text-muted">Loading…</p>
     <template v-else>
