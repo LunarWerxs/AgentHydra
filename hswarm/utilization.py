@@ -6,8 +6,9 @@ machine (owner ask, Michael, 2026-09-15 evening).
 The estimate is measured, never assumed. A sub-agent PROFILE is the median token buckets of one real
 Claude sub-agent on this machine over the last 14 recorded days (Sonnet ones when there are enough),
 priced at Anthropic's list rate for the model the calling session was running, read from its own
-transcript at submit time (caller.py). One ANSWERED hswarm task stands in for one sub-agent, so `est_usd` is
-ok tasks x that price and `est_low_usd` is one sub-agent for the whole job; `saved_usd` is the estimate
+transcript at submit time (caller.py). One ANSWERED hswarm task stands in for one sub-agent, but no task is credited more than its own
+tokens at list price (the caller's model): `est_usd` is the sum of each ok task's credit, which is that price or
+its own tokens' cost where smaller, and `est_low_usd` is one sub-agent for the whole job; `saved_usd` is the estimate
 minus what DeepSeek charged. A row written before any profile exists carries no estimate ('-', not
 zero) and is priced when the first profile lands; after that a row is never re-priced, so history keeps
 the numbers of its day. A caller whose model is unknown (a CLI run) is priced at the Sonnet floor,
@@ -46,7 +47,7 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 COLUMNS = ("id", "ts", "kind", "machine", "caller_instance", "caller_session", "caller_cwd", "caller_account", "label", "orchestrator_model",
            "backend", "worker_model", "tasks", "ok", "failed", "seconds", "worker_usd", "worker_tokens",
-           "est_model", "per_agent_usd", "est_usd", "est_low_usd", "saved_usd", "saved_low_usd", "basis", "profile_id", "seq")
+           "est_model", "per_agent_usd", "est_usd", "est_low_usd", "saved_usd", "saved_low_usd", "basis", "profile_id", "seq", "task_tokens")
 PROFILE_COLUMNS = ("id", "ts", "machine", "basis", "sample", "pool_days", "input", "cache_read", "cache_5m", "cache_1h", "output", "requests")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS utilizations (
@@ -71,12 +72,13 @@ CREATE TABLE IF NOT EXISTS claude_accounts (
   PRIMARY KEY (machine, day, account)
 );
 """
-SCHEMA_VERSION = 1  # PRAGMA user_version: 1 = utilizations.day plus the (machine, day) and (machine, seq) indexes
+SCHEMA_VERSION = 2  # PRAGMA user_version: 1 = utilizations.day plus the (machine, day) and (machine, seq) indexes; 2 = utilizations.task_tokens
 CLAUDE_DAY_COLUMNS = ("machine", "day", "claude_usd", "sub_usd", "subagents", "partial", "by_model", "rules", "tokens", "plan_usd")
 CLAUDE_ACCOUNT_COLUMNS = ("machine", "day", "account", "tier", "usd", "requests", "sessions", "tokens", "plan_usd")
 TOKEN_KEYS = claude_usage.TOKEN_KEYS
-NOTE = ("One hswarm task = one Claude sub-agent, priced at the calling session's model at the time (Sonnet floor when "
-        "unknown), sized by the measured median sub-agent on that machine (cache reads and writes priced at their own rates). "
+NOTE = ("Each answered hswarm task is credited the SMALLER of two Claude costs: the measured median sub-agent on that machine "
+        "(cache reads and writes at their own rates), and the task's own tokens priced at list rates on the calling session's "
+        "model at the time (Sonnet floor when unknown). A task with no token counts keeps the median. "
         "saved = estimate - DeepSeek, in Anthropic list-price dollars: on a subscription that is quota kept, not money. "
         "share = estimate / (estimate + the Claude work actually done on that machine the same days). '-' = not measured.")
 
@@ -142,6 +144,8 @@ def _migrate(c: sqlite3.Connection) -> None:
         c.execute("ALTER TABLE utilizations ADD COLUMN seq INTEGER")
     if "caller_account" not in cols:  # Michael, 2026-09-17: which ACCOUNT ordered this run, by its stable hashed id
         c.execute("ALTER TABLE utilizations ADD COLUMN caller_account TEXT")
+    if "task_tokens" not in cols:  # each answered task's own [cache hits, cache misses, output]: caps its estimate at its size
+        c.execute("ALTER TABLE utilizations ADD COLUMN task_tokens TEXT")
     day_cols = {r[1] for r in c.execute("PRAGMA table_info(claude_days)")}
     for col in ("by_model", "rules"):  # Michael, 2026-09-16: which models did the Claude work, and were the rulings followed
         if col not in day_cols:
@@ -236,6 +240,19 @@ def _tokens(usage: dict | None) -> int:
     return sum(int((usage or {}).get(k) or 0) for k in ("in_hit", "in_miss", "out"))
 
 
+def task_tokens(usage: dict | None) -> list[int] | None:
+    """One task's own tokens as [cache hits, cache misses, output], or None when it counted none (no token data)."""
+    if not isinstance(usage, dict):
+        return None
+    t = [int(usage.get(k) or 0) for k in ("in_hit", "in_miss", "out")]
+    return t if any(t) else None
+
+
+def _answered_tokens(results: list[dict]) -> str:
+    """The JSON list of each ANSWERED task's own tokens (null where it counted none): what sizes its estimate."""
+    return json.dumps([task_tokens(r.get("usage")) for r in results if r.get("status") == "ok"])
+
+
 def _seconds_of(created: str, finished: str, results: list[dict]) -> float:
     """The job's wall clock from its two stamps; when either will not parse, the longest worker's own time."""
     try:
@@ -254,7 +271,7 @@ def _build_row(job_id: str, created: str, finished: str, label: str, caller: dic
         "backend": _mode([str(r.get("backend") or "") for r in results]), "worker_model": _mode([str(r.get("model") or "") for r in results]),
         "tasks": len(results), "ok": ok, "failed": len(results) - ok, "seconds": _seconds_of(created, finished, results),
         "worker_usd": round(sum(float(r.get("cost_usd") or 0.0) for r in results), 6),
-        "worker_tokens": sum(_tokens(r.get("usage")) for r in results),
+        "worker_tokens": sum(_tokens(r.get("usage")) for r in results), "task_tokens": _answered_tokens(results),
     }
 
 
@@ -269,7 +286,7 @@ def ask_row(res, caller: dict | None) -> dict:
         "id": "ask-" + ts.replace(":", "").replace("+00:00", "Z") + "-" + secrets.token_hex(2), "ts": ts, "kind": "ask", "machine": MACHINE,
         **_caller_fields(caller), "label": (caller or {}).get("label") or "ask", "backend": res.backend, "worker_model": res.model,
         "tasks": 1, "ok": int(res.status == "ok"), "failed": int(res.status != "ok"), "seconds": res.seconds, "worker_usd": round(res.cost_usd or 0.0, 6),
-        "worker_tokens": _tokens(res.usage),
+        "worker_tokens": _tokens(res.usage), "task_tokens": _answered_tokens([{"status": res.status, "usage": res.usage}]),
     }
 
 
@@ -289,15 +306,41 @@ def estimate(row: dict, prof: dict | None) -> dict:
     # Only an ANSWERED task stood in for a sub-agent: a timeout or an error came back empty and its work was redone
     # on Claude, so it saved nothing and its spend is a loss. Measured 2026-09-24, job 20260924-234903-1c5b: 1 ok of
     # 24 reported "saved $17.64" while the work went to Opus. A row with no `ok` count (an old shard) is all answered.
-    answered = min(tasks, int(row["ok"])) if row.get("ok") is not None else tasks
+    sized = _sized_tokens(row.get("task_tokens"))
+    answered = len(sized) if sized is not None else (min(tasks, int(row["ok"])) if row.get("ok") is not None else tasks)
+    # Each answered task is credited the smaller of the median sub-agent and its own tokens at the caller's list rates
+    # (measured 2026-10-09: a 2,400-token one-call ask was credited a whole $0.34 median sub-agent). No token counts: the median.
+    est = sum(_capped(per, t, est_model) for t in sized) if sized is not None else answered * per
     worker = float(row.get("worker_usd") or 0.0)
     low = per if answered else 0.0
+    cap = ("; each task capped at its own tokens at list price where smaller" if sized is not None
+           else "; no task token counts, so the median stands")
     return {
-        "est_model": est_model, "per_agent_usd": round(per, 6), "est_usd": round(answered * per, 6), "est_low_usd": round(low, 6),
-        "saved_usd": round(answered * per - worker, 6), "saved_low_usd": round(low - worker, 6), "profile_id": prof["id"],
+        "est_model": est_model, "per_agent_usd": round(per, 6), "est_usd": round(est, 6), "est_low_usd": round(low, 6),
+        "saved_usd": round(est - worker, 6), "saved_low_usd": round(low - worker, 6), "profile_id": prof["id"],
         "basis": (f"{answered}" + (f" answered of {tasks}" if answered != tasks else "")
-                  + f" x {prof['basis']} sub-agent ({prof['sample']} measured, {prof['pool_days']}d) @ {short_model(est_model)}; {why}"),
+                  + f" x {prof['basis']} sub-agent ({prof['sample']} measured, {prof['pool_days']}d) @ {short_model(est_model)}; {why}" + cap),
     }
+
+
+def task_usd(model: str, tokens: list[int]) -> float | None:
+    """What one task's own tokens cost as Claude list price on `model`: cache hits at the cache-read rate, misses at the
+    input rate, output at the output rate. None for an unpriced model."""
+    hit, miss, out = tokens
+    return claude_usage.price_tokens(model, {"input": miss, "cache_read": hit, "output": out}, prompt_tokens=hit + miss)
+
+
+def _capped(per: float, tokens: list[int] | None, model: str) -> float:
+    """One answered task's estimate: the smaller of the median sub-agent and its own tokens; the median when it has none."""
+    own = task_usd(model, tokens) if tokens else None
+    return per if own is None else min(per, own)
+
+
+def _sized_tokens(raw) -> list[list[int] | None] | None:
+    """The stored per-task token list (JSON text, or a list already decoded); None when the row carries none (an old row)."""
+    if raw is None:
+        return None
+    return json.loads(raw) if isinstance(raw, str) else list(raw)
 
 
 def current_profile(c: sqlite3.Connection) -> dict | None:
