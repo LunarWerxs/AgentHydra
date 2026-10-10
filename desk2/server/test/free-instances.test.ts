@@ -494,6 +494,16 @@ describe('Free jobs and routes', () => {
     await read('pro')  // the next sign-in may be another account: a first reading that is already paid is told
     expect(told.at(-1)).toBe('null->pro')
   })
+  test('a row whose plan is known only from a reading before plans were kept is not told as newly paid', async () => {
+    const { service, op, instance } = fixture(async () => output({ ok: true, available: true, windows: [], plan: 'go' }))
+    instance.usage = { available: true, plan: 'go', is_snapshot: false, observed_at: null, note: '', windows: [] }
+    const told: string[] = []
+    service.onPlanChange = i => told.push(`${i.planChange?.from}->${i.planChange?.to}`)
+    service.start(op({ command: 'usage' })); await tick(); await tick()
+    expect(instance.plan).toBe('go')
+    expect(instance.planChange ?? null).toBeNull()
+    expect(told).toEqual([])
+  })
   test("a log out waits for Desk's own read instead of being refused", async () => {
     let release: (value: RunOutput) => void = () => {}
     const { service, app, op, instance } = fixture(async (_c, r) => r.command === 'usage' ? new Promise(resolve => { release = resolve }) : { code: 0, stdout: 'Saved web session removed.' })

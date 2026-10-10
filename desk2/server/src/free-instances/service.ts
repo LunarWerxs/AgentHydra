@@ -395,6 +395,9 @@ export class FreeInstances {
   private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>): TokenEntry | null {
     const instance = this.instance(r.instanceId)
     if (result.usage) {
+      // A row read before plans were kept (2026-10-09) has its plan only in its last reading. Start from that, or
+      // every account already on Go or Pro would be told as newly paid on its first reading after the update.
+      if (instance.plan === undefined) instance.plan = instance.usage?.plan ?? null
       instance.usage = result.usage
       this.notePlan(instance, result.usage.plan ?? null)
     }
