@@ -2,12 +2,7 @@
 list rates, so a tiny one-call ask no longer counts as a whole sub-agent (the running total was inflated by them)."""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from hswarm import claude_usage, utilization  # noqa: E402
+from hswarm import claude_usage, utilization
 
 PROFILE = {"id": "p1", "basis": "Sonnet", "sample": 9, "pool_days": 14, "input": 1000, "cache_read": 200_000, "cache_5m": 20_000, "cache_1h": 0, "output": 4000, "requests": 6}
 MODEL = "claude-opus-5-5"
@@ -33,6 +28,7 @@ def test_a_small_ask_is_credited_its_own_tokens_at_the_callers_model_not_the_med
     assert est["est_usd"] < median
     assert est["per_agent_usd"] == round(median, 6)  # the median is still reported beside it
     assert est["saved_usd"] == round(own - 0.00003, 6)
+    assert est["est_low_usd"] <= est["est_usd"]  # the low estimate never claims more than the job's own tasks
     assert "capped at its own tokens" in est["basis"]
 
 

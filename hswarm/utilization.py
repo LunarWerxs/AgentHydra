@@ -312,7 +312,7 @@ def estimate(row: dict, prof: dict | None) -> dict:
     # (measured 2026-10-09: a 2,400-token one-call ask was credited a whole $0.34 median sub-agent). No token counts: the median.
     est = sum(_capped(per, t, est_model) for t in sized) if sized is not None else answered * per
     worker = float(row.get("worker_usd") or 0.0)
-    low = per if answered else 0.0
+    low = min(per, est) if answered else 0.0  # one sub-agent for the job, never more than the job's own tasks came to
     cap = ("; each task capped at its own tokens at list price where smaller" if sized is not None
            else "; no task token counts, so the median stands")
     return {
