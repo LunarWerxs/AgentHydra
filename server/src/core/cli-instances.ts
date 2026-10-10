@@ -24,6 +24,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
@@ -249,6 +250,50 @@ export function cliPlanLabel(configDir: string): string | null {
   }
 }
 
+/** Who a CLI login is signed in as, from its `.claude.json` `oauthAccount` (the CLI keeps the email and
+ *  the account's name there for display; not a secret). */
+export interface CliAccountIdentity {
+  email: string | null
+  name: string | null
+}
+
+/** Every list reads this per instance, and the CLI rewrites `.claude.json` often: cached by the file's
+ *  mtime and size, so a list re-parses only a file that changed. */
+const identityCache = new Map<string, { stamp: string; who: CliAccountIdentity | null }>()
+
+export function cliAccountIdentity(configDir: string): CliAccountIdentity | null {
+  const path = join(configDir, '.claude.json')
+  let stamp: string
+  try {
+    const st = statSync(path)
+    stamp = `${st.mtimeMs}:${st.size}`
+  } catch {
+    identityCache.delete(path)
+    return null
+  }
+  const hit = identityCache.get(path)
+  if (hit?.stamp === stamp) return hit.who
+  let who: CliAccountIdentity | null = null
+  try {
+    const a = JSON.parse(readFileSync(path, 'utf8'))?.oauthAccount
+    if (a && typeof a === 'object') {
+      const email =
+        typeof a.emailAddress === 'string' && a.emailAddress.includes('@')
+          ? a.emailAddress.trim().toLowerCase()
+          : null
+      const name =
+        [a.fullName, a.displayName]
+          .find((n): n is string => typeof n === 'string' && n.trim() !== '')
+          ?.trim() ?? null
+      who = email || name ? { email, name } : null
+    }
+  } catch {
+    who = null
+  }
+  identityCache.set(path, { stamp, who })
+  return who
+}
+
 function hydrate(rec: CliInstance, num?: number): CliInstance {
   const configDir = canonicalConfigDir(rec)
   // A credential file is not a working login (field note 3, 2026-09-30: two accounts listed
@@ -256,6 +301,7 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
   // so a listing stays as fast as it was.
   const cred = isLoggedIn(configDir)
   const loginNote = (cred && loginVeto?.(rec.id, configDir)) || null
+  const who = cred ? cliAccountIdentity(configDir) : null
   const { loginNote: _stale, ...stored } = rec
   return {
     ...stored,
@@ -269,6 +315,8 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
     associatedDesktopLabel: rec.associatedDesktopLabel ?? null,
     loggedIn: cred && !loginNote,
     planLabel: cred ? cliPlanLabel(configDir) : null,
+    accountEmail: who?.email ?? null,
+    accountName: who?.name ?? null,
     // A login signed in here again since it moved away is simply here.
     movedAway: cred ? null : (rec.movedAway ?? null),
     ...(loginNote ? { loginNote } : {}),
@@ -466,6 +514,7 @@ export function renameCliInstance(id: string, name: string): CMActionResult {
     const rec = store.instances.find((i) => i.id === id)
     if (!rec) return { result: null, changed: false }
     rec.name = name.trim()
+    rec.autoNamed = false // a name a person gave is never renamed after the account
     return { result: rec.configDir, changed: true }
   })
   if (!outcome.ok) return refusal('cli-rename', null, { id }, outcome)
@@ -478,6 +527,42 @@ export function renameCliInstance(id: string, name: string): CMActionResult {
       data: { id },
     }
   return { ok: true, action: 'cli-rename', dir: outcome.result, message: 'Renamed.', data: { id } }
+}
+
+/** A name AgentHydra made for an instance ("<desktop label> (CLI)", desktop-cli-pairing.ts) rather than
+ *  one a person typed. Records from before `autoNamed` existed are known by that shape. */
+function isAutoNamed(rec: CliInstance): boolean {
+  return (
+    rec.autoNamed ??
+    (!!rec.associatedDesktopDir && / \(CLI\)$/.test(rec.name) && !rec.name.includes('@'))
+  )
+}
+
+/** Names every auto-named, signed-in instance after the account it is signed in to: its email. WHY
+ *  (owner, 2026-10-09): rows named "<desktop label> (CLI)" did not say whose account they were ("Those
+ *  at least need to show their email address"). A name a person gave is never touched, and one that
+ *  follows the account follows it to the next one. Returns the ids renamed. */
+export function nameCliInstancesByAccount(): string[] {
+  const wanted = new Map<string, string>()
+  for (const rec of readStore().instances) {
+    if (!isAutoNamed(rec)) continue
+    const configDir = canonicalConfigDir(rec)
+    const email = isLoggedIn(configDir) ? cliAccountIdentity(configDir)?.email : null
+    if (email && email.length <= NAME_MAX && email !== rec.name) wanted.set(rec.id, email)
+  }
+  if (wanted.size === 0) return []
+  const outcome = mutate((store) => {
+    const renamed: string[] = []
+    for (const rec of store.instances) {
+      const name = wanted.get(rec.id)
+      if (!name || !isAutoNamed(rec)) continue // a person's rename that landed meanwhile wins
+      rec.name = name
+      rec.autoNamed = true
+      renamed.push(rec.id)
+    }
+    return { result: renamed, changed: renamed.length > 0 }
+  })
+  return outcome.ok ? outcome.result : []
 }
 
 /** Associate (or clear, with accountId=null) the dispatch account used for this instance's usage. */

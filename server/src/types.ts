@@ -1474,6 +1474,13 @@ export interface CliInstance {
   /** The signed-in account's plan ("Pro", "Max 5×", "Max 20×", ...), from the login's own
    *  credentials (cliPlanLabel); null when signed out or not stated. */
   planLabel?: string | null
+  /** The signed-in account's email and its name on Claude, from the login's own `.claude.json`
+   *  (cliAccountIdentity); null when signed out or not stated. Set on every read. */
+  accountEmail?: string | null
+  accountName?: string | null
+  /** The name was made by AgentHydra (pairing, then the account's email), not typed by a person, so
+   *  nameCliInstancesByAccount keeps it on the signed-in account's email. A rename sets it false. */
+  autoNamed?: boolean
   lastUsageCheck: UsageSnapshot | null
   /** Claude sessions running on this account now (its live registry, CliMayte workers included). Set by
    *  GET /api/cli-instances only; absent elsewhere. */

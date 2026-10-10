@@ -11,7 +11,9 @@
 //   the feed's 60 s timer.
 // - A candidate with no CLI instance linked to it is paired: an UNLINKED CLI instance logged in as
 //   the same account is linked (lowest number wins), else a new "<label> (CLI)" instance is made and
-//   linked (and deleted again if the link fails). Then the feed signs it in at once.
+//   linked (and deleted again if the link fails). Then the feed signs it in at once, and the same pass
+//   renames it to the email it signed in as (cli-instances.ts nameCliInstancesByAccount; owner,
+//   2026-10-09: "Those at least need to show their email address"). A name a person gives it stays.
 // - No empty CLI instance (owner, 2026-10-07: "They should not create empty CLI instances"). A new
 //   one is made only for a desktop whose token cache holds a Claude Code grant with time left, the
 //   login the feed signs it in with. A profile keeps its account id after that grant runs out (four
@@ -41,6 +43,7 @@ import {
   getCliInstance,
   linkCliInstanceToDesktop,
   listCliInstances,
+  nameCliInstancesByAccount,
 } from './cli-instances'
 import { desktopCliCredential, feedCliFromDesktop, feedLinkedCliLogins } from './desktop-cli-feed'
 import { renewClosedCliLogins } from './desktop-cli-renew'
@@ -278,11 +281,13 @@ export const FEED_EVERY_MS = 60_000
 
 /** One timer pass: pair any new signed-in desktop with a CLI instance, renew any closed profile's grant
  *  that is near its end (core/desktop-cli-renew.ts), then feed (core/desktop-cli-feed.ts), so a CLI
- *  instance made now is signed in in the same pass. */
+ *  instance made now is signed in in the same pass, and named after its account's email. */
 async function feedPass(): Promise<number> {
   await pairDesktopCliLogins()
   await renewClosedCliLogins()
-  return feedLinkedCliLogins()
+  const fed = await feedLinkedCliLogins()
+  nameCliInstancesByAccount()
+  return fed
 }
 
 let timer: ReturnType<typeof setInterval> | null = null
