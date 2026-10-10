@@ -21,7 +21,7 @@ from .outline import LANGS, language_of, render_outline, render_unfold
 from .outline import MAX_BYTES as OUTLINE_MAX_BYTES
 from .procs import TIMEOUT_EXIT
 from .runtimes import Runtime, posix_abs
-from .tools import Sandbox, _file_newline, _glob_regex, _to_crlf
+from .tools import Sandbox, _file_newline, _glob_regex, _to_crlf, glob_regex
 from .toolspecs import IGNORED_DIRS
 
 FILE_OP_TIMEOUT_S = 60
@@ -58,38 +58,6 @@ _GREP = (
     f'for d in {_IGNORED}; do set -- "$@" --exclude-dir="$d"; done; fi; '
     'exec "$@" -e "$p" -- "$r"'
 )
-
-
-def glob_regex(pattern: str) -> re.Pattern:
-    """A pathlib-style glob as a regex over '/'-joined relative paths: `*` and `?` stay in one segment, `**` spans any."""
-    parts = [p for p in pattern.strip("/").split("/") if p not in ("", ".")]
-    rx = ""
-    for i, part in enumerate(parts):
-        last = i == len(parts) - 1
-        if part == "**":
-            rx += ".*" if last else "(?:[^/]+/)*"
-        else:
-            rx += _segment_rx(part) + ("" if last else "/")
-    return re.compile(rx or ".*")
-
-
-def _segment_rx(seg: str) -> str:
-    out, i = [], 0
-    while i < len(seg):
-        c = seg[i]
-        close = seg.find("]", i + 2) if c == "[" else -1
-        if c == "*":
-            out.append("[^/]*")
-        elif c == "?":
-            out.append("[^/]")
-        elif close != -1:
-            body = seg[i + 1 : close]
-            out.append("[" + ("^" + body[1:] if body.startswith("!") else body).replace("\\", "\\\\") + "]")
-            i = close
-        else:
-            out.append(re.escape(c))
-        i += 1
-    return "".join(out)
 
 
 def _posix_writable_rule(pattern: str, cwd: PurePosixPath) -> re.Pattern:

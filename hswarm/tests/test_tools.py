@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from hswarm import tools  # noqa: E402
 from hswarm.tools import PRESETS, Sandbox, git_write_refusal, specs_for  # noqa: E402
 
 
@@ -145,7 +148,7 @@ def test_read_slice_and_size_guard(tmp_path):
     assert run(sb.run("read_file", {"path": "big.txt", "start_line": 3, "end_line": 4})).splitlines() == ["3\t2", "4\t3"]
 
 
-def test_list_glob_grep(tmp_path):
+def test_list_glob_grep(tmp_path, monkeypatch):
     sb = Sandbox(tmp_path)
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.py").write_text("import os\nTODO security\n")
@@ -154,10 +157,43 @@ def test_list_glob_grep(tmp_path):
     (tmp_path / "node_modules" / "junk.py").write_text("import os\n")
     ls = run(sb.run("list_dir", {"path": ".", "depth": 2}))
     assert "src/" in ls and "a.py" in ls and "node_modules" not in ls
+    walked, real_walk = [], os.walk
+
+    def walk(top, *args, **kwargs):
+        for step in real_walk(top, *args, **kwargs):
+            walked.append(Path(step[0]).name)
+            yield step
+
+    monkeypatch.setattr(os, "walk", walk)
     g = run(sb.run("glob", {"pattern": "**/*.py"}))
     assert "src/a.py" in g and "junk.py" not in g
+    assert "src" in walked and "node_modules" not in walked  # its hits were always dropped; now it is not walked at all
+    assert sorted(run(sb.run("glob", {"pattern": "*.py", "path": "src"})).splitlines()) == ["src/a.py", "src/b.py"]
+    assert run(sb.run("glob", {"pattern": "*.py"})) == "(no matches)"  # `*` stays in one folder, as pathlib's does
     gr = run(sb.run("grep", {"pattern": "import os"}))
     assert "src/a.py:1:" in gr and "junk" not in gr
+
+
+def test_glob_leaves_the_shared_server_answering(tmp_path, monkeypatch):
+    # 2026-10-09: a worker's `**` glob in a large repo ran on the shared server's one event loop for about fifteen
+    # minutes, and port 7793 answered no chat and no AgentHydra window until it ended.
+    (tmp_path / "a.py").write_text("x = 1\n")
+    answered, real = threading.Event(), tools.glob_files
+
+    def slow(root, pattern):
+        if not answered.wait(5):
+            raise AssertionError("the glob held the event loop: nothing else ran while it walked")
+        yield from real(root, pattern)
+
+    monkeypatch.setattr(tools, "glob_files", slow)
+
+    async def main():
+        glob = asyncio.create_task(Sandbox(tmp_path).run("glob", {"pattern": "**/*.py"}))
+        await asyncio.sleep(0.05)
+        answered.set()  # runs only while the loop is free
+        return await glob
+
+    assert run(main()) == "a.py"
 
 
 def test_glob_takes_an_absolute_pattern_and_never_kills_the_task(tmp_path):
