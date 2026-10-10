@@ -864,7 +864,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <TransitionGroup v-if="!collapsed.has(group.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
             <div
               v-for="entry in group.entries"
-              :key="`${entry.kind}:${entry.id}`"
+              :key="`${entry.kind}:${src.rowKeyOf?.(entry.id) ?? entry.id}`"
               :data-search-cursor="cursorKey === `${entry.kind}:${entry.id}` || undefined"
               :class="[cursorKey === `${entry.kind}:${entry.id}` ? 'rounded-(--radius-6) bg-fill-hover' : '', entry.under && 'ms-2.75 border-s border-border ps-1', rowDrag.line(entry.id)]"
               :draggable="rowsDraggable(group)"

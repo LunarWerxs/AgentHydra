@@ -387,6 +387,65 @@ describe('useDesk store', () => {
       expect(desk.itemsByChat.value.get('chat-other') ?? []).toEqual([])
     })
 
+    it('a chat the server put in another account still takes the placeholder when the request named one', async () => {
+      const desk = useDesk()
+      await desk.init()
+      desk.select({ kind: 'new', cwd: 'C:/Users/me/routed' })
+      const answer = answerLater()
+      const made = desk.createChat({ cwd: 'C:/Users/me/routed', prompt: 'Example routed', accountId: 'acct-named' })
+      const placeholder = (desk.selected.value as { id: string }).id
+      const row = desk.chats.value.find((c) => c.id === placeholder)!
+      const chat = {
+        ...row,
+        id: 'chat-routed',
+        sessionId: 'session-routed',
+        title: 'Example routed',
+        account: { id: 'climayte', label: 'Example account', configDir: null },
+        createdAt: Date.now() + 1
+      }
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat })
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: 'chat-routed' })
+      answer(chat)
+      await made
+      expect(desk.chats.value.filter((c) => c.id === 'chat-routed')).toHaveLength(1)
+      expect(desk.chats.value.some((c) => c.id === placeholder)).toBe(false)
+      expect(desk.itemsByChat.value.get('chat-routed')).toEqual([expect.objectContaining({ kind: 'user', text: 'Example routed' })])
+    })
+
+    it('a chat the server wrote with backslashes takes the placeholder made with forward slashes', async () => {
+      const desk = useDesk()
+      await desk.init()
+      desk.select({ kind: 'new', cwd: 'C:/Users/me/slash' })
+      const answer = answerLater()
+      const made = desk.createChat({ cwd: 'C:/Users/me/slash', prompt: 'Example slashed' })
+      const placeholder = (desk.selected.value as { id: string }).id
+      const row = desk.chats.value.find((c) => c.id === placeholder)!
+      const chat = { ...row, id: 'chat-slash', sessionId: 'session-slash', cwd: 'C:\\Users\\me\\slash', title: 'Example slashed', createdAt: Date.now() + 1 }
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat })
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: 'chat-slash' })
+      answer(chat)
+      await made
+      expect(desk.chats.value.filter((c) => c.id === 'chat-slash')).toHaveLength(1)
+      expect(desk.chats.value.some((c) => c.id === placeholder)).toBe(false)
+      expect(desk.itemsByChat.value.get('chat-slash')).toEqual([expect.objectContaining({ kind: 'user', text: 'Example slashed' })])
+    })
+
+    it('a landed chat keeps the placeholder row key, so its sidebar row is patched, not re-made', async () => {
+      const desk = useDesk()
+      await desk.init()
+      desk.select({ kind: 'new', cwd: 'C:/Users/me/rowkey' })
+      const answer = answerLater()
+      const made = desk.createChat({ cwd: 'C:/Users/me/rowkey', prompt: 'Example keyed' })
+      const placeholder = (desk.selected.value as { id: string }).id
+      const row = desk.chats.value.find((c) => c.id === placeholder)!
+      const chat = { ...row, id: 'chat-keyed', sessionId: 'session-keyed', title: 'Example keyed', createdAt: Date.now() + 1 }
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat })
+      answer(chat)
+      await made
+      expect(desk.rowKeyOf('chat-keyed')).toBe(placeholder)
+      expect(desk.rowKeyOf('chat-unrelated')).toBe('chat-unrelated')
+    })
+
     it('a history snapshot that already holds the sent message takes its bubble: one bubble', async () => {
       const desk = useDesk()
       await desk.init()

@@ -41,6 +41,7 @@ import type {
 import { newChatTitle } from '@shared/chat-title'
 import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
+import { sameFolder } from '@/components/composer/folders'
 import { SEARCH_LIMIT, SEARCH_MIN_CHARS, SearchError } from '@/components/sidebar/search'
 import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId } from '@/components/external/logic'
 import { chatViewOf, sameView, type View } from '@/components/shell/logic'
@@ -573,8 +574,7 @@ function adoptablePlaceholder(chat: ChatSummary): string | null {
   if ([...placeholderAlias.values()].includes(chat.id)) return null
   for (const [placeholder, make] of placeholderMakes) {
     const req = make.req
-    if (req.cwd !== chat.cwd || chat.title !== newChatTitle(req)) continue
-    if (req.accountId && req.accountId !== 'auto' && chat.account.id !== req.accountId) continue
+    if (!sameFolder(req.cwd, chat.cwd) || chat.title !== newChatTitle(req)) continue
     const row = store.chats.find((c) => c.id === placeholder)
     if (row && chat.createdAt >= row.createdAt) return placeholder
   }
@@ -804,6 +804,12 @@ const viewNow = (): View => ({ ...store.selected })
 const isPlaceholder = (id: string) => id.startsWith(PENDING_CHAT)
 const resolveChatId = (id: string) => placeholderAlias.get(id) ?? id
 
+/** The key a chat's sidebar row keeps: a real chat that replaced a placeholder keeps that placeholder's key, so the row is patched in place. */
+function rowKeyOf(id: string): string {
+  for (const [placeholder, real] of placeholderAlias) if (real === id) return placeholder
+  return id
+}
+
 /** The list a chat's streamed items go to: its loaded transcript, or the side list until its history loads. */
 function streamedItems(chatId: string): TranscriptItem[] {
   let items = chatItems(chatId)
@@ -973,6 +979,7 @@ export function useDesk() {
     connected: computed(() => store.connected),
     selected: computed(() => store.selected),
     queue: computed(() => queueState.value),
+    rowKeyOf,
 
     // Actions
     async init() {

@@ -36,6 +36,8 @@ export interface ShellSource {
   accounts: Readonly<Ref<AccountInfo[]>>
   settings: Readonly<Ref<DeskSettings | null>>
   selected: Readonly<Ref<View>>
+  /** The key a chat's sidebar row keeps: a real chat that replaced a placeholder keeps the placeholder's. Optional: a fixture source has none. */
+  rowKeyOf?(id: string): string
   select(view: View): void
   /** The footer gear, the chrome menu and the account popup's Settings row. */
   openSettings(): void
