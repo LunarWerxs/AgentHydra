@@ -43,5 +43,8 @@
   },
   "patchedDependencies": {
     "bun-types@1.4.2": "patches/bun-types@1.4.2.patch"
+  },
+  "dependencies": {
+    "nanoid": "3.3.18"
   }
 }
