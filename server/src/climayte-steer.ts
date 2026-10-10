@@ -16,7 +16,9 @@ import {
   type CliMayteVerdict,
   climayteKind,
   HAIKU,
+  ladderIndex,
   ladderModel,
+  nextRung,
   rereadUnits,
   scoreRows,
 } from './climayte-scorecard'
@@ -168,6 +170,26 @@ export function climayteAsk(
 }
 
 export const SENT_BACK = 'The orchestrator checked your result and it did not pass. What was wrong:'
+
+export const THRASH_PROMPT =
+  'Your context thrashed: the session kept refilling to its limit, so the run stopped. Continue the task exactly where you left off; do not redo steps that are already finished. Never Read more than 120 lines at once: grep -n first, then Read with offset and limit. Pipe command output through tail -40.'
+
+export const CONTEXT_THRASH_RE = /Autocompact is thrashing/i
+
+export function isContextThrash(text: string | null | undefined): boolean {
+  return !!text && CONTEXT_THRASH_RE.test(text)
+}
+
+/** The setting a run that thrashed its context continues on: one rung up, and only once per rung (a
+ *  second thrash on the same rung is a fail). Null at the top, or when that rung already thrashed. */
+export function thrashContinueRung(
+  w: CliMayteWorker,
+  verdict: CliMayteVerdict,
+): { model: string | null; effort: string | null } | null {
+  if ((w.verdicts ?? []).some((x) => x.context && ladderIndex(x) === ladderIndex(verdict)))
+    return null
+  return nextRung(verdict, haikuFailFloor(w, verdict))
+}
 
 export const configLabel = (c: { model: string | null; effort: string | null }): string => {
   const m = c.model

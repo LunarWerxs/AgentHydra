@@ -130,12 +130,15 @@ import {
   configLabel,
   HELD_MESSAGE,
   haikuFailFloor,
+  isContextThrash,
   queueFollowUp,
   SENT_BACK,
   SENT_NOW_PREFIX,
   type SendSetting,
   sendSetting,
+  THRASH_PROMPT,
   tagKind,
+  thrashContinueRung,
   URGENT_PREFIX,
   verdictNoteTooLong,
   verdictProblem,
@@ -660,6 +663,35 @@ function judgeInWave(w: CliMayteWorker, checkPassed: boolean | null): boolean {
   }
 }
 
+/** A run that ended in Claude Code's context thrash error continues its session one rung up
+ *  (thrashContinueRung), recorded as a fail for the setting that thrashed. False when it does not
+ *  continue, and the run fails as any error does. */
+function continueThrash(w: CliMayteWorker, v: { result: string | null }, stderr: string): boolean {
+  if (!isContextThrash(v.result) && !isContextThrash(stderr)) return false
+  const verdict = {
+    ...verdictRecord(w, 'fail', firstLine(v.result || stderr) || null, undefined, false, 3),
+    context: true as const,
+  }
+  const next = thrashContinueRung(w, verdict)
+  if (!next) return false
+  const sent = climayteSend(w.id, THRASH_PROMPT, {
+    model: next.model ?? undefined,
+    ...(next.effort ? { effort: next.effort } : {}),
+  })
+  if (!sent.ok) return false
+  w.verdicts = [...(w.verdicts ?? []), verdict]
+  journal(w, 'verdict', {
+    verdict: 'fail',
+    notice: 'context thrash',
+    model: verdict.model,
+    effort: verdict.effort,
+    kind: w.kind ?? undefined,
+    severity: 3,
+    reason: `continued on ${configLabel(next)}`,
+  })
+  return true
+}
+
 function finish(w: CliMayteWorker, events: unknown[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (at?.outcome !== 'running') return
@@ -691,6 +723,7 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
     return
   }
   settleWorker(w, at, v, now, stderr)
+  if (v.outcome === 'error') continueThrash(w, v, stderr)
   // A worker that asked (climayteAsk) ended its turn to wait for the answer: nothing is judged, no
   // check runs and no wave batch is woken until the answer resumes it. A question left when the
   // turn went on (a message was already queued) is answered.

@@ -101,6 +101,27 @@ function findTranscript(): string | null {
   return null
 }
 
+// `FAKE-THRASH` in the prompt: the run ends in Claude Code's context thrash error. The resume that
+// carries the thrash note ("Your context thrashed") runs on normally.
+if (/FAKE-THRASH/.test(prompt) && !/Your context thrashed/.test(prompt)) {
+  const dir = join(configDir, 'projects', 'fake-proj')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(dir, `${sessionId}.jsonl`),
+    `${JSON.stringify({ type: 'user', sessionId, message: { role: 'user', content: prompt } })}\n`,
+  )
+  init()
+  emit({
+    type: 'result',
+    subtype: 'success',
+    is_error: true,
+    result: 'Autocompact is thrashing: the context refilled to the limit within 3 turns of the previous compact, 3 times in a row.',
+    session_id: sessionId,
+    total_cost_usd: 0,
+    num_turns: 3,
+  })
+  process.exit(1)
+}
 if (existsSync(join(configDir, 'fake-quota'))) {
   // Three hours out unless the marker names minutes, its zone named. A fixed "resets 4am" is 04:00Z
   // under bun test, so from 03:30Z every night the wall was within the wait-at-home window and the

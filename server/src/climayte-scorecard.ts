@@ -148,6 +148,8 @@ export interface CliMayteVerdict {
    *  verdict with the same span as the one before judges the same work (no attempt since) and
    *  replaces it in the scorecard. Absent on older verdicts: each counts on its own. */
   span?: number
+  /** A fail recorded when the run thrashed its context (Autocompact is thrashing): see thrashContinueRung. */
+  context?: true
 }
 
 /** One attempt's tokens in weighted units. Writes are 5-minute ones for attempts launched with the
