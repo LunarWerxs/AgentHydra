@@ -62,7 +62,7 @@ onBeforeUnmount(() => {
   </div>
   <template v-if="!maximized">
     <div class="no-drag fixed left-0 top-0 z-71 h-1 w-2 cursor-nwse-resize" aria-hidden="true" @pointerdown="edge($event, 'nw')" />
-    <div class="no-drag fixed left-2 right-2 top-0 z-71 h-1 cursor-ns-resize" aria-hidden="true" @pointerdown="edge($event, 'n')" />
+    <div class="no-drag fixed inset-x-2 top-0 z-71 h-1 cursor-ns-resize" aria-hidden="true" @pointerdown="edge($event, 'n')" />
     <div class="no-drag fixed right-0 top-0 z-71 h-1 w-2 cursor-nesw-resize" aria-hidden="true" @pointerdown="edge($event, 'ne')" />
   </template>
 </template>

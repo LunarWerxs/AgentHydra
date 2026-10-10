@@ -98,7 +98,7 @@ watch(
 <template>
   <!-- Tip wraps the WHOLE menu: it swaps its subtree on the first hover, and a trigger remounted under a DropdownMenu leaves the menu anchored to a detached button (top-left of the window). -->
   <Tip v-if="shown" label="Connections workspace">
-    <span class="inline-flex min-w-7 shrink-[500]">
+    <span class="inline-flex min-w-7 shrink-500">
   <DropdownMenu v-model:open="menuOpen" @update:open="onOpen">
     <DropdownMenuTrigger as-child>
       <button

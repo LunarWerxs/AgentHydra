@@ -143,7 +143,7 @@ const PANE_BTN =
        title bar (lib/host-window.ts) this row is the title bar: its right end keeps clear of the window's buttons
        (--caption-w), so the pane buttons sit beside them (owner, 2026-10-08: "move these icons, here"). -->
   <header
-    class="@container flex h-8 min-w-0 items-center gap-x-2 ps-1 pe-[calc(0.75rem_+_var(--caption-w))] text-[13px] leading-[19.5px]"
+    class="@container flex h-8 min-w-0 items-center gap-x-2 ps-1 pe-[calc(0.75rem+var(--caption-w))] text-[13px] leading-[19.5px]"
     :style="{ '--side': side }"
   >
     <span aria-hidden="true" class="min-w-0 flex-1" />
@@ -192,7 +192,7 @@ const PANE_BTN =
         </DropdownMenuContent>
       </DropdownMenu>
       <Tip :label="chat.cwd">
-        <span data-fit="folder" class="ms-1 flex h-5 min-w-16 shrink-[100] items-center @max-[498px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 text-text-2">
+        <span data-fit="folder" class="ms-1 flex h-5 min-w-16 shrink-100 items-center @max-[498px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 text-text-2">
           <span class="truncate">{{ folderLabel(chat.cwd) }}</span>
         </span>
       </Tip>
@@ -238,7 +238,7 @@ const PANE_BTN =
     </div>
 
     <!-- The right column has a fixed minimum, so the alert truncates inside it and never moves the centred title. -->
-    <div class="flex min-w-[var(--side)] flex-1 shrink-0 items-center justify-end gap-1" :class="chat && '@max-[286px]:-ms-2'">
+    <div class="flex min-w-(--side) flex-1 shrink-0 items-center justify-end gap-1" :class="chat && '@max-[286px]:-ms-2'">
     <Tip v-if="alert" :label="alert"><p role="alert" data-fit="alert" class="min-w-0 truncate pe-1 text-[12px] leading-4 text-danger-text @max-[286px]:sr-only">{{ alert }}</p></Tip>
     <div v-if="chat" class="flex shrink-0 items-center gap-1">
       <Tip label="Background tasks">

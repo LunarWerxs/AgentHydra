@@ -166,7 +166,7 @@ function afterDelete() {
 <template>
   <section class="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-bg-page" :aria-label="sel ? 'Server details' : 'Dev servers overview'">
     <!-- The window's title row when it draws its own (lib/host-window.ts): it drags the window, and keeps clear of its buttons. -->
-    <header class="title-drag flex h-10.25 shrink-0 items-center gap-1 border-b border-border pe-[calc(0.5rem_+_var(--caption-w))] text-[13px]" :style="{ paddingInlineStart: `${padLeft}px` }">
+    <header class="title-drag flex h-10.25 shrink-0 items-center gap-1 border-b border-border pe-[calc(0.5rem+var(--caption-w))] text-[13px]" :style="{ paddingInlineStart: `${padLeft}px` }">
       <Tip v-if="showBack" label="Back">
         <button type="button" :class="ICON_BTN" aria-label="Back" @click="back"><ChevronLeft class="size-4" /></button>
       </Tip>

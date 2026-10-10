@@ -35,7 +35,7 @@ const managing = ref(false)
   <div class="flex flex-col gap-6">
     <div>
       <h3 class="mb-2 text-sm text-(--text-muted)">New screen (View options in the filter row)</h3>
-      <div class="w-[720px]">
+      <div class="w-180">
         <NewSessionScreen name="Sam" :chats="[]" />
       </div>
     </div>

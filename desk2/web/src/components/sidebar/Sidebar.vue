@@ -977,7 +977,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
     </div>
 
     <!-- The update row sits above the footer while an update can be done (desk-update-row.ts) -->
-    <div v-if="updateRow" class="shrink-0 px-2.5 pt-2 pb-2 ps-2">
+    <div v-if="updateRow" class="shrink-0 px-2.5 py-2 ps-2">
       <Tip label="Your chats are saved and keep running while it restarts" side="top">
         <button
           type="button"
