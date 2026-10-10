@@ -75,9 +75,12 @@ test('the bridge resolves a job\'s chat through /api/chats, reading the chat lis
     const real = f.state
     f.state.chats = { rows: [{ instance: 'default', chatId: CHAT, sessionId: SESSION, title: 'Example chat', archived: false, lastActivityAt: null, cwd: null, live: false }] }
     const origFetch = globalThis.fetch
+    let jobsStatus = 200
     const fetchStub = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       const url = input instanceof Request ? input.url : String(input)
-      if (url.includes('/api/hswarm/api/jobs')) return new Response(JSON.stringify(body('running')), { headers: { 'content-type': 'application/json' } })
+      const json = { headers: { 'content-type': 'application/json' } }
+      if (url.includes('/api/hswarm/api/jobs'))
+        return jobsStatus === 200 ? new Response(JSON.stringify(body('running')), json) : new Response(JSON.stringify({ ok: false, error: 'made up' }), { ...json, status: jobsStatus })
       if (url.includes('/api/chats')) hits.push('chats')
       return origFetch(input, init)
     }) as typeof fetch
@@ -90,6 +93,14 @@ test('the bridge resolves a job\'s chat through /api/chats, reading the chat lis
     // The jobs are asked again (10 s passed) and so is the chat list (60 s passed).
     real.chats = { rows: null as any } // the next read of the chat list fails
     expect((await b.swarmJobs())[0]).toMatchObject({ callerSessionId: SESSION })
+    // HSwarm running but deaf (AgentHydra's proxy answers 502) still runs its jobs: the last list stands, so the
+    // sidebar's job lines do not drop out for a poll and come back (owner, 2026-10-09). HSwarm off (503) lists none.
+    jobsStatus = 502
+    t += 10_000
+    expect(await b.swarmJobs()).toHaveLength(1)
+    jobsStatus = 503
+    t += 10_000
+    expect(await b.swarmJobs()).toEqual([])
   } finally {
     await f.stop()
   }

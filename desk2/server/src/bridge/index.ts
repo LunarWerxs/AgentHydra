@@ -303,9 +303,9 @@ export function createBridge(opts: BridgeOptions = {}) {
    *  record's from the last read of every chat (archived included, read for the HSwarm jobs; never awaited here). */
   const knownTitle = (id: string): string | undefined => shownTitles.get(id) ?? chatIndex?.titles.get(id)
 
-  /** HSwarm's running jobs and its newest finished ones, then the other PCs' (`pc` set); HSwarm down, off or without
-   *  the route is none, AgentHydra out of reach the last answer (KEEP_LAST_MS). One read serves every caller for
-   *  SWARM_FRESH_MS (the poller asks on its 3 s timer). */
+  /** HSwarm's running jobs and its newest finished ones, then the other PCs' (`pc` set); HSwarm off or without the
+   *  route is none, AgentHydra out of reach or HSwarm not answering the last answer (KEEP_LAST_MS). One read serves
+   *  every caller for SWARM_FRESH_MS (the poller asks on its 3 s timer). */
   let lastJobs: { at: number; jobs: Promise<SwarmJob[]> } | null = null
   const keptJobs = keepLast<SwarmJob[]>()
   function swarmJobs(): Promise<SwarmJob[]> {
@@ -316,7 +316,14 @@ export function createBridge(opts: BridgeOptions = {}) {
         if (unreachable(err)) missed = true
         return null
       }
-      const [answer, remote, chats] = await Promise.all([client.hswarmJobs(JOBS_ASKED).catch(miss), cachedRemoteQueues().catch(miss), chatsIndex()])
+      // An HSwarm that runs but answers nobody (AgentHydra's proxy says 502) still runs its jobs: the last list stands,
+      // as when AgentHydra is out of reach, so job lines and the tasks placed by them do not drop out and come back
+      // (owner, 2026-10-09: the sidebar "jackhammers"). One AgentHydra says is off (503) lists none.
+      const swarmMiss = (err: unknown) => {
+        if (err instanceof BridgeError && (err.status === 502 || err.status === 504)) missed = true
+        return miss(err)
+      }
+      const [answer, remote, chats] = await Promise.all([client.hswarmJobs(JOBS_ASKED).catch(swarmMiss), cachedRemoteQueues().catch(miss), chatsIndex()])
       const kept = missed ? keptJobs.get() : undefined
       return kept ?? keptJobs.ok([...mapSwarmJobs(answer, chats), ...mapRemoteJobs(remote, chats)])
     })()
