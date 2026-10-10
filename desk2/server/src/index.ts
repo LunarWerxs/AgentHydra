@@ -137,7 +137,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
 
   const hub = createWsHub()
   const settings = createSettingsStore(home)
-  const stopHooks: (() => void | Promise<void>)[] = []
+  const stopHooks: (() => void | Promise<void>)[] = [() => settings.flushSync()]
   const connectHooks: ((send: (event: ServerEvent) => void) => void)[] = []
   const wsRoutes = new Map<string, WsRoute>()
   const hostRoutes: HostRoute[] = []

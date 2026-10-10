@@ -22,7 +22,7 @@ import {
 } from '@shared/babysitter'
 import type { ServerContext } from '../context'
 import { carried, decide, type Memory, shown, type Tracked } from '../babysitter/decide'
-import { writeFlushed } from '../write-flushed'
+import { AsyncFile } from '../async-file'
 
 /** Acts kept for the page. */
 const ACTS_KEPT = 50
@@ -65,6 +65,7 @@ export function byAccount(chats: readonly BabysitterChat[]): BabysitterAccount[]
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
   const file = join(ctx.home, 'babysitter.json')
+  const writer = new AsyncFile(file)
   let saved = load(file)
   let checkedAt: number | null = null
   let nextCheckAt: number | null = null
@@ -97,11 +98,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   }
 
   function save(): void {
-    try {
-      writeFlushed(file, JSON.stringify(saved))
-    } catch (err) {
-      console.error('[babysitter] babysitter.json was not written:', err)
-    }
+    writer.write(JSON.stringify(saved))
   }
 
   /** The next look: in BABYSITTER_EVERY_MS, or sooner when a reset falls due first. It looks while off too, sending
@@ -198,6 +195,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     stopping = true
     clearTimeout(timer)
     timer = undefined
+    writer.flushSync()
   })
 
   // The first look waits for the bridge's first read of AgentHydra.

@@ -12,7 +12,7 @@
 // these POST routes ("no action switch") first.
 // ctx.deps may carry `connections` (a ConnectionsClient over a fake loader) and `mainClaudeJson` (the config to read).
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context, Hono } from 'hono'
 import {
@@ -31,7 +31,7 @@ import { notOwnPage } from '../own-page'
 import { ConnectionsClient, type CallTarget, ConnectionsError, jsonAnswer } from '../connectors/connections-client'
 import type { ServerContext } from '../context'
 import { mainConfigFile } from '../engine/chat-runtime'
-import { renameOver, writeFlushed } from '../write-flushed'
+import { AsyncFile } from '../async-file'
 
 export const CACHE_MS = 30_000
 
@@ -82,7 +82,10 @@ export const folderKey = (cwd: string): string => cwd.replace(/\\/g, '/').replac
 /** Desk's own per-folder default workspaces: <home>/connections-defaults.json, { [folderKey]: FolderDefault }. */
 export class DefaultsStore {
   private data: Record<string, FolderDefault> = {}
+  private readonly writer: AsyncFile
+
   constructor(private file: string) {
+    this.writer = new AsyncFile(file)
     try {
       if (existsSync(file)) this.data = JSON.parse(readFileSync(file, 'utf8')) ?? {}
     } catch {
@@ -107,10 +110,12 @@ export class DefaultsStore {
     this.save()
   }
   private save(): void {
-    mkdirSync(join(this.file, '..'), { recursive: true })
-    const tmp = `${this.file}.tmp`
-    writeFlushed(tmp, `${JSON.stringify(this.data, null, 2)}\n`)
-    renameOver(tmp, this.file)
+    this.writer.write(`${JSON.stringify(this.data, null, 2)}\n`)
+  }
+
+  /** Server shutdown: the defaults as they are in memory, written now. */
+  flushSync(): void {
+    this.writer.flushSync()
   }
 }
 
@@ -266,8 +271,12 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const client =
     (ctx.deps.connections as ConnectionsClient | undefined) ??
     new ConnectionsClient(mainConfigFile(ctx.deps.mainClaudeJson as string | null | undefined, ctx.deps.agentHydraMcp))
-  ctx.onStop(() => client.closeAll())
-  const chip = new ConnectionsChip(app, client, new DefaultsStore(join(ctx.home, 'connections-defaults.json')))
+  const defaults = new DefaultsStore(join(ctx.home, 'connections-defaults.json'))
+  ctx.onStop(() => {
+    client.closeAll()
+    defaults.flushSync()
+  })
+  const chip = new ConnectionsChip(app, client, defaults)
 
   app.get(CONNECTIONS_WORKSPACE, route(client, (_req, q) => readWorkspace(chip, q('chat'))))
   app.get(CONNECTIONS_COMPANIES, route(client, (_req, q) => chip.companies(q('chat'))))

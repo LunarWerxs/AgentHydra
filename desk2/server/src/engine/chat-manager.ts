@@ -1620,6 +1620,7 @@ export class ChatManager {
     releaseHosts(this.store.home)
     this.store.saveChats(this.stored())
     this.store.flush()
+    this.sessionMeta.flushSync()
   }
 
   // Internals

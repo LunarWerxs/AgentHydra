@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ExternalSession, SessionMeta, SessionMetaPatch } from '@shared/protocol'
-import { renameOver, writeFlushed } from '../write-flushed'
+import { AsyncFile } from '../async-file'
 
 const UNMARKED: SessionMeta = { title: null, pinned: false, archived: false, unread: false, group: null }
 
@@ -17,12 +17,16 @@ export class SessionMetaStore {
   readonly tombFile: string
   private readonly byId: Map<string, SessionMeta>
   private readonly tombs: Set<string>
+  private readonly marksWriter: AsyncFile
+  private readonly tombWriter: AsyncFile
 
   constructor(home: string) {
     this.file = join(home, 'session-meta.json')
     this.tombFile = join(home, 'session-tombstones.json')
     this.byId = new Map(Object.entries(this.load()))
     this.tombs = new Set(this.loadTombs())
+    this.marksWriter = new AsyncFile(this.file)
+    this.tombWriter = new AsyncFile(this.tombFile)
   }
 
   get(sessionId: string): SessionMeta | null {
@@ -39,7 +43,13 @@ export class SessionMetaStore {
     const fresh = sessionIds.filter((id) => !this.tombs.has(id))
     if (!fresh.length) return
     for (const id of fresh) this.tombs.add(id)
-    writeAtomic(this.tombFile, JSON.stringify([...this.tombs], null, 2))
+    this.tombWriter.write(JSON.stringify([...this.tombs], null, 2))
+  }
+
+  /** Server shutdown: what is not on disk yet is written now. */
+  flushSync(): void {
+    this.marksWriter.flushSync()
+    this.tombWriter.flushSync()
   }
 
   /** The session ids marked pinned (the bridge keeps them listed however old). */
@@ -100,12 +110,6 @@ export class SessionMetaStore {
   }
 
   private save(): void {
-    writeAtomic(this.file, JSON.stringify(Object.fromEntries(this.byId), null, 2))
+    this.marksWriter.write(JSON.stringify(Object.fromEntries(this.byId), null, 2))
   }
-}
-
-function writeAtomic(file: string, text: string): void {
-  const tmp = `${file}.${process.pid}.tmp`
-  writeFlushed(tmp, text)
-  renameOver(tmp, file)
 }

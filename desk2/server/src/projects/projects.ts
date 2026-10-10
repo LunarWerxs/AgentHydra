@@ -14,9 +14,9 @@
 // (Claude Desktop, the CLI). One started in a folder that holds projects (D:\NEWProjects) is placed by what it did
 // (attribute.ts) and filed once into that project's sidebar group; a group the user picks is never changed.
 
-import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, resolve, sep } from 'node:path'
 import type { ExternalSession, ProjectChoices, ProjectEntry, ProjectGit, ProjectSource, ProjectsResponse } from '@shared/protocol'
 import { lastCwd, readTail } from '../bridge/session-jsonl'
 import { isRemotePath } from '../engine/reveal'
@@ -25,7 +25,7 @@ import { type PlacedBy, SpotIndex } from './attribute'
 import { checkoutOf, folderKey, isDir, subfolders } from './choices'
 import type { HydraLocation, HydraProject, HydraRead } from './hydra'
 import { iconVersion } from './icon-cache'
-import { renameOver, writeFlushed } from '../write-flushed'
+import { AsyncFile } from '../async-file'
 
 export interface GitFacts {
   git: ProjectGit
@@ -263,9 +263,11 @@ export class ProjectList {
   private seen = new Set<string>()
   private readonly filed = new Set<string>()
   private readonly now: () => number
+  private readonly writer: AsyncFile | null
 
   constructor(private readonly deps: ProjectDeps) {
     this.now = deps.now ?? Date.now
+    this.writer = deps.cacheFile ? new AsyncFile(deps.cacheFile) : null
     this.load()
   }
 
@@ -284,19 +286,16 @@ export class ProjectList {
   }
 
   private save(): void {
-    const file = this.deps.cacheFile
-    if (!file) return
+    if (!this.writer) return
     const git = [...this.gitCache].filter(([key]) => !this.listed.size || this.listed.has(key))
     const placed = [...this.placed].filter(([id]) => !this.seen.size || this.seen.has(id))
     const snapshot: Snapshot = { hydra: this.hydraAt, git, outside: this.outsideAt, placed, filed: [...this.filed].slice(-FILED_KEPT) }
-    try {
-      mkdirSync(dirname(file), { recursive: true })
-      const tmp = `${file}.tmp`
-      writeFlushed(tmp, JSON.stringify(snapshot))
-      renameOver(tmp, file)
-    } catch {
-      // floor-ok: without the snapshot the next start waits for Project Hydra once, as it did before
-    }
+    this.writer.write(JSON.stringify(snapshot))
+  }
+
+  /** Server shutdown: the snapshot as it is in memory, written now. */
+  flushSync(): void {
+    this.writer?.flushSync()
   }
 
   /** Project Hydra's last answer at once. A stale one is read again behind it, awaited only with `wait` or when

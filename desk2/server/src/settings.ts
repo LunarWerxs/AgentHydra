@@ -1,10 +1,10 @@
 // ~/.hydra-desk-2/settings.json: the DeskSettings with SPEC.md's defaults underneath.
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DeskSettings, Effort, PermissionMode } from '@shared/protocol'
 import { isOrchestratorModel } from '@shared/orchestrator'
-import { renameOver, writeFlushed } from './write-flushed'
+import { AsyncFile } from './async-file'
 
 export const DEFAULT_SETTINGS: DeskSettings = {
   defaultModel: null,
@@ -81,32 +81,28 @@ export function loadSettings(home: string): DeskSettings {
   return settings
 }
 
-export function saveSettings(home: string, settings: DeskSettings): void {
-  mkdirSync(home, { recursive: true })
-  const file = settingsPath(home)
-  const tmp = `${file}.tmp`
-  writeFlushed(tmp, `${JSON.stringify(settings, null, 2)}\n`)
-  renameOver(tmp, file)
-}
-
 export interface SettingsStore {
   get(): DeskSettings
   /** Validates, merges and persists a partial DeskSettings. Throws SettingsError when it is invalid. */
   update(patch: unknown): DeskSettings
+  /** Server shutdown: what is not on disk yet is written now. */
+  flushSync(): void
 }
 
 export class SettingsError extends Error {}
 
 export function createSettingsStore(home: string): SettingsStore {
   let current = loadSettings(home)
+  const writer = new AsyncFile(settingsPath(home))
   return {
     get: () => ({ ...current }),
     update(patch) {
       const problem = validateSettingsPatch(patch)
       if (problem) throw new SettingsError(problem)
       current = { ...current, ...(patch as Partial<DeskSettings>) }
-      saveSettings(home, current)
+      writer.write(`${JSON.stringify(current, null, 2)}\n`)
       return { ...current }
     },
+    flushSync: () => writer.flushSync(),
   }
 }

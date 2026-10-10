@@ -441,7 +441,11 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   // Hydra automatically applies the right folders").
   const sweep = setInterval(() => void projects.sweep().catch(() => {}), PROJECTS_SWEEP_MS)
   ;(sweep as { unref?: () => void }).unref?.()
-  ctx.onStop(() => clearInterval(sweep))
+  ctx.onStop(() => {
+    clearInterval(sweep)
+    projects.flushSync()
+    folders.flushSync()
+  })
   const choiceFields = { folders: 'projectFolders', roots: 'projectRoots', hidden: 'hiddenProjects' } as const
   for (const kind of Object.keys(choiceFields) as (keyof typeof choiceFields)[]) {
     const field = choiceFields[kind]
@@ -516,5 +520,6 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     stopSweep()
     await hosts
     await manager.closeAll()
+    queue.flushSync()
   })
 }

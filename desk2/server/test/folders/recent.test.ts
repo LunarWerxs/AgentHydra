@@ -75,6 +75,7 @@ describe('RecentFolders', () => {
     first.remember(a)
     first.forget(b)
     const chats = [{ cwd: b, createdAt: 1, updatedAt: 200 }]
+    first.flushSync()
     expect(store(file, clock).list(chats)).toEqual([a])
 
     writeFileSync(file, '{ not json')

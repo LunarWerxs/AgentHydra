@@ -27,7 +27,7 @@ import type {
 } from '@shared/protocol'
 import { createMediaCache, MAX_MEDIA_BYTES, type MediaCache, MEDIA_ROUTE } from '../media/cache'
 import { ChatBusyError, ChatError, type ChatManager, checkCwd, type Json, LIVE, obj, optBool, optString, parseCreate } from './chat-manager'
-import { writeFlushed } from '../write-flushed'
+import { AsyncFile } from '../async-file'
 
 /** What the queue needs of the chat manager (tests fake it). */
 export type QueueChats = Pick<ChatManager, 'list' | 'get' | 'listItems' | 'send' | 'createFromQueue'>
@@ -43,6 +43,8 @@ export interface QueueOptions {
   settleMs?: number
   /** How often a new chat waiting for room, or a chat limited with no known reset, is looked at again. */
   retryMs?: number
+  /** How long a failed write of queue.json waits before it is tried again. */
+  fileRetryMs?: number
 }
 
 export const MAX_NEW_CHATS = 8
@@ -131,9 +133,11 @@ export class QueueManager {
   private closing = false
   private timer: unknown = null
   private timerAt = Infinity
+  private readonly writer: AsyncFile
 
   constructor(o: QueueOptions) {
     this.file = join(o.home, 'queue.json')
+    this.writer = new AsyncFile(this.file, { retryMs: o.fileRetryMs })
     this.manager = o.manager
     this.emit = o.emit
     this.now = o.now ?? Date.now
@@ -450,7 +454,7 @@ export class QueueManager {
     this.set(item, 'sending', null)
     try {
       // Sent only once queue.json has this uuid: it is how a restart tells whether the message went.
-      if (!this.changed()) throw new UnsavedError()
+      if (!(await this.changedLanded())) throw new UnsavedError()
       const r = await this.manager.send(item.chatId, item.text, await this.readBack(item.images), { onlyIfReady: dispatch, messageId: item.sentUuid, now: !dispatch })
       this.drop(item)
       return r
@@ -472,7 +476,7 @@ export class QueueManager {
     item.sentUuid = randomUUID()
     this.set(item, 'sending', null)
     try {
-      if (!this.changed()) throw new UnsavedError()
+      if (!(await this.changedLanded())) throw new UnsavedError()
       const made = await this.manager.createFromQueue(createRequest(item, await this.readBack(item.images)), { waitForRoom, messageId: item.sentUuid })
       if ('waiting' in made) {
         delete item.sentUuid
@@ -635,8 +639,12 @@ export class QueueManager {
 
   // queue.json
 
-  /** False when queue.json could not be written. */
-  private changed(): boolean {
+  private changed(): void {
+    void this.changedLanded()
+  }
+
+  /** Resolves false when queue.json could not be written. */
+  private changedLanded(): Promise<boolean> {
     // A hold with nothing left to hold is spent.
     const heldIds = Object.keys(this.held)
     if (heldIds.length) {
@@ -652,20 +660,22 @@ export class QueueManager {
   }
 
   /**
-   * False when it failed (on Windows an antivirus scan or the indexer can hold queue.json): the queue
-   * goes on from memory, and the next change writes the whole of it again.
+   * Resolves false when the write carrying this state failed (on Windows an antivirus scan or the indexer can hold
+   * queue.json): the queue goes on from memory, and the next change writes the whole of it again.
    */
-  private save(state: QueueState): boolean {
+  private save(state: QueueState): Promise<boolean> {
     const data: QueueFile = { ...state, items: this.items, wasLive: [...this.wasLive] }
-    const tmp = `${this.file}.${process.pid}.tmp`
-    try {
-      writeFlushed(tmp, JSON.stringify(data))
-      renameSync(tmp, this.file)
-      return true
-    } catch (err) {
-      console.warn(`[desk] ${this.file} could not be written; the next change tries again: ${errorText(err)}`)
-      return false
-    }
+    return this.writer.write(JSON.stringify(data))
+  }
+
+  /** Server shutdown: queue.json as it is in memory, written now. */
+  flushSync(): void {
+    this.writer.flushSync()
+  }
+
+  /** Resolves once no write of queue.json is in flight (tests). */
+  quiet(): Promise<void> {
+    return this.writer.quiet()
   }
 
   /** null when there is no file. An unreadable one is an empty queue, the file kept aside (and said in the log). */

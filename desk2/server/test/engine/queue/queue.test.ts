@@ -2,7 +2,7 @@
 // when a queued message goes, what holds it and what releases it, how new chats wait for a slot and for
 // room, the owner's edits and their refusals, and what a restart finds in queue.json.
 
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, spyOn, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,14 +17,34 @@ afterEach(() => {
 
 const SETTLE = 800
 const RETRY = 15_000
+const FILE_RETRY = 20
 /** The 8-byte PNG signature: enough for the media cache to take it as a picture. */
 const PNG = 'iVBORw0KGgo='
 
 /** Lets every promise in flight run: the queue's own work is microtasks. */
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
+/** Writes to disk are real I/O the fake clock does not drive: waits in real time for the check. */
+async function waitFor(check: () => boolean): Promise<void> {
+  const by = Date.now() + 5000
+  while (!check()) {
+    if (Date.now() > by) throw new Error('timed out waiting')
+    await Bun.sleep(5)
+  }
+}
+
+function onDisk(file: string, text: string): Promise<void> {
+  return waitFor(() => {
+    try {
+      return readFileSync(file, 'utf8').includes(text)
+    } catch {
+      return false
+    }
+  })
+}
+
 /** A clock and timers the test moves by hand. */
-function manualClock(start = 1_000_000) {
+function manualClock(idle: () => Promise<void> = async () => {}, start = 1_000_000) {
   let now = start
   let next = 0
   const timers = new Map<number, { at: number; fn: () => void }>()
@@ -42,6 +62,7 @@ function manualClock(start = 1_000_000) {
       const end = now + ms
       for (;;) {
         await settle()
+        await idle()
         const due = [...timers].filter(([, t]) => t.at <= end).sort((a, b) => a[1].at - b[1].at)[0]
         if (!due) break
         timers.delete(due[0])
@@ -160,12 +181,12 @@ class FakeChats {
 function setup(...chats: ChatSummary[]) {
   const home = mkdtempSync(join(tmpdir(), 'desk-queue-'))
   temps.push(home)
-  const clock = manualClock()
+  const clock = manualClock(() => t.q.quiet())
   const fake = new FakeChats()
   fake.add(...chats)
   const events: ServerEvent[] = []
   const open = () =>
-    new QueueManager({ home, manager: fake.api, emit: (e) => events.push(e), now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, settleMs: SETTLE, retryMs: RETRY })
+    new QueueManager({ home, manager: fake.api, emit: (e) => events.push(e), now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, settleMs: SETTLE, retryMs: RETRY, fileRetryMs: FILE_RETRY })
   const t = {
     home,
     clock,
@@ -176,6 +197,7 @@ function setup(...chats: ChatSummary[]) {
     texts: () => fake.sends.map((s) => s.text),
     /** The server stops (the queue's hook first), every chat is 'closed' as a start loads it, and a new queue opens on the same home. */
     restart() {
+      t.q.flushSync()
       t.q.stop()
       for (const c of fake.chats.values()) fake.chats.set(c.id, { ...c, status: 'closed', turnStartedAt: null })
       t.q = open()
@@ -480,6 +502,7 @@ test('pictures are kept in the media cache and read back as bytes when the messa
 
   const item = t.q.add({ kind: 'message', chatId: 'c1', text: 'see', images: [{ mediaType: 'image/png', dataBase64: PNG, name: 'shot.png' }] })
   expect(item.images).toEqual([{ mediaType: 'image/png', url: expect.stringMatching(/^\/api\/media\/[0-9a-f]{64}\.png$/), bytes: 8, name: 'shot.png' }])
+  await onDisk(join(t.home, 'queue.json'), 'shot.png')
   expect(readFileSync(join(t.home, 'queue.json'), 'utf8')).not.toContain(PNG)
   await t.clock.advance(SETTLE)
   expect(t.fake.sends[0]!.images).toEqual([expect.objectContaining({ mediaType: 'image/png', dataBase64: PNG, name: 'shot.png' })])
@@ -512,6 +535,7 @@ test('a send cut off by the server ending is dropped when the transcript has its
   t.restart()
   // both chats were working when it ended: what is left waits for the owner
   expect(t.items()).toEqual([expect.objectContaining({ chatId: 'c2', text: 'lost', state: 'held', reason: REASON.restart })])
+  t.q.flushSync()
   expect(readFileSync(join(t.home, 'queue.json'), 'utf8')).not.toContain('sentUuid')
 })
 
@@ -582,10 +606,14 @@ test('a queue.json that cannot be written strands nothing and sends nothing: the
   const t = setup(chat('c1'))
   const file = join(t.home, 'queue.json')
   t.q.add({ kind: 'message', chatId: 'c1', text: 'x' })
-  const c = t.q.add({ kind: 'chat', cwd: t.home, prompt: 'go' })
+  await onDisk(file, '"text":"x"')
   // a folder where queue.json goes: every rename onto it fails, as onto a file an antivirus scan holds
   rmSync(file)
   mkdirSync(file)
+  const failed = spyOn(console, 'error').mockImplementation(() => {})
+  const c = t.q.add({ kind: 'chat', cwd: t.home, prompt: 'go' })
+  await t.q.quiet()
+  expect(failed.mock.calls.filter((c) => String(c[0]).includes(file)).length).toBe(1)
   await t.clock.advance(SETTLE)
   expect(t.fake.sends).toHaveLength(0)
   expect(t.fake.creates).toHaveLength(0)
@@ -593,12 +621,29 @@ test('a queue.json that cannot be written strands nothing and sends nothing: the
   expect(await refusedAsync(() => t.q.sendNow(c.id))).toBe(409)
   expect(t.items()[1]!.state).toBe('waiting')
 
+  failed.mockRestore()
   rmSync(file, { recursive: true })
+  await onDisk(file, '"text":"go"')
   await t.clock.advance(RETRY)
   expect(t.texts()).toEqual(['x'])
   expect(t.fake.creates).toHaveLength(1)
   expect(t.items()).toEqual([])
-})
+}, 20_000)
+
+test('the chat manager is not sent a message until queue.json on disk names its uuid, so a restart can tell whether it went', async () => {
+  const t = setup(chat('c1'))
+  const file = join(t.home, 'queue.json')
+  const namedOnDisk: boolean[] = []
+  const send = t.fake.api.send
+  t.fake.api.send = async (id, text, images, opts) => {
+    namedOnDisk.push(readFileSync(file, 'utf8').includes(`"sentUuid":"${opts?.messageId}"`))
+    return send(id, text, images, opts)
+  }
+  t.q.add({ kind: 'message', chatId: 'c1', text: 'next step' })
+  await t.clock.advance(SETTLE)
+  await waitFor(() => t.texts().length === 1)
+  expect(namedOnDisk).toEqual([true])
+}, 10_000)
 
 test('nothing the queue throws reaches the chat manager that told it of a change', async () => {
   const t = setup(chat('c1', 'working'))

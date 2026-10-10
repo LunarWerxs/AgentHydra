@@ -167,6 +167,7 @@ describe('ProjectList', () => {
       git: async () => facts(2),
     })
     await before.list({ wait: true })
+    before.flushSync()
 
     // Started ten minutes later: everything kept is stale, so both are read again, behind the answer.
     const never = new Promise<never>(() => {})

@@ -3,10 +3,10 @@
 // back once it is used again: opened or chosen in the menu, or a new chat started in it. Folders that are
 // gone from disk are left out. <home>/folders.json keeps what the chats do not say.
 
-import { mkdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { readFileSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { AsyncFile } from '../async-file'
 import { isRemotePath } from '../engine/reveal'
-import { renameOver, writeFlushed } from '../write-flushed'
 
 export const RECENT_FOLDERS_MAX = 20
 /** Marks kept per list in the file. */
@@ -64,12 +64,14 @@ function onDisk(path: string): boolean {
 
 export class RecentFolders {
   private saved: Saved
+  private readonly writer: AsyncFile
 
   constructor(
     private readonly file: string,
     private readonly now: () => number = Date.now,
   ) {
     this.saved = load(file)
+    this.writer = new AsyncFile(file)
   }
 
   /** The list, latest first, at most RECENT_FOLDERS_MAX. */
@@ -116,9 +118,11 @@ export class RecentFolders {
   }
 
   private save(): void {
-    mkdirSync(dirname(this.file), { recursive: true })
-    const tmp = `${this.file}.tmp`
-    writeFlushed(tmp, `${JSON.stringify(this.saved, null, 2)}\n`)
-    renameOver(tmp, this.file)
+    this.writer.write(`${JSON.stringify(this.saved, null, 2)}\n`)
+  }
+
+  /** Server shutdown: the list as it is in memory, written now. */
+  flushSync(): void {
+    this.writer.flushSync()
   }
 }

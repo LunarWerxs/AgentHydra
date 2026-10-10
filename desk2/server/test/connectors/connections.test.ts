@@ -255,14 +255,29 @@ test("'This chat' pins by the chat's own session id: chat A's pin leaves chat B 
 })
 
 const uses = (r: Rig) => r.calls().filter((c) => c.tool === 'connections_use_workspace')
-const defaultsFile = (r: Rig) => JSON.parse(readFileSync(join(process.env.HYDRA_DESK_HOME as string, 'connections-defaults.json'), 'utf8'))
+type DefaultsFile = Record<string, { companyId: string; setAt: number; applied: string[] }>
+/** The defaults file once `settled` holds for it: the write goes to disk off the request's thread. */
+async function defaultsFile(r: Rig, settled: (f: DefaultsFile) => boolean = () => true): Promise<DefaultsFile> {
+  const file = join(process.env.HYDRA_DESK_HOME as string, 'connections-defaults.json')
+  const by = Date.now() + 5000
+  for (;;) {
+    try {
+      const f = JSON.parse(readFileSync(file, 'utf8')) as DefaultsFile
+      if (settled(f)) return f
+    } catch {
+      // not on disk yet
+    }
+    if (Date.now() > by) throw new Error('the defaults file never reached the disk')
+    await Bun.sleep(5)
+  }
+}
 
 test('the default is stored per folder with the time it was set, and setting it changes no chat or folder', async () => {
   const r = await boot()
   const set = await post(r, CONNECTIONS_DEFAULT, { chat: 'oldChat', company: 'c2' })
   expect(set.body).toMatchObject({ defaultCompanyId: 'c2' })
-  const file = defaultsFile(r)
-  const [entry] = Object.values(file) as { companyId: string; setAt: number; applied: string[] }[]
+  const file = await defaultsFile(r)
+  const [entry] = Object.values(file)
   expect(Object.keys(file).length).toBe(1)
   expect(entry).toMatchObject({ companyId: 'c2', name: 'Globex Example', applied: [] })
   expect(entry.setAt).toBeGreaterThan(0)
@@ -284,7 +299,8 @@ test('a chat started after the default is pinned to it once; a chat started befo
   expect(fresh.body).toMatchObject({ company: { companyId: 'c2' }, scope: 'chat' })
   expect(uses(r)).toHaveLength(1)
   expect(uses(r)[0]).toMatchObject({ params: { company: 'c2' }, env: { session: 'sess-new' } })
-  expect((Object.values(defaultsFile(r))[0] as { applied: string[] }).applied).toEqual(['sess-new'])
+  const saved = await defaultsFile(r, (f) => Object.values(f).some((e) => e.applied.includes('sess-new')))
+  expect((Object.values(saved)[0] as { applied: string[] }).applied).toEqual(['sess-new'])
 })
 
 test('a chat that already has a pin of its own is not re-pinned', async () => {
@@ -313,7 +329,7 @@ test('clearing the default stops it applying, and the star on the default sends 
   await post(r, CONNECTIONS_DEFAULT, { chat: 'oldChat', company: 'c2' })
   const cleared = await post(r, CONNECTIONS_DEFAULT, { chat: 'oldChat', company: null })
   expect(cleared.body.defaultCompanyId).toBeUndefined()
-  expect(defaultsFile(r)).toEqual({})
+  expect(await defaultsFile(r, (f) => Object.keys(f).length === 0)).toEqual({})
   const w = await get(r, `${CONNECTIONS_WORKSPACE}?chat=newChat2`)
   expect(w.body).toMatchObject({ scope: null })
   expect(uses(r).length).toBe(0)

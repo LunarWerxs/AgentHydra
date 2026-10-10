@@ -644,7 +644,12 @@ describe('the row menu routes', () => {
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ title: 'Renamed here', pinned: true, archived: false, unread: false, group: 'Ops' })
     expect((await first.bridge.externalSessions())[0]).toEqual({ ...ext, title: 'Renamed here', pinned: true, group: 'Ops' })
-    expect(existsSync(join(first.home, 'session-meta.json'))).toBe(true)
+    const metaFile = join(first.home, 'session-meta.json')
+    const landedBy = Date.now() + 5000
+    while (!existsSync(metaFile)) {
+      if (Date.now() > landedBy) throw new Error('session-meta.json was never written')
+      await Bun.sleep(5)
+    }
 
     expect((await call(first.desk, 'PATCH', '/api/external/sessions/ext-1/meta', { group: '' })).status).toBe(400)
     expect((await call(first.desk, 'PATCH', '/api/external/sessions/ext-1/meta', { status: 'idle' })).status).toBe(400)
