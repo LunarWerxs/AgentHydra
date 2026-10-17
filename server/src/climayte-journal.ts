@@ -69,6 +69,7 @@ export interface CliMayteJournalEntry {
   pct?: number | null // handoff-requested: how far into its limit (null: on request); limit at the ceiling: the reading
   path?: string // handoff file
   pending?: number // follow-up-queued: messages waiting now; cancelled: messages kept
+  messages?: number // follow-up-delivered: how many held messages the launch delivered, in order
   urgent?: boolean // follow-up-queued: the running work is stopped to deliver it first
   retry?: number // retry / interrupted: which retry this is, of 3
   waitS?: number // retry: seconds until it
