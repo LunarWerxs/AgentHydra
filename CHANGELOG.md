@@ -7,6 +7,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Stop sends your queued messages.** In a chat with messages queued, Stop now stops what the chat is doing and goes on at once with all of them, in order. Press Stop again to really stop.
+
+- **A message the chat already has no longer says "Queued".** When AgentHydra hands your message straight into a running turn, its bubble shows as sent, and the chat reads it at its next step. The Urgency Advisor's messages clear the same way, including ones carried over when a chat hands off to a fresh session.
+
+- **A chat picks up every queued message at once.** When a chat goes on after its turn, it now gets all the messages waiting for it, not just the first, so none sits "Queued" after the chat has answered.
+
 - **Restarting AgentHydra's window server no longer cuts off a Free message on its way.** A message sent to a Free account now goes on by itself while the server restarts or updates, and the restarted server picks it up and returns its reply. Asking again for the same message returns that send instead of sending it twice.
 
 - **VS Code Copilot Chat counts in Stats and Analytics.** Copilot chats in VS Code are now their own source, one call per request, and Cost by project places them by the folder the VS Code window had open. Copilot bills requests rather than tokens and most requests record no token count, so its row is there so every tool you use is counted, not for its volume.
