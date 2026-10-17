@@ -13,7 +13,7 @@
 // find the real bun's folder. A running copy cannot be overwritten but can be renamed, so a refresh
 // moves it aside (`<copy>.<ticks>.old`, removed once nothing runs it) and puts the new one in place.
 
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { copyFile, mkdir, readdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
@@ -73,7 +73,7 @@ export type RefreshResult =
 /** Make `target` a current copy of `source`. Never throws: a copy that cannot be made leaves the
  *  launch on `source`, the name it always had. */
 export async function refreshCopy(source: string, target: string): Promise<RefreshResult> {
-  if (source === target) return { action: 'current', path: target }
+  if (sameFile(source, target)) return { action: 'current', path: target }
   if (currentCopy(source, target)) return { action: 'current', path: target }
   const tmp = `${target}.${process.pid}.tmp`
   try {
@@ -93,6 +93,19 @@ export async function refreshCopy(source: string, target: string): Promise<Refre
   } catch (error) {
     await unlink(tmp).catch(() => {})
     return { action: 'failed', path: target, detail: (error as Error).message }
+  }
+}
+
+/** Whether two paths name one file. Windows spells a file many ways: process.execPath is the long,
+ *  on-disk form, while a folder from the environment may be 8.3 (C:\Users\RUNNER~1) or differ in
+ *  case. A daemon whose copy's source is gone runs as its own source, and a string compare there
+ *  would copy the copy onto itself and stamp it as its own source, so it stopped following bun. */
+function sameFile(a: string, b: string): boolean {
+  if (a === b) return true
+  try {
+    return realpathSync.native(a) === realpathSync.native(b)
+  } catch {
+    return false
   }
 }
 

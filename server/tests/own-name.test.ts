@@ -73,6 +73,24 @@ test('a copy whose source is gone leads back to itself, and a missing source fai
 })
 
 test.skipIf(process.platform !== 'win32')(
+  'a copy named as its own source in another spelling of its path is left as it is',
+  async () => {
+    // A daemon on an orphan copy refreshes from its process.execPath (the long, on-disk spelling)
+    // into a copy path built from its config folder, which may be 8.3 or differ in case.
+    const d = dir()
+    const target = join(d, 'AgentHydra-daemon.exe')
+    writeFileSync(target, 'orphan copy')
+    const stamp = { source: join(d, 'gone.exe'), size: 1, mtimeMs: 1 }
+    writeFileSync(stampPath(target), JSON.stringify(stamp))
+    expect(await refreshCopy(target.toUpperCase(), target)).toEqual({
+      action: 'current',
+      path: target,
+    })
+    expect(readStamp(target)).toEqual(stamp)
+  },
+)
+
+test.skipIf(process.platform !== 'win32')(
   'refreshes a copy a process is running from, and the copy runs as its own name',
   async () => {
     const d = dir()
