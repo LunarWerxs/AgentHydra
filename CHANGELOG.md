@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **ChatGPT Free recovers by itself when its browser hangs.** If the background browser stops responding, AgentHydra now ends the sends stuck in it within about half a minute, restarts the browser and goes on with the next message, instead of failing every ChatGPT send for hours. A send whose outcome is unknown is still never sent twice, and only its own account waits; the others keep working.
+
 - **Stop sends your queued messages.** In a chat with messages queued, Stop now stops what the chat is doing and goes on at once with all of them, in order. Press Stop again to really stop.
 
 - **A message the chat already has no longer says "Queued".** When AgentHydra hands your message straight into a running turn, its bubble shows as sent, and the chat reads it at its next step. The Urgency Advisor's messages clear the same way, including ones carried over when a chat hands off to a fresh session.
