@@ -36,6 +36,23 @@ export function standInFor(sent: UserItem[], real: UserItem, held?: ReadonlySet<
   return same >= 0 ? same : sent.findIndex((s) => s.ts <= real.ts + 60_000 && !held?.has(s.id))
 }
 
+/** Every stand-in a worker's copy replaces: messages that reach a busy CLI together come back as one user record, their
+ *  texts joined, so each stand-in whose text it holds goes, each text used once. With none, standInFor's one. */
+export function standInsFor(sent: UserItem[], real: UserItem, held?: ReadonlySet<string>): number[] {
+  let rest = squash(real.text)
+  const out: number[] = []
+  sent.forEach((s, i) => {
+    const text = squash(withoutNamedLines(s.text))
+    const at = rest.indexOf(text)
+    if (at < 0 || (out.length && !text)) return
+    out.push(i)
+    rest = rest.slice(0, at) + rest.slice(at + text.length)
+  })
+  if (out.length) return out
+  const i = standInFor(sent, real, held)
+  return i >= 0 ? [i] : []
+}
+
 /** An imported session's title. One nobody named (no title, or only its first words) is named from its first message, as a new chat is. */
 export function importTitle(req: ImportSessionRequest, items: TranscriptItem[], kept: string | null | undefined, listed: string | undefined): { title: string; generate: boolean; firstAsk: string | undefined } {
   const firstAsk = items.find((i): i is UserItem => i.kind === 'user' && !!i.text.trim())?.text

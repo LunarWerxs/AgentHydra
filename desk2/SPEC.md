@@ -515,7 +515,8 @@ picks the account and moves the worker when that account hits its limit or its l
   changed account. An earlier session's lines stay in the file even if its JSONL is later removed or older than the
   8 MB tail read. Other programs read the whole chat with `GET /api/chats/:id/transcript`. A message sent shows at
   once as a stand-in user item (memory only, never in the file); the worker's own copy of it (same text, else the
-  oldest stand-in sent before it) replaces it with `item.removed`, and a failed send removes it the same way.
+  oldest stand-in sent before it) replaces it with `item.removed`, and a failed send removes it the same way. Messages
+  that reach a busy CLI together come back as one copy, their texts joined; it replaces each of their stand-ins.
 - Stop cancels the worker; the next message revives it. Stop with messages held (their bubbles say "Queued") stops
   the running turn and continues the same session with all of them at once, in order, each its own bubble; with
   nothing held it cancels. A message AgentHydra delivers into the running turn shows as sent, not "Queued". Delete cancels a live worker. Pictures, account,

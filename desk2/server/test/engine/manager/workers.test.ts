@@ -180,6 +180,34 @@ paragraphs` },
   expect(removed.sort()).toEqual([...standIns].sort())
 })
 
+test('held messages the CLI reads as one merged turn each lose their stand-in', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  await m.send(chat.id, 'check the build')
+  await m.send(chat.id, 'then the docs')
+  await m.send(chat.id, 'then the docs')
+
+  // Messages that reach a busy CLI together come back as one user record, their texts joined: both go, and the
+  // repeated message's second stand-in stays until its own copy shows.
+  b.state.workerItems['worker-session-1'] = [
+    { kind: 'user', id: 'u-1', ts: Date.now(), text: 'hi' },
+    { kind: 'user', id: 'u-2', ts: Date.now(), text: 'check the build\n\nthen the docs' },
+  ]
+  await m.syncWorkers(chat.id)
+  const users = () => m.listItems(chat.id).filter((i) => i.kind === 'user').map((i) => i.id.startsWith('desk-sent:') ? `stand-in: ${'text' in i && i.text}` : i.id)
+  expect(users()).toEqual(['u-1', 'u-2', 'stand-in: then the docs'])
+  b.state.workerItems['worker-session-1']!.push({ kind: 'user', id: 'u-3', ts: Date.now(), text: 'then the docs' })
+  await m.syncWorkers(chat.id)
+  expect(users()).toEqual(['u-1', 'u-2', 'u-3'])
+})
+
 test('Send now on a queued message has CliMayte deliver that one now, and its bubble is no longer queued', async () => {
   const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
   temps.push(home)
