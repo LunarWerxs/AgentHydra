@@ -435,7 +435,7 @@ function continuedChatTurns(raw: UserItem, c: NonNullable<ReturnType<typeof cont
   const listed = c.messages
     ? (carriedEntries(c.messages) ?? [c.messages]).map((e, i): UserItem | NoteItem => {
         const id = `${raw.id}:carried:${i}`
-        if (typeof e !== 'string') return { ...bare, id, kind: 'note', from: e.from, text: e.text }
+        if (typeof e !== 'string') return { ...bare, id, kind: 'note', from: e.from, text: e.text, ...(e.advisor && { advisor: true as const }) }
         return personTurn({ ...bare, id, text: e }, media)
       })
     : []

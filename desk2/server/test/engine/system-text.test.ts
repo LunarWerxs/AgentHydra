@@ -576,6 +576,19 @@ describe("a handoff's continuation prompt", () => {
     expect(out[3]).toMatchObject({ text: 'why did it stop?' })
   })
 
+  test("the Urgency Advisor's message a chat's handoff carried stays his advisor note, so the worker's copy finds its stand-in", () => {
+    const nudge = "[Urgency Advisor · Ada] Sent on the owner's behalf.\n\nThe report is overdue. Wrap up and send it."
+    const chat = continued({ messages: ['why did it stop?', nudge] }).replace(
+      'Do not redo steps it reports finished.',
+      "That session was this chat's manager before you: you continue as the manager the owner talks to in this Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
+    )
+    const out = userTurns(user(chat), null)
+    expect(out[2]).toEqual({ kind: 'user', id: 'u9:carried:0', ts: 7, text: 'why did it stop?', parentToolUseId: null })
+    expect(out[3]).toEqual({ kind: 'note', id: 'u9:carried:1', ts: 7, parentToolUseId: null, from: 'Ada', text: 'The report is overdue. Wrap up and send it.', advisor: true })
+    const stand = { kind: 'user' as const, id: 'desk-sent:1', ts: 5, text: nudge, parentToolUseId: null }
+    expect(advisorStandInFor([stand], out[3] as Extract<TranscriptItem, { kind: 'note' }>)).toBe(0)
+  })
+
   test("a chat continuation led by a stream-json line carrying an earlier continuation shows the plain message and one muted line", () => {
     const heir = (c: string) =>
       c.replace('Do not redo steps it reports finished.', "That session was this chat's manager before you: you continue as the manager. Do not redo steps it reports finished.")
