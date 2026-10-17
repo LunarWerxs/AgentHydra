@@ -19,6 +19,7 @@
     "e2e:gestures": "bun e2e/gestures.e2e.ts",
     "e2e:scroll": "bun e2e/scroll-follow.e2e.ts",
     "e2e:rail": "bun e2e/rail.e2e.ts",
+    "e2e:phone": "bun e2e/phone.e2e.ts",
     "e2e:outside": "bun e2e/outside-composer.e2e.ts",
     "e2e:frame-click": "bun e2e/frame-click.e2e.ts",
     "e2e:clipboard": "bun e2e/browser-clipboard.e2e.ts",

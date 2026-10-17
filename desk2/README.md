@@ -87,7 +87,10 @@ It reads Desk's own `GET /api/routines` on the page's origin, so it works embedd
   navigation drawer does; picking anything, tapping the scrim or Esc shuts it, and it starts shut every time the window
   turns narrow. The session rail lies over the chat there too, shut until its button asks for it and again once a chat is
   picked. Neither touches the open or shut state a wide window remembers (`COMPACT_WIDTH` in `sidebar/width.ts`, `narrow`
-  in `shell/DeskFrame.vue`).
+  in `shell/DeskFrame.vue`). A right-hand pane (Changes, the Browser, To-do, Connections, CliMayte) takes the chat's place
+  there, the whole width under the title bar, with a "Back to the chat" row over it; that row, the pane's own button or a
+  chat picked in the drawer brings the chat back, and the panes a wide window remembers per chat are untouched
+  (`paneNarrow`). `bun run e2e:phone` checks both at 375px, and that 1920px keeps the panes where they were.
 - **A compact sidebar, and project icons in the cloud list** (owner, 2026-10-10). The chrome bar's Compact sidebar
   button (blue while on, off by default, remembered; `web/src/components/sidebar/compact.ts`) drops the project
   headers from both lists: the chats stay in their groups and order as one list, a collapsed group still shows its

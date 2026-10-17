@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect, type Ref } from 'vue'
+import { ArrowLeft } from '@lucide/vue'
 import type { ChatSummary, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import Sidebar from '@/components/sidebar/Sidebar.vue'
 import { accountFace, groupChoices, type RowMenuItem } from '@/components/sidebar/logic'
@@ -223,14 +224,17 @@ const sidebarOpen = ref(props.sidebarHidden ? false : storage?.getItem(OPEN_KEY)
 // Under COMPACT_WIDTH (a phone's 375px) there is no room for the sidebar beside the chat, so it is a drawer over the chat
 // (sidebar/width.ts): shut until its toggle opens it, shut again once anything is picked, the scrim beside it is tapped or Esc is
 // pressed, and never saved, so the docked sidebar a wide window remembers is untouched. The session rail lies over the chat
-// there too, shut until its button asks for it (railNarrow). Both start shut each time the window turns narrow.
+// there too, shut until its button asks for it (railNarrow), and a right pane takes the chat's place (paneNarrow, below). All three
+// start shut each time the window turns narrow.
 const { width: windowWidth } = useWindowSize()
 const narrow = computed(() => !collapsed.value && windowWidth.value < COMPACT_WIDTH)
 const drawer = ref(false)
 const railNarrow = ref(false)
+const paneNarrow = ref<RightPane | null>(null)
 watch(narrow, () => {
   drawer.value = false
   railNarrow.value = false
+  paneNarrow.value = null
 })
 /** The sidebar holds its column: open, on a window wide enough for it and the chat. */
 const docked = computed(() => sidebarOpen.value && !narrow.value)
@@ -320,6 +324,7 @@ watch(
     peek.close()
     drawer.value = false
     railNarrow.value = false
+    paneNarrow.value = null
   }
 )
 // A drag reports every pointer move: the width follows once per frame, and is saved once the drag rests.
@@ -539,15 +544,22 @@ const toggleClean = () => (cleanSidebar.value = !cleanSidebar.value)
 const toggleCompact = () => (compactSidebar.value = !compactSidebar.value)
 
 // Right pane: which one is open, or none, is remembered per chat (and per outside session), so opening the browser in
-// one chat leaves the others as they were. Background tasks below is kept the same way.
+// one chat leaves the others as they were. Background tasks below is kept the same way. Narrow, the pane is the window's alone
+// (paneNarrow), never a chat's remembered one: it takes the chat's place, and any pick, its back row or its button brings the chat
+// back. Opening one there shuts the drawer it was asked from (a group's To-do, the Dev servers list's Open in browser).
 const viewKey = computed(() => {
   const v = view.value
   return v.kind === 'chat' || v.kind === 'external' ? `${v.kind}:${v.id}` : v.kind
 })
 const paneByView = ref(new Map<string, RightPane>())
 const pane = computed<RightPane | null>({
-  get: () => paneByView.value.get(viewKey.value) ?? null,
+  get: () => (narrow.value ? paneNarrow.value : (paneByView.value.get(viewKey.value) ?? null)),
   set: (p) => {
+    if (narrow.value) {
+      paneNarrow.value = p
+      if (p) drawer.value = false
+      return
+    }
     const next = new Map(paneByView.value)
     if (p) next.set(viewKey.value, p)
     else next.delete(viewKey.value)
@@ -673,8 +685,9 @@ const asideOpen = computed(() => !tasks.value && !!pane.value && (pane.value ===
 // A wide pane splits the stage: the chat keeps the width it was dragged to and the pane takes the rest, so resizing the
 // window resizes the pane and leaves the chat as it is. The width is each chat's own, like whether its pane is open: a
 // chat never dragged opens at the default. The divider on the pane's left edge drags the split, or arrow keys move it;
-// each side keeps only enough room to stay usable.
-const split = computed(() => wide.value && asideOpen.value)
+// each side keeps only enough room to stay usable. Narrow there is no split: the pane lies in the chat's place (paneOver).
+const split = computed(() => wide.value && asideOpen.value && !narrow.value)
+const paneOver = computed(() => narrow.value && asideOpen.value)
 const splitEl = ref<HTMLElement | null>(null)
 const { width: stageWidth } = useElementSize(splitEl)
 const chatWidthByView = ref(new Map<string, number>())
@@ -1179,7 +1192,7 @@ function moveSidebar(side: SidebarSide) {
             :style="{ '--rail-over': `${railOver}px`, ...(railSlide ? { transform: `translateX(${railShift}px)` } : {}) }"
           >
             <!-- data-file-drop: a file dropped anywhere on the chat attaches to its composer -->
-            <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col" data-file-drop>
+            <div v-show="!tasks?.expanded && !paneOver" class="flex min-w-0 flex-1 flex-col" data-file-drop>
               <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
               <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
                 <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :read-only="!!lockedChild" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" :older-count="olderCount" :loading-older="loadingOlder" :index="src.indexByChat?.value.get(chat.id) ?? null" :fetch-item="fetchChatItem" @load-older="loadOlder" />
@@ -1214,13 +1227,24 @@ function moveSidebar(side: SidebarSide) {
           <!-- Servers and Changes-with-RepoYeti take the full height of the chat area, from the title bar row down, so the title bar's
                buttons end at the pane's left edge; plain Changes, Connections and CliMayte sit under the title bar. When
                the window draws its own title bar (lib/host-window.ts) that row is the window's, across the whole width,
-               with the pane buttons beside the window's buttons, so every pane starts under it. -->
+               with the pane buttons beside the window's buttons, so every pane starts under it. Narrow, every pane takes the chat's
+               cell under the title bar, the whole width, with a row back to the chat over it (paneOver). -->
           <aside
             v-if="asideOpen"
-            class="relative col-start-2 flex min-h-0 min-w-0 shrink-0 border-s border-border"
-            :class="split ? (ownFrame ? 'row-start-2' : 'row-span-2 row-start-1') : 'row-start-2 w-95'"
+            class="relative flex min-h-0 min-w-0 shrink-0"
+            :class="paneOver ? 'col-start-1 row-start-2 pt-9' : ['col-start-2 border-s border-border', split ? (ownFrame ? 'row-start-2' : 'row-span-2 row-start-1') : 'row-start-2 w-95']"
             :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : pane === 'todo' ? 'To-do' : 'CliMayte'"
           >
+            <div v-if="paneOver" class="absolute inset-x-0 top-0 flex h-9 items-center border-b border-border px-1.5" data-testid="pane-back-row">
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1.5 rounded-(--radius-8) ps-1.5 pe-2.5 text-ui font-medium text-text-2 hover:bg-fill-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                @click="pane = null"
+              >
+                <ArrowLeft class="size-4" aria-hidden="true" />
+                Back to the chat
+              </button>
+            </div>
             <div
               v-if="split"
               role="separator"
@@ -1237,7 +1261,8 @@ function moveSidebar(side: SidebarSide) {
             <ServersPane v-else-if="pane === 'servers' && serversDir" :key="chat?.id ?? viewKey" :chat-id="chat?.id ?? viewKey" :cwd="serversDir" :focus="serversFocus" :ai-browser="aiBrowser" :paused="pageOpen" @close="pane = null" />
             <ConnectionsPane v-else-if="pane === 'connections' && chat" :key="chat.id" :chat="chat" />
             <FourmanPane v-else-if="pane === 'todo' && todoDir" :key="todoDir" :cwd="todoDir" @close="pane = null" />
-            <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
+            <!-- Narrow, it shrinks to the window: a long task's title is cut short instead of drawing it wider than the screen. -->
+            <CliMaytePanel v-else :class="paneOver && 'min-w-0 flex-1'" :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
           </aside>
 
           <!-- Expanded, Background tasks takes the chat's place under the title bar (the same cell as main, whose content hides). -->
