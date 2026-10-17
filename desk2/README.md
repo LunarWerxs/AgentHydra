@@ -376,7 +376,10 @@ It reads Desk's own `GET /api/routines` on the page's origin, so it works embedd
   "just have a little arrow on the right side") (`transcript/parts/MessagePeek.vue`). The message sits in the sent
   bubble's lighter grey, clamped at its 180px with a fade and Read more (owner, 2026-10-10: "it needs to cap off a
   little bit better with a 'read more.' ... a lighter gray bubble"). The tray's label, bubble and image line sit centered
-  in the conversation's 768px column (owner, 2026-10-12: "center the block please. Not, left align").
+  in the conversation's 768px column (owner, 2026-10-12: "center the block please. Not, left align"). It has only a bottom
+  line, no outline (owner, 2026-10-17), and with the session rail open it and the transcript's scrollbar end at the rail's
+  left edge, not under it: DeskFrame sets `--rail-over`, the rail's overlap of the chat, and the scroller's margin and the
+  tray's right edge take it while the text column stays centred where it was.
 - **One shimmer at a time, and slower** (owner, 2026-10-10: the run's line and the working line were "excessively
   shimmery"; Claude Desktop has one, "the upper one. And then as it changes, it would ... step down"). Only the newest
   live row of the turn shimmers: a run with a call going, thinking as it streams, a file being sent. With none, the
@@ -494,7 +497,14 @@ It reads Desk's own `GET /api/routines` on the page's origin, so it works embedd
   Sessions tab said about it: the product and short id (click to copy the id), the instance number and account (its
   address in the tooltip; click to see that account's row in AgentHydra's Instances, marked), the folder (its project
   dashboard on hover), the git branch, the model, turns, tokens and cost (the breakdown in the tooltip; a "+" when a
-  model has no published price), and any credentials the transcript printed (redacted). For an outside session, Find is in
+  model has no published price), and any credentials the transcript printed (redacted). An outside Codex chat's turns
+  are its thread's, its rollout's `task_started` marks (`codexTurnCount`, which reads only what the file gained since),
+  and its tokens the rollout's running total: AgentHydra's usage route does not count Codex, and the transcript Desk holds
+  is only the thread's newest part (2026-10-17: a 124-turn thread read "15 turns"). The cards' numbers (the usage, the
+  transcript index's context, active time, tool tally and Codex totals, the delegation) are kept per session in the
+  window (`web/src/components/rail/rail-cache.ts`; numbers and tool names only, never transcript text), so a revisit or
+  a reload paints them at once and the fresh reads replace them a moment later (owner, 2026-10-17: the cards "pop in
+  slowly ... previous info and then the numbers maybe updated in a second"). For an outside session, Find is in
   the title bar, just left of Session details, whether the rail is open or shut; Ctrl + F still opens it (Enter and
   Shift + Enter step through the matches, marked in the transcript, the Find bar over the transcript's top). The
   Environment card keeps its ⋯ menu with the account (bring it to the front, copy its address), Display (only what I typed, tool
