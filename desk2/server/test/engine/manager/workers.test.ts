@@ -152,7 +152,7 @@ test('a sent message shows at once, before the worker has it, and its worker cop
 
   // The worker takes its time: the message is on screen while the send is still out.
   let take!: () => void
-  b.bridge.sendToWorker = () => new Promise<boolean>((r) => (take = () => r(false)))
+  b.bridge.sendToWorker = () => new Promise<{ urgent: boolean; delivered: boolean }>((r) => (take = () => r({ urgent: false, delivered: false })))
   const sending = m.send(chat.id, `two
 
 paragraphs`)
@@ -215,6 +215,33 @@ test('Send now on a queued message has CliMayte deliver that one now, and its bu
   expect(m.sendNow(chat.id, first.id)).rejects.toThrow(/CliMayte did not send it now: .*needs its update/)
 })
 
+test('a Send now that stops nothing says why once, as a system line, and logs it', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  expect(await m.send(chat.id, 'first, check the build')).toEqual({ queued: true })
+  const held = m.listItems(chat.id).find((i) => i.kind === 'user' && i.queued)!
+  b.state.nowStops = false
+
+  const warned: string[] = []
+  const warn = console.warn
+  console.warn = (...args: unknown[]) => warned.push(args.map(String).join(' '))
+  try {
+    await m.sendNow(chat.id, held.id)
+  } finally {
+    console.warn = warn
+  }
+  const reason = 'That message is not held any more: it was delivered, or its turn has begun.'
+  expect(m.listItems(chat.id).filter((i) => i.kind === 'system' && i.text === reason)).toHaveLength(1)
+  expect(warned.filter((w) => w.includes(reason))).toHaveLength(1)
+})
+
 test('Cancel on a held message takes it back from the worker: never run, gone from the bubbles, and too late once taken', async () => {
   const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
   temps.push(home)
@@ -245,6 +272,49 @@ test('Cancel on a held message takes it back from the worker: never run, gone fr
   b.state.cancelRemoves = true
   expect(m.cancelQueued(chat.id, first.id)).rejects.toThrow(/cannot take back a held message yet: it needs its update/)
   expect(queued()).toEqual(['first, check the build'])
+})
+
+test('a message AgentHydra delivers into the running turn shows as sent, not queued, with no Send now and no status change', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  b.state.deliversInTurn = true
+
+  expect(await m.send(chat.id, 'also check the totals')).toEqual({ queued: false })
+  const sent = m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'also check the totals')!
+  expect(sent).toMatchObject({ kind: 'user', text: 'also check the totals' })
+  expect(sent).not.toHaveProperty('queued')
+  expect(b.state.sentNow).toEqual([])
+  expect(m.get(chat.id)).toMatchObject({ status: 'working', queuedCount: 0 })
+})
+
+test('Stop with messages held stops the turn and continues it with all of them now; with none held it cancels', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  expect(await m.send(chat.id, 'first, check the build')).toEqual({ queued: true })
+  expect(await m.send(chat.id, 'then the totals')).toEqual({ queued: true })
+
+  await m.interrupt(chat.id)
+  expect(b.state.sentNow).toEqual([{ id: 'w1' }])
+  expect(b.state.cancelled).toEqual([])
+  expect(m.listItems(chat.id).filter((i) => i.kind === 'user' && i.queued)).toEqual([])
+
+  await m.interrupt(chat.id)
+  expect(b.state.sentNow).toHaveLength(1)
+  expect(b.state.cancelled).toEqual(['w1'])
 })
 
 // 2026-10-06: a worker that handed off waited 36 minutes for an account; its held message's Send now went

@@ -516,7 +516,9 @@ picks the account and moves the worker when that account hits its limit or its l
   8 MB tail read. Other programs read the whole chat with `GET /api/chats/:id/transcript`. A message sent shows at
   once as a stand-in user item (memory only, never in the file); the worker's own copy of it (same text, else the
   oldest stand-in sent before it) replaces it with `item.removed`, and a failed send removes it the same way.
-- Stop cancels the worker; the next message revives it. Delete cancels a live worker. Pictures, account,
+- Stop cancels the worker; the next message revives it. Stop with messages held (their bubbles say "Queued") stops
+  the running turn and continues the same session with all of them at once, in order, each its own bubble; with
+  nothing held it cancels. A message AgentHydra delivers into the running turn shows as sent, not "Queued". Delete cancels a live worker. Pictures, account,
   model, effort and permission-mode changes are refused or ignored for these chats; a fork is refused.
 - **Headless:** a worker runs without a window, so its permission prompts and questions never reach
   Hydra Desk.

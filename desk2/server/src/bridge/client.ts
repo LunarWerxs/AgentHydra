@@ -600,11 +600,12 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** `cwd`: the folder the chat moved to; the worker's next launch copies its session there and resumes there.
      *  `urgent`: a running worker is stopped and the same session continues at once with this message first
      *  (`urgent: true` in the answer when it stopped; every AgentHydra with CliMayte has it).
+     *  `delivered: 'in-turn'` in the answer: a message to a running worker went into its turn, not held.
      *  `desk`: the chat's add-ons now (`chatAddOns`), which replace what AgentHydra keeps from the next launch on.
      *  `requestId`: this message's own id; sent again, AgentHydra queues it once (an older one ignores it).
      *  `setting`: the model and effort the worker runs on from the launch that takes this message. */
     sendToWorker: (id: string, text: string, cwd?: string, urgent?: boolean, desk?: StartWorker['desk'], requestId?: string, setting?: WorkerSendSetting) =>
-      request<{ ok: boolean; message: string; urgent?: boolean }>('POST', `/api/corch/workers/${enc(id)}/send`, {
+      request<{ ok: boolean; message: string; urgent?: boolean; delivered?: 'in-turn' }>('POST', `/api/corch/workers/${enc(id)}/send`, {
         text,
         ...(setting ? { model: setting.model, effort: setting.effort } : {}),
         ...(cwd ? { cwd } : {}),

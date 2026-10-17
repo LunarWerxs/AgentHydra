@@ -936,7 +936,7 @@ export class ChatManager {
     }
     const sentAt = this.now()
     const started = this.beginStart(e)
-    let sent: { urgent: boolean; stoppedFor: boolean }
+    let sent: { urgent: boolean; stoppedFor: boolean; delivered: boolean }
     try {
       // The stand-in's id is the message's request id: sent again, AgentHydra starts or queues it once.
       sent = await this.dispatchToWorker(e, text, queued, opts, standIn.id, started)
@@ -956,14 +956,14 @@ export class ChatManager {
     e.workerLive = true
     const held = await this.settleHeld(e, standIn, text, queued, sent, opts)
     if (held.gone) return { queued: held.queued }
-    this.tookMessage(e, held.queued)
+    this.tookMessage(e, held.queued, sent.delivered)
     return { queued: held.queued }
   }
 
-  /** AgentHydra took a message: the chat shows its turn starting, unless the turn running holds the message. */
-  private tookMessage(e: Entry, queued: boolean): void {
+  /** AgentHydra took a message: the chat shows its turn starting, unless the turn running holds or took the message. */
+  private tookMessage(e: Entry, queued: boolean, inTurn = false): void {
     const chat = e.chat
-    if (!queued) {
+    if (!queued && !inTurn) {
       chat.status = 'starting'
       chat.activity = 'Queued'
       chat.turnStartedAt = this.now()
@@ -1128,11 +1128,11 @@ export class ChatManager {
     opts: SendOptions,
     requestId?: string,
     started?: () => void,
-  ): Promise<{ urgent: boolean; stoppedFor: boolean }> {
+  ): Promise<{ urgent: boolean; stoppedFor: boolean; delivered: boolean }> {
     const chat = e.chat
     if (!chat.workerId) {
       await this.startWorkerFor(e, text, requestId, started)
-      return { urgent: false, stoppedFor: false }
+      return { urgent: false, stoppedFor: false, delivered: false }
     }
     // The chat moved folders (cwd-move): the worker's next launch resumes its session there.
     const at = e.workerCwd ?? this.bridge.lastWorkers().find((w) => w.id === chat.workerId)?.cwd ?? null
@@ -1146,12 +1146,12 @@ export class ChatManager {
     const sus = this.workerSusSetting(chat)
     const restore = !sus && chat.susRestore ? restoreSetting(chat.susRestore) : null
     const had = sus && !chat.susRestore ? this.workers.workerRows.get(chat.workerId) : undefined
-    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), requestId, sus ?? restore ?? undefined)
+    const sent = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), requestId, sus ?? restore ?? undefined)
     if (sus && !chat.susRestore) chat.susRestore = { model: had?.model ?? null, effort: had?.effort ?? null }
     else if (restore) delete chat.susRestore
     if (sus || restore) this.changed(chat)
     this.setWorkerCwd(e, chat.cwd)
-    return { urgent, stoppedFor }
+    return { urgent, stoppedFor: sent.urgent, delivered: sent.delivered }
   }
 
   /** The chat's worker, started with its first message; a send meanwhile waits for it (beginStart's `started`). */
@@ -1188,10 +1188,14 @@ export class ChatManager {
     standIn: UserItem,
     text: string,
     queued: boolean,
-    sent: { urgent: boolean; stoppedFor: boolean },
+    sent: { urgent: boolean; stoppedFor: boolean; delivered: boolean },
     opts: SendOptions,
   ): Promise<{ queued: boolean; gone: boolean }> {
     const chat = e.chat
+    if (sent.delivered) {
+      this.unqueue(e, standIn)
+      return { queued: false, gone: false }
+    }
     if (sent.urgent) {
       if (!sent.stoppedFor) return { queued, gone: false }
       this.unqueue(e, standIn)
@@ -1316,6 +1320,10 @@ export class ChatManager {
   private async deliverHeldNow(e: Entry, standIn: UserItem | undefined, text: string | undefined): Promise<{ stopped: boolean; message: string }> {
     const r = await this.bridge.sendToWorkerNow(e.chat.workerId as string, text)
     if (r.stopped) this.unqueue(e, standIn)
+    else if (r.message) {
+      console.warn(`[desk] chat ${e.chat.id}: Send now stopped nothing: ${r.message}`)
+      this.systemLine(e.chat.id, 'send-now-nothing', 'info', r.message)
+    }
     return r
   }
 
@@ -1334,6 +1342,19 @@ export class ChatManager {
     // A Codex turn, also one still running after the pin moved back to Claude.
     if (e.pinned?.busy) return e.pinned.interrupt()
     if (e.chat.workerId) {
+      // Stop with messages held stops the running turn and continues it with them now, in the same session.
+      const held = (e.sent ?? []).filter((s) => s.queued)
+      if (held.length) {
+        let stopped = false
+        try {
+          stopped = (await this.bridge.sendToWorkerNow(e.chat.workerId)).stopped
+        } catch {
+          stopped = false
+        }
+        if (stopped) for (const s of held) this.unqueue(e, s)
+        await this.syncWorkers(id).catch(() => {})
+        if (stopped) return
+      }
       // Stopping a worker cancels it; the next message revives it in the same session. A refused or
       // timed-out cancel reaches the window, which says so and restores the chat's state.
       try {

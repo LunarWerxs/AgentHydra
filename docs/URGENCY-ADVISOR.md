@@ -23,6 +23,8 @@ claude.ai account. Default ON. A look runs each minute and measures every chat's
   chat has its turn stopped cleanly and the session continues with the message first. Not the ping route (it holds a
   worker's message until the task ends), send-now or interrupt. Only chats that already have a title are visited in
   practice, so the send does not rename one. Desk shows it as the advisor bubble even behind the Send now / urgent preface.
+  When AgentHydra delivers it into the running turn, its bubble clears as sent at once (not "Queued"). A carried note
+  from a handoff keeps its advisor flag, so its stand-in clears the same way.
 - **Setting:** `GET /api/urgency-advisor` and `POST /api/urgency-advisor {enabled?, intervalMinutes?}` (db settings
   `urgency_advisor_enabled`, `urgency_advisor_minutes`; interval 5-720).
 - **Log:** one line per message in the server log: `[urgency-advisor] chat=<id> minutes=<n> push|reply=<k> sent=ok|failed`.

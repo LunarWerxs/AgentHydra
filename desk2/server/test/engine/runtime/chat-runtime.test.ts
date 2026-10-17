@@ -743,6 +743,27 @@ describe('ChatRuntime: messages while working', () => {
     expect(t.rt.chat.status).toBe('working')
     expect(t.fakes).toHaveLength(1)
   })
+
+  test('Stop with a message queued interrupts the turn and the queued message goes next in the same process', async () => {
+    const t = setup()
+    t.rt.send('first')
+    t.fake().push(hand.init(), state('running'))
+    await settle()
+    expect(t.rt.send('second')).toEqual({ queued: true })
+    await settle()
+    const secondId = t.fake().sent[1]!.uuid!
+
+    await t.rt.interrupt()
+    expect(t.fake().calls.interrupt).toBe(1)
+    expect(t.fake().calls.close).toBe(0)
+    expect(t.fakes).toHaveLength(1)
+
+    t.fake().push(messageStart(secondId), state('running'))
+    await settle()
+    expect((t.items().find((i) => i.id === secondId) as { queued?: boolean }).queued).toBeUndefined()
+    expect(t.rt.chat.queuedCount).toBe(0)
+    expect(t.rt.chat.status).toBe('working')
+  })
 })
 
 describe('ChatRuntime: errors and limits', () => {

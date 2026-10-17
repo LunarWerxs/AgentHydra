@@ -232,7 +232,7 @@ describe('bridge', () => {
     expect(await b.canDeliverNow()).toBe(false)
     expect(probes()).toBe(1)
     // An urgent send to the running worker stops its turn: one POST, `urgent: true`.
-    expect(await b.sendToWorker('w-00000001', 'stop and fix the build', undefined, true)).toBe(true)
+    expect(await b.sendToWorker('w-00000001', 'stop and fix the build', undefined, true)).toEqual({ urgent: true, delivered: false })
     expect(f.posts.at(-1)).toEqual({ path: '/api/corch/workers/w-00000001/send', body: { text: 'stop and fix the build', urgent: true } })
     // A message it already holds cannot go now: the reason names the version and is never a 404 page.
     const held = await b.sendToWorkerNow('w-00000001', 'stop and fix the build').catch((e) => e)

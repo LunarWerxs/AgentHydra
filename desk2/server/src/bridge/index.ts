@@ -1066,12 +1066,12 @@ export function createBridge(opts: BridgeOptions = {}) {
   }
 
   /** `requestId`: the message's own id, the same on every retry of it (AgentHydra queues it once). `setting`: the model and effort its turn runs on. */
-  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false, desk?: StartWorker['desk'], requestId?: string, setting?: WorkerSendSetting): Promise<boolean> {
+  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false, desk?: StartWorker['desk'], requestId?: string, setting?: WorkerSendSetting): Promise<{ urgent: boolean; delivered: boolean }> {
     const r = await client.sendToWorker(id, text, cwd, urgent, desk, requestId, setting)
     if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused the message to ${id}`, /no such worker/i.test(r.message) ? 404 : 400)
     // A follow-up can wake a finished worker.
     workersChanged()
-    return r.urgent === true
+    return { urgent: r.urgent === true, delivered: r.delivered === 'in-turn' }
   }
 
   /** An AgentHydra from before deliver-now (v1.10.0 and older) answers its own 404 page. */

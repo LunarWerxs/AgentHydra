@@ -157,6 +157,8 @@ function fakeBridgeState(o: FakeBridgeOptions) {
     /** Send now on a worker's held message: what was asked, and whether the fake stops a turn for it (an urgent message's too). */
     sentNow: [] as { id: string; text?: string }[],
     nowStops: true,
+    /** A message sent to a running worker goes into its turn (`delivered: 'in-turn'`) instead of being held. */
+    deliversInTurn: false,
     /** Whether this AgentHydra has deliver-now (v1.10.0 has not). */
     deliverNow: true,
     cancelled: [] as string[],
@@ -219,7 +221,7 @@ async function sendFakeToWorker(
   if (!requestId || !sendIds.has(requestId)) s.sentToWorker.push({ id, text, ...(cwd ? { cwd } : {}), ...(urgent ? { urgent } : {}), ...(setting ? { setting } : {}) })
   if (requestId) sendIds.add(requestId)
   if (fail) throw fail.err
-  return urgent === true && s.nowStops
+  return { urgent: urgent === true && s.nowStops, delivered: urgent !== true && s.deliversInTurn }
 }
 
 async function sendFakeNow(s: FakeBridgeState, id: string, text?: string) {
