@@ -161,6 +161,8 @@ interface LaunchPlan {
   /** The queued follow-up this launch would deliver. */
   next: string
   delivers: boolean
+  /** How many held messages this launch delivers, in order: all of them, one user line each. */
+  batch: number
 }
 
 /** Which session this launch runs in. After a planned handoff the task goes on in a NEW session,
@@ -292,16 +294,16 @@ function deliveryPlan(
   w: CliMayteWorker,
   last: CliMayteWorker['attempts'][number] | undefined,
   fresh: boolean,
-): Pick<LaunchPlan, 'inSession' | 'next' | 'delivers'> {
+): Pick<LaunchPlan, 'inSession' | 'next' | 'delivers' | 'batch'> {
   // Stopped after the CLI started (its init event is in the log): the message is already in the
   // session, so ask it to carry on. Stopped before that: the message never arrived, send it again.
   const inSession = !!last && (last.started ?? peekLog(last.log).sawInit)
-  // A follow-up is shifted out of `pending` only once the spawn succeeded, so a failed spawn
-  // cannot lose it. Without a transcript here the task itself goes first.
+  // Held messages are shifted out of `pending` only once the spawn succeeded, so a failed spawn
+  // cannot lose them. Without a transcript here the task itself goes first.
   const next = w.pending[0] ?? ''
   const stopped = !!last && ['quota', 'auth', 'transient', 'interrupted'].includes(last.outcome)
   const delivers = !fresh && !!last && w.pending.length > 0 && (w.revived === true || !stopped)
-  return { inSession, next, delivers }
+  return { inSession, next, delivers, batch: delivers ? w.pending.length : 0 }
 }
 
 /** The message the attempt before this one was started with (its prompt file), else the task. */
@@ -888,6 +890,9 @@ function userLine(text: string) {
 /** The message a prompt file holds: a stream-json user line unwrapped, again and again, since files
  *  written from an earlier envelope nest one level more each relaunch. */
 export function promptTextOf(raw: string): string {
+  const lines = raw.trim().split('\n')
+  if (lines.length > 1 && lines.every((l) => l.startsWith('{')))
+    return lines.map(promptTextOf).join('\n\n')
   let text = raw.trim()
   for (let inner = envelopeText(text); inner !== null; inner = envelopeText(text))
     text = inner.trim()
@@ -1050,6 +1055,7 @@ function journalLaunch(
     })
   }
   journal(w, p.fresh ? 'handoff-resumed' : p.delivers ? 'follow-up-delivered' : 'launched', {
+    ...(p.delivers ? { messages: p.batch } : {}),
     account: acctLabel(acct),
     attempt: p.n + 1,
     sessionPct: acct.sessionPct,
@@ -1090,7 +1096,7 @@ function noteLaunch(
 ): void {
   if (p.fromId) w.moves++
   journalLaunch(w, acct, p, activeOnAccount)
-  if (p.delivers) w.pending.shift()
+  if (p.delivers) w.pending.splice(0, p.batch)
   if (p.fresh) {
     if (p.oldSession) w.sessions = [...(w.sessions ?? []), p.oldSession]
     w.sessionId = p.sessionId
@@ -1156,7 +1162,11 @@ export function launch(
   mkdirSync(PROMPTS, { recursive: true })
   const live = process.platform === 'win32'
   const promptFile = join(PROMPTS, `${w.id}-${n}.txt`)
-  writeFileSync(promptFile, live ? `${JSON.stringify(userLine(text))}\n` : text)
+  const messages = plan.delivers ? [text, ...w.pending.slice(1)] : [text]
+  writeFileSync(
+    promptFile,
+    live ? messages.map((m) => `${JSON.stringify(userLine(m))}\n`).join('') : messages.join('\n\n'),
+  )
   const log = join(LOGS, `${w.id}-${n}.jsonl`)
   const errLog = join(LOGS, `${w.id}-${n}.err.log`)
   const hookFile = writeWorkerSettings(w, acct)

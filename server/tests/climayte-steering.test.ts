@@ -129,10 +129,10 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
       const w = await settle(id, 2 * ATTEMPT_MS) // the stopped turn's two successors
       expect(w?.status).toBe('done')
       expect(w?.pending).toEqual([])
-      expect(w?.attempts.map((a) => a.outcome)).toEqual(['cancelled', 'done', 'done'])
+      expect(w?.attempts.map((a) => a.outcome)).toEqual(['cancelled', 'done'])
       expect(w?.attempts[0]?.notice).toContain('urgent message')
       const events = climayteJournal({ id }).map((e) => e.event)
-      expect(events.filter((e) => e === 'follow-up-delivered')).toHaveLength(2)
+      expect(events.filter((e) => e === 'follow-up-delivered')).toHaveLength(1)
       expect(climayteJournal({ id }).find((e) => e.urgent)?.event).toBe('follow-up-queued')
     },
     3 * ATTEMPT_MS + 10_000,
@@ -183,11 +183,13 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
       const w = await settle(id, 2 * ATTEMPT_MS) // the stopped turn's two successors
       expect(w?.status).toBe('done')
       expect(w?.pending).toEqual([])
-      expect(w?.attempts.map((a) => a.outcome)).toEqual(['cancelled', 'done', 'done'])
+      expect(w?.attempts.map((a) => a.outcome)).toEqual(['cancelled', 'done'])
       expect(w?.attempts[0]?.notice).toContain('sent now')
-      expect(climayteJournal({ id }).filter((e) => e.event === 'follow-up-delivered')).toHaveLength(
-        2,
-      )
+      expect(
+        climayteJournal({ id })
+          .filter((e) => e.event === 'follow-up-delivered')
+          .map((e) => e.messages),
+      ).toEqual([2])
       expect(climayteDeliverNow(id)).toMatchObject({ ok: true, stopped: false })
     },
     3 * ATTEMPT_MS + 10_000,
@@ -309,6 +311,26 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
   )
 
   test(
+    'held messages go to a continued worker in one turn, each one message, in order',
+    async () => {
+      const id = await start('batch', 'slow-1')
+      withoutLiveInput(id)
+      climayteSend(id, 'first held')
+      climayteSend(id, 'second held')
+      const w = await settle(id, 2 * ATTEMPT_MS)
+      expect(w?.status).toBe('done')
+      expect(w?.pending).toEqual([])
+      expect(w?.attempts.map((a) => a.outcome)).toEqual(['done', 'done'])
+      expect(
+        climayteJournal({ id })
+          .filter((e) => e.event === 'follow-up-delivered')
+          .map((e) => e.messages),
+      ).toEqual([2])
+    },
+    3 * ATTEMPT_MS + 10_000,
+  )
+
+  test(
     'a cancel keeps queued messages and delivers them when the worker is continued',
     async () => {
       const id = await start('cancel keeps', 'slow-2')
@@ -323,13 +345,11 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
       const w = await settle(id, 5 * ATTEMPT_MS) // one 30 s fake-slow turn per kept message
       expect(w?.status).toBe('done')
       expect(w?.pending).toEqual([])
-      expect(climayteJournal({ id }).filter((e) => e.event === 'follow-up-delivered')).toHaveLength(
-        3,
-      )
-      // Each message delivered on the heels of the last keeps the report before it (field note 13
-      // regression: a queued follow-up wiped the first turn's report before anyone read it).
-      expect(climayteGet(id)?.reports?.map((r) => r.message)).toEqual(['first', 'second'])
-      expect(climayteGet(id)?.reports?.every((r) => r.results.length > 0)).toBe(true)
+      expect(
+        climayteJournal({ id })
+          .filter((e) => e.event === 'follow-up-delivered')
+          .map((e) => e.messages),
+      ).toEqual([3])
     },
     6 * ATTEMPT_MS + 10_000,
   )
